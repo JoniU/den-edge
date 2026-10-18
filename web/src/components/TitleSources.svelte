@@ -59,6 +59,7 @@
     retry = $state(0);
   let message = $state('');
   let panel = $state<HTMLDivElement>();
+  let disclosure = $state<HTMLDivElement>();
   const panelId = $props.id();
   const descriptor = $derived<DownloadTitleDescriptor | undefined>(
     title
@@ -154,11 +155,15 @@
     open = true;
     await tick();
     panel?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (__DEN_TV__)
+      requestAnimationFrame(() =>
+        disclosure?.querySelector<HTMLElement>('button')?.focus({ preventScroll: true }),
+      );
   }
   const size = (bytes?: number) => (bytes ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : '');
 </script>
 
-<div class="source-accordion" class:open>
+<div class="source-accordion" class:open bind:this={disclosure}>
   <Button
     variant="tertiary"
     class="sources-disclosure"
