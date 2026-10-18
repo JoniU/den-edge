@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import browser from './vite.config.ts';
 import { TV_CSP } from './scripts/tv-csp.mjs';
+import { upstream } from './scripts/upstream.ts';
 
 const platform = process.env.DEN_TV_PLATFORM ?? 'webos';
 if (platform !== 'webos' && platform !== 'tizen') throw new Error('Unknown DEN_TV_PLATFORM');
@@ -139,7 +140,7 @@ const tvProxy = {
       '/version',
     ].map((path) => [
       path,
-      { target: process.env.DEN_EDGE ?? 'http://192.168.86.193:8094', changeOrigin: true },
+      { target: upstream('DEN_EDGE', 'http://192.168.86.193:8094'), changeOrigin: true },
     ]),
   ),
 };
