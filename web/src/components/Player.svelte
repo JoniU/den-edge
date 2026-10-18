@@ -220,6 +220,11 @@
   const HIDDEN_SLACK_SECS = 5;
   /** The step of the lock screen's and a headset's skip buttons, where they don't name one. */
   const SKIP_SECS = 10;
+  const tv = __DEN_TV__;
+  // The production app's platform flag is also used by desktop preview builds. Only an actual LG user agent should
+  // override an incomplete canPlayType answer; preview Chromium must retain the fully testable hls.js fallback.
+  const webOsNative =
+    __DEN_TV_PLATFORM__ === 'webos' && /(?:webOS|Web0S)/i.test(navigator.userAgent);
   const messages: Record<
     | 'none'
     | 'unreachable'
@@ -301,6 +306,7 @@
   };
 
   let video = $state<HTMLVideoElement>();
+  let tvPaused = $state(true);
   let castFrame = $state<HTMLIFrameElement>();
   let remoteTime = 0;
   let remoteDuration = 0;
@@ -745,7 +751,11 @@
       startAt: at,
       maxBitrate,
       // For den-remux's log only, so a session can be told apart by the player that played it.
-      player: castMode ? 'cast' : nativeHls(document.createElement('video')) ? 'native' : 'hls.js',
+      player: castMode
+        ? 'cast'
+        : webOsNative || nativeHls(document.createElement('video'))
+          ? 'native'
+          : 'hls.js',
       // No address is looked up here: `startSession` does that only when den-edge asks for it.
       ...(noHint ? { noHint } : {}),
       // Hearth sends a request that leaves releases out, or replaces a Remux session, to Remux: a TorBox one has neither.
@@ -1185,7 +1195,9 @@
   $effect(() => {
     const [current, element] = [session, video];
     if (!current || current.castOrigin || !element) return;
-    const playsNatively = nativeHls(element);
+    // LG's webOS media pipeline accepts HLS even when its WebKit canPlayType answer is incomplete.
+    // Keeping it on this element path preserves Den's existing progress, recovery and session ownership.
+    const playsNatively = webOsNative || nativeHls(element);
     // A browser that can't decode what it was sent doesn't always say so: Safari strikes out its play button and
     // fires nothing. Given no source it can use, or trying to play with no picture yet, after a while is that — a
     // while with nothing arriving, since a slow link shows no picture either but keeps delivering (`stuckWatch`).
@@ -2178,6 +2190,7 @@
   }
 
   function playing() {
+    if (tv) tvPaused = false;
     progress.playing();
     clearInterval(timer);
     timer = setInterval(() => report(), REPORT_MS);
@@ -2186,6 +2199,7 @@
   }
 
   function paused() {
+    if (tv) tvPaused = true;
     clearInterval(timer);
     report();
     if (session) {
@@ -2646,13 +2660,43 @@
       finish();
     };
   });
+
+  $effect(() => {
+    if (!__DEN_TV__) return;
+    let uninstall: (() => void) | undefined;
+    void import('../tv/player/remote').then(({ installTvRemote }) => {
+      if (ended) return;
+      uninstall = installTvRemote({
+        close,
+        next: onnext,
+        pause: () => video?.pause(),
+        play: () => video?.play(),
+        paused: () => video?.paused ?? true,
+        seekBy: (seconds) => {
+          if (!video) return;
+          const total = length();
+          video.currentTime = Math.max(
+            0,
+            total ? Math.min(video.currentTime + seconds, total) : video.currentTime + seconds,
+          );
+        },
+      });
+    });
+    return () => uninstall?.();
+  });
 </script>
 
 <svelte:window
   onkeydown={(event) => event.key === 'Escape' && !document.fullscreenElement && close()}
 />
 <!-- A phone locked or a tab switched away may never come back: where it got to is written as it goes. -->
-<svelte:document onvisibilitychange={() => document.visibilityState === 'hidden' && report()} />
+<svelte:document
+  onvisibilitychange={() => {
+    if (document.visibilityState !== 'hidden') return;
+    if (tv) close();
+    else report();
+  }}
+/>
 
 <div class="player" role="dialog" aria-modal="true" aria-label={heading}>
   <header>
@@ -2829,7 +2873,7 @@
         <!-- den-remux supplies subtitle renditions through the HLS playlist. -->
         <video
           bind:this={video}
-          controls
+          controls={!tv}
           autoplay
           playsinline
           use:allowAirPlay
@@ -2867,6 +2911,30 @@
             <track kind="subtitles" src={track.url} srclang={track.language} label={track.name} />
           {/each}
         </video>
+        {#if tv}
+          <nav class="tv-transport" aria-label="Playback controls">
+            <button
+              type="button"
+              onclick={() =>
+                video && (video.currentTime = Math.max(0, video.currentTime - SKIP_SECS))}
+              >−10s</button
+            >
+            <button
+              type="button"
+              onclick={() => (video?.paused ? void video.play() : video?.pause())}
+              >{tvPaused ? 'Play' : 'Pause'}</button
+            >
+            <button
+              type="button"
+              onclick={() =>
+                video &&
+                (video.currentTime = Math.min(length() || Infinity, video.currentTime + SKIP_SECS))}
+              >+10s</button
+            >
+            {#if onnext}<button type="button" onclick={onnext}>Next</button>{/if}
+            <button type="button" onclick={close}>Close</button>
+          </nav>
+        {/if}
         {#if reconnecting}
           <p class="countdown" role="status">Reconnecting…</p>
         {:else if startsIn}

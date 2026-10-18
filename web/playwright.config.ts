@@ -16,6 +16,7 @@ if (
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: 'tv-*.spec.mjs',
   timeout: 120_000,
   // Files are isolated by Playwright contexts and do not share mutable server state.
   // Keep local runs deterministic while allowing CI to execute independent files in parallel.
