@@ -2589,6 +2589,7 @@
   }
 
   function close() {
+    if (ended) return;
     finish();
     onclose();
   }
