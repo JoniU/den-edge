@@ -9,6 +9,7 @@ import { parsePhoneLink } from './lib/phoneLink';
 import { phoneLanding } from './lib/phoneLanding.svelte';
 import { recoverChunkFailure, swapWhileHidden, watchRelease } from './lib/release';
 import { legacyPath } from './lib/route';
+import { currentAppPath } from './lib/runtimeUrl';
 
 // Read once, now, rather than lazily when the first error report needs it: a page open across a deploy must
 // report the release it actually loaded, not one den-edge has since moved on to (`diagnosticsReport.ts`).
@@ -62,7 +63,7 @@ setTimeout(() => {
 // Pages were addressed by fragment until 0.67.0, so a link shared or bookmarked before then still arrives that
 // way. It is answered once, before anything renders, by rewriting the address to the path it meant — the app
 // itself then only ever reads paths. `#pair=…` is not a route and is left alone for the pairing screen to read.
-const legacy = legacyPath(location.hash);
+const legacy = __DEN_TV_PACKAGED__ ? null : legacyPath(location.hash);
 if (legacy) history.replaceState(history.state, '', legacy + location.search);
 
 // An invite link (`#invite=<code>`) asks, on the page it opens, whether to accept (`InviteDialog`). The code leaves the
@@ -72,7 +73,11 @@ if (invited) {
   guestGrants.invite = invited;
   // A first-time guest has no library to open, and without browsing the app shows only the pairing screen.
   if (!links.current) links.browse();
-  history.replaceState(history.state, '', location.pathname + location.search);
+  history.replaceState(
+    history.state,
+    '',
+    __DEN_TV_PACKAGED__ ? currentAppPath() : location.pathname + location.search,
+  );
 }
 
 // A "Use Den on your phone" link (`#phone=<ticket>&k=<library key>`) brings a guest's library, and a slot in their
@@ -81,7 +86,11 @@ const phoned = parsePhoneLink(location.hash);
 if (phoned) {
   phoneLanding.begin(phoned);
   if (!links.current) links.browse();
-  history.replaceState(history.state, '', location.pathname + location.search);
+  history.replaceState(
+    history.state,
+    '',
+    __DEN_TV_PACKAGED__ ? currentAppPath() : location.pathname + location.search,
+  );
 }
 
 const target = document.getElementById('app');
