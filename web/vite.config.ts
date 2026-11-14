@@ -129,6 +129,14 @@ const reel = upstream('DEN_REEL', 'https://d.oxy.fi');
 // routes are under /remux, which is why tailscale serve sends /remux to :8095/remux rather than stripping it. A
 // rewrite here would ask it for /session, which it does not serve.
 const remux = upstream('DEN_REMUX', 'https://d.oxy.fi');
+// A service proxy carries the browser's Edge credentials only to the Edge that issued them: the public stack's own
+// relay while Edge is the default. A standalone service, or the public relay while `DEN_EDGE` names another Edge,
+// gets the request without them.
+function withoutEdgeAuthority(direct: boolean): Pick<ProxyOptions, 'configure'> {
+  return direct || process.env.DEN_EDGE !== undefined
+    ? { configure: (proxy) => proxy.on('proxyReq', stripEdgeAuthority) }
+    : {};
+}
 // The probe is an instrument, not part of the app: it injects a beacon into every page this server hands
 // out. Left on unconditionally it reaches the e2e suite too, where `POST /__probe` reads as an unmocked
 // request and fails every spec that guards the network. On for a session someone is watching from a
@@ -282,20 +290,18 @@ export default defineConfig({
         target: atlas,
         changeOrigin: true,
         rewrite: (path) => (atlasDirect ? path.replace(/^\/atlas/, '') : path),
-        ...(atlasDirect ? { configure: (proxy) => proxy.on('proxyReq', stripEdgeAuthority) } : {}),
+        ...withoutEdgeAuthority(atlasDirect),
       },
       '/reel': {
         target: reel,
         changeOrigin: true,
         rewrite: (path) => (reelDirect ? path.replace(/^\/reel/, '') : path),
-        ...(reelDirect ? { configure: (proxy) => proxy.on('proxyReq', stripEdgeAuthority) } : {}),
+        ...withoutEdgeAuthority(reelDirect),
       },
       '/remux': {
         target: remux,
         changeOrigin: true,
-        ...(process.env.DEN_REMUX !== undefined
-          ? { configure: (proxy) => proxy.on('proxyReq', stripEdgeAuthority) }
-          : {}),
+        ...withoutEdgeAuthority(process.env.DEN_REMUX !== undefined),
       },
     },
   },

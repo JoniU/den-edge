@@ -2,7 +2,7 @@
 
 ## Contributor quickstart
 
-Install Node 24+, npm and Git, then run:
+On macOS or Linux (Windows is unsupported; use WSL), install Node 24+, npm and Git, then run:
 
 ```sh
 ./scripts/dev.mjs
@@ -30,40 +30,37 @@ entire `#phone=...&code=...` fragment (the grant needs a free device slot).
 Default development uses live guest data and centralized resources. Do not use it for fixtures, automation, or
 destructive experiments; those belong in E2E isolation or local Edge mode.
 
-For Rust backend work, `./scripts/dev.mjs --local-edge` also starts a loopback-only Edge with isolated state in
-`.dev/data`. The state persists between runs; remove that directory yourself when you intentionally want a reset.
-This mode deliberately has separate authority from the centralized guest account. Use
-`./scripts/dev.mjs --check` to install dependencies and check prerequisites without starting servers.
-
-Standalone Vite services can be selected with `DEN_ATLAS`, `DEN_REEL`, and `DEN_REMUX`. Local Edge starts in `open`
-mode so the browser can create its first library. After doing that once, stop it and restart in `members` mode; the
-existing library becomes a household and the Web-facing Hearth routes become available. For combined local Hearth
-integration, configure the relay, playback, and shared Remux secret explicitly, for example:
+### Local mode: no invite needed
 
 ```sh
-ADDON_RELAY=/den=http://127.0.0.1:8090 \
-DEN_PLAYBACK_ENABLED=1 \
-DEN_REMUX=http://127.0.0.1:8090 \
-NEW_LIBRARIES=members \
-REMUX_EDGE_SECRET=local-development-secret \
-./scripts/dev.mjs --local-edge
+./scripts/dev.mjs --local-edge            # your own Edge (needs Rust)
+./scripts/dev.mjs --hearth                # … plus a local Hearth for streams and playback (needs Docker)
 ```
 
-Start the combined Hearth process with the same `REMUX_EDGE_SECRET=local-development-secret`; a standalone Remux
-calls the corresponding setting `EDGE_SECRET`. Hearth's `REMUX_SCOUT_ORIGINS` must also include the bare origin in
-the saved Den install URL (normally `http://localhost:5173` for this bare-host development flow), and Hearth must be
-able to reach that origin. The portable Hearth self-host setup fills its own public origin automatically. Use a real
-random secret outside loopback-only development.
-The contributor supplies their own TorBox account through Hearth's `/den/configure` UI. Centralized guest authority
-cannot be reused by local Edge; use a local Hearth or focused fixtures for backend integration work.
+`--local-edge` builds and starts a loopback-only Edge with its own library in `.dev/data`, which persists between
+runs; delete the directory when you want to start over. It shares nothing with a guest account and sends nothing to
+production but read-only Atlas catalog requests, without your local credentials. Edge runs in `open` mode until the
+browser has created its first library, then restarts itself in `members` mode, which guest invites and the member
+Den configure flow need; set `NEW_LIBRARIES` yourself to keep one mode.
 
-| Capability | Default contributor mode | Backend mode |
-|---|---|---|
-| Edge/library | Centralized guest account | Local isolated, persistent state |
-| Atlas | Centralized public relay | Public relay unless overridden |
-| Hearth/Scout | Centralized, grant-authorized | Configure a local Hearth |
-| Reel/Remux | Centralized when the grant allows it | Self-host for service changes |
-| Chromecast | Centralized sender and playback from Chrome | Configure an HTTPS Cast sender and receiver-reachable media origin |
+`--hearth` also runs the published `ghcr.io/oxyc/den-hearth` image as den-hearth's self-host setup does, and wires
+it in: Edge relays `/den` to it and offers its playback, Reel and Remux media go to it, and Edge and Hearth share a
+generated secret. Its secrets are kept in `.dev/hearth.env` so the addon you install keeps working; delete the file to
+start over. Add TorBox at <http://localhost:5173/den/configure> and install the addon it gives you. Media in this
+mode is on `localhost`, so a Chromecast cannot play it. Apple Silicon runs the image under emulation; the first start
+takes a minute.
+
+`./scripts/dev.mjs --check` (with either flag, too) installs and builds everything without starting it. Standalone
+services can be selected with `DEN_ATLAS`, `DEN_REEL` and `DEN_REMUX`, and the ports with `DEN_DEV_WEB_PORT`,
+`DEN_DEV_EDGE_PORT` and `DEN_DEV_HEARTH_PORT` (the production Cast sender trusts only port 5173).
+
+| Capability | Default (guest) mode | `--local-edge` | `--hearth` |
+|---|---|---|---|
+| Edge/library | Centralized guest account | Local, isolated, persistent | Local, isolated, persistent |
+| Atlas | Centralized public relay | Public relay | Public relay |
+| Hearth/Scout | Centralized, grant-authorized | — | Local container, your TorBox |
+| Reel/Remux | Centralized when the grant allows it | — | Local container |
+| Chromecast | Centralized sender and playback from Chrome | — | — (media on `localhost`) |
 
 Den's sync relay, on the homelab. It relays pairings between an Apple TV and another device, carries a paired
 device's sealed messages to the TV, keeps the library's current encrypted state and the TV's encrypted backup, and

@@ -204,6 +204,7 @@ jobs:
             *.args.DEN_VERSION=${{ needs.source.outputs.version }}
             *.args.GIT_REVISION=${{ steps.commit.outputs.sha }}
             *.args.PREVIOUS_IMAGE=${{ steps.previous.outputs.image }}
+            *.args.DEN_PARENT_ORIGINS_EXTRA=${{ vars.DEN_PARENT_ORIGINS_EXTRA }}
             *.no-cache=true
             edge.tags=${{ env.IMAGE }}:${{ needs.source.outputs.version }}-patch.${{ needs.source.outputs.stamp }}
             edge.cache-to=type=gha,mode=max,scope=release-images

@@ -125,8 +125,8 @@ pub struct AppState {
     /// The web app's public names (env `WEB_HOSTS`, comma-separated). A request for one gets the web app and none
     /// of the device API (`handler::Face`, oxyc/den#15); route authorization, not Access, protects its operations.
     pub web_hosts: Vec<String>,
-    /// The device API's public names (env `API_HOSTS`). They bypass Access, so a request for one gets the
-    /// device routes and never the web app — which would otherwise be handed out past Access.
+    /// The device API's public names (env `API_HOSTS`). A request for one gets the device routes and never the
+    /// web app, so each public name serves only its own half (`handler::Face`).
     pub api_hosts: Vec<String>,
     /// Public names which serve the TV bundle (env `TV_WEB_HOSTS`), and every route the hosted bundle calls, so
     /// its requests stay on its own origin and pay no CORS preflight.
@@ -681,10 +681,12 @@ async fn main() {
 
     let port: u16 = env_number("PORT").unwrap_or(8080);
     let bind_addr = env_opt("BIND_ADDR")
-        .map(|value| parse_bind_addr("BIND_ADDR", &value).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }))
+        .map(|value| {
+            parse_bind_addr("BIND_ADDR", &value).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            })
+        })
         .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
     // `PORT` is always served: it is the address other containers reach this one on. A socket handed over by the
     // supervisor is served as well, and is the one that survives this process being replaced.

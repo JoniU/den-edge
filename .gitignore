@@ -1,7 +1,8 @@
 /target
 /data
 /.dev
-/.claude
+/.claude/settings.local.json
+/.claude/worktrees
 /web/node_modules
 /web/dist
 /web/dist-cast

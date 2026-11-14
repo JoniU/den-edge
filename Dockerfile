@@ -1,7 +1,10 @@
 # One image: den-edge, the browser app, the separately compiled webOS TV app, and the Cast page. All three builds
 # share one npm install, while their output graphs and runtime host names remain isolated.
 ARG PREVIOUS_IMAGE=scratch
-ARG DEN_PARENT_ORIGINS="https://d.oxy.fi http://localhost:5173 https://oskars-macbook-pro.tailce93d3.ts.net:8443"
+ARG DEN_PARENT_ORIGINS="https://d.oxy.fi http://localhost:5173"
+# Further exact origins (space-separated) for an operator's own development faces. CI passes the repository
+# variable of the same name, so a private hostname lives in the deployment's settings rather than in this file.
+ARG DEN_PARENT_ORIGINS_EXTRA=""
 FROM ${PREVIOUS_IMAGE} AS previous
 
 FROM node:26-alpine AS web-source
@@ -18,11 +21,13 @@ COPY --from=previous / /previous
 RUN node scripts/keep-previous-assets.mjs
 
 FROM web-source AS cast-web
-# The production browser, the exact one-command contributor origin, and Cindy's stable Tailscale HTTPS development
-# face may frame the isolated sender. CSP uses a space-separated source list; the sender accepts the same list (and
-# commas for test/build compatibility). Do not widen localhost to arbitrary ports: this is an active Cast controller.
+# The production browser, the exact one-command contributor origin, and any operator development faces
+# (`DEN_PARENT_ORIGINS_EXTRA`) may frame the isolated sender. CSP uses a space-separated source list; the sender
+# accepts the same list (and commas for test/build compatibility). Do not widen localhost to arbitrary ports: this is
+# an active Cast controller.
 ARG DEN_PARENT_ORIGINS
-ENV VITE_DEN_PARENT_ORIGINS=$DEN_PARENT_ORIGINS
+ARG DEN_PARENT_ORIGINS_EXTRA
+ENV VITE_DEN_PARENT_ORIGINS="$DEN_PARENT_ORIGINS $DEN_PARENT_ORIGINS_EXTRA"
 RUN npm run build:cast
 
 FROM web-source AS tv-web
@@ -34,7 +39,8 @@ RUN npm run build:tv:webos
 
 FROM rust:1-alpine AS rust-build
 ARG DEN_PARENT_ORIGINS
-ENV DEN_PARENT_ORIGINS=$DEN_PARENT_ORIGINS
+ARG DEN_PARENT_ORIGINS_EXTRA
+ENV DEN_PARENT_ORIGINS="$DEN_PARENT_ORIGINS $DEN_PARENT_ORIGINS_EXTRA"
 RUN apk add --no-cache musl-dev
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./

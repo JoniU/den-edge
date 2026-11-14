@@ -105,6 +105,18 @@ describe.each([false, true])('the dev server proxy under e2e (TV: %s)', (tv) => 
     const configured = await proxy(tv);
     expect(strippedBy(configured['/remux'])).toEqual(EDGE_AUTHORITY_HEADERS);
   });
+
+  it("keeps a local Edge's credentials off the public stack's service relays", async () => {
+    vi.stubEnv('DEN_E2E', '');
+    vi.stubEnv('DEN_EDGE', 'http://127.0.0.1:18080');
+    const configured = await proxy(tv);
+    expect(configured['/lib'].target).toBe('http://127.0.0.1:18080');
+    expect(strippedBy(configured['/lib'])).toEqual([]);
+    for (const path of ['/atlas', '/reel', '/remux']) {
+      expect(configured[path].target).toBe('https://d.oxy.fi');
+      expect(strippedBy(configured[path])).toEqual(EDGE_AUTHORITY_HEADERS);
+    }
+  });
 });
 
 // TV and production-build configs replace webServer rather than merging it. Both build and preview subprocesses must
