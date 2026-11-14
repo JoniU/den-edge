@@ -250,6 +250,25 @@ describe('playable', () => {
     expect((await playable(upTo51)).aacMultichannel).toBe(true);
   });
 
+  it('takes 7.1 AAC only where MediaSource takes a 7.1 fragment, whatever Media Capabilities says', async () => {
+    const appended: string[] = [];
+    const chrome = (takes: boolean): Probe => ({
+      ...browser(
+        () => true,
+        async () => true,
+        async () => true,
+      ),
+      appendsAudio: async (fragment, type) => {
+        appended.push(`${type} ${fragment.byteLength > 0}`);
+        return takes;
+      },
+    });
+    expect((await playable(chrome(false))).aac71).toBe(false);
+    expect((await playable(chrome(false))).aacMultichannel).toBe(true);
+    expect((await playable(chrome(true))).aac71).toBe(true);
+    expect(appended[0]).toBe('audio/mp4; codecs="mp4a.40.2" true');
+  });
+
   it('reads FLAC and VP9 off the type checks, and asks VP9 at level 4.0 in both profiles', async () => {
     const asked: string[] = [];
     const chrome = browser((codec) => {
@@ -343,8 +362,8 @@ describe('withoutRefused', () => {
     expect(cut.vp9Profile2).toBe(claimed.vp9Profile2);
     // FLAC goes with E-AC-3: both rest on a bare type check, and the refusal named no track.
     expect(cut.flac).toBe(false);
-    // 7.1 AAC stays for the reason 5.1 does — Media Capabilities was asked about it properly.
-    expect(cut.aac71).toBe(claimed.aac71);
+    // 7.1 AAC goes: Chrome's Media Capabilities said yes to it and its MediaSource then refused a 7.1 track.
+    expect(cut.aac71).toBe(false);
 
     // The claims themselves are untouched, so the next title is still asked as the browser it really is.
     expect(claimed.hevcMain10).toBe(153);

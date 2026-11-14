@@ -65,8 +65,9 @@ export interface Playable {
  * segment says only that the player gave up, not which track it gave up on, so a refusal cannot be read as
  * being about the video alone and the retry must carry none of it forward. `eac3` and `flac` are the least
  * trustworthy claims of the set in any case: both come from a bare type check, and a type check says yes more
- * readily than a decoder does. `aacMultichannel` and `aac71` stay, because Media Capabilities was asked about
- * those properly — so the retry is converted rather than downmixed.
+ * readily than a decoder does. `aacMultichannel` stays, so the retry is converted to 5.1 rather than downmixed to
+ * stereo. `aac71` goes: Media Capabilities said yes to 8-channel AAC in Chrome 156 on macOS, and that Chrome's
+ * MediaSource then refused the 7.1 AAC track a release carried, while the same track re-encoded to 5.1 appended.
  *
  * VP9 stays for the same reason AV1 does: nothing on the box converts either, so a VP9 release is another
  * release's business rather than something this retry can ask for differently.
@@ -87,6 +88,7 @@ export function withoutRefused(can: Playable): Playable {
     dolbyVision: { p5: false, p8: false },
     eac3: false,
     flac: false,
+    aac71: false,
   };
 }
 
@@ -113,6 +115,8 @@ export interface Probe {
   decodes?: (video: VideoConfiguration) => Promise<boolean>;
   /** Its answer for an audio configuration; absent where the browser has none. */
   decodesAudio?: (audio: AudioConfiguration) => Promise<boolean>;
+  /** Whether MediaSource takes this fragmented MP4 into a SourceBuffer of `type`; absent where there is none. */
+  appendsAudio?: (fragment: Uint8Array, type: string) => Promise<boolean>;
   /**
    * Apple's media stack: Safari, and every browser on an iPhone or iPad, which all run on WebKit and say so in
    * `navigator.vendor`. Its decoders refuse HEVC's High tier however the questions above are answered (The Hobbit's
@@ -137,6 +141,7 @@ export function browserProbe(): Probe {
     decodesAudio: capabilities
       ? async (audio) => (await capabilities.decodingInfo({ type, audio })).supported
       : undefined,
+    appendsAudio: globalThis.MediaSource ? appendsTo(globalThis.MediaSource) : undefined,
     apple: globalThis.navigator?.vendor?.startsWith('Apple') ?? false,
   };
 }
@@ -224,11 +229,15 @@ export async function playable(probe: Probe = browserProbe()): Promise<Playable>
     av1Main10,
     av1Hdr,
     flac: probe.supports('audio/mp4; codecs="fLaC"'),
-    aac71: await decodesAudio(probe, {
-      contentType: 'audio/mp4; codecs="mp4a.40.2"',
-      channels: '8',
-      samplerate: 48000,
-    }),
+    // Media Capabilities is asked first, and the append has the last word: Chrome 156 on macOS answered yes to
+    // 8-channel AAC there and then refused a release's 7.1 AAC track at its first segment
+    // (`mediaSourceRequiresReset`). `AAC71_FRAGMENT` is refused the same way, and its 5.1 twin is taken.
+    aac71:
+      (await decodesAudio(probe, {
+        contentType: 'audio/mp4; codecs="mp4a.40.2"',
+        channels: '8',
+        samplerate: 48000,
+      })) && (await appendsAudio(probe, AAC71_FRAGMENT, 'audio/mp4; codecs="mp4a.40.2"')),
     // VP9 comes from the type checks alone, as AV1 does. Apple's stack is not special-cased here even though its own
     // player and hls.js disagree about VP9: den-remux knows which player a session uses and clears what that one
     // can't take, and this report has no way to say "in hls.js only".
@@ -255,6 +264,65 @@ async function decodesAudio(probe: Probe, audio: AudioConfiguration): Promise<bo
   if (!probe.decodesAudio) return false;
   try {
     return await probe.decodesAudio(audio);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 30 ms of silent 7.1 AAC-LC at 48 kHz as fragmented MP4 (init and one fragment), from
+ * `ffmpeg -f lavfi -i anullsrc=channel_layout=7.1:sample_rate=48000 -t 0.03 -c:a aac
+ * -movflags frag_keyframe+empty_moov+default_base_moof -f mp4`.
+ */
+const AAC71_FRAGMENT = Uint8Array.from(
+  atob(
+    'AAAAHGZ0eXBpc281AAACAGlzbzVpc282bXA0MQAAArxtb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAKxEAAAAAAABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABv3RyYWsAAABcdGtoZAAAAAMAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAQEAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAVttZGlhAAAAIG1kaGQAAAAAAAAAAAAAAAAAAKxEAAAAAFXEAAAAAAAtaGRscgAAAAAAAAAAc291bgAAAAAAAAAAAAAAAFNvdW5kSGFuZGxlcgAAAAEGbWluZgAAABBzbWhkAAAAAAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAADKc3RibAAAAH5zdHNkAAAAAAAAAAEAAABubXA0YQAAAAAAAAABAAAAAAAAAAAACAAQAAAAAKxEAAAAAAA2ZXNkcwAAAAADgICAJQABAASAgIAXQBUAAAAABygIAAcoCAWAgIAFEmBW5QAGgICAAQIAAAAUYnRydAAAAAAABygIAAcoCAAAABBzdHRzAAAAAAAAAAAAAAAQc3RzYwAAAAAAAAAAAAAAFHN0c3oAAAAAAAAAAAAAAAAAAAAQc3RjbwAAAAAAAAAAAAAAKG12ZXgAAAAgdHJleAAAAAAAAAABAAAAAQAAAAAAAAAAAAAAAAAAAGF1ZHRhAAAAWW1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALGlsc3QAAAAkqXRvbwAAABxkYXRhAAAAAQAAAABMYXZmNjMuMS4xMDIAAAB8bW9vZgAAABBtZmhkAAAAAAAAAAEAAABkdHJhZgAAABx0ZmhkAAIAOAAAAAEAAAQAAAAAJwIAAAAAAAAUdGZkdAEAAAAAAAAAAAAAAAAAACx0cnVuAAADAQAAAAMAAACEAAAEAAAAACcAAAQAAAAAGAAAASsAAAAYAAAAX21kYXTcAExhdmM2My4xLjEwMgACMEACEQBGCMBGIAjBGAlEARgjAwjAADgBGCABCIAjBGAjEARgjASiAIwRgYRgABwBGCABCIAjBGAjEARgjASiAIwRgYRgABwAAABDbWZyYQAAACt0ZnJhAQAAAAAAAAEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAtgBAQEAAAAQbWZybwAAAAAAAABD',
+  ),
+  (c) => c.charCodeAt(0),
+);
+
+/** How long an append may take before it counts as refused. */
+const APPEND_MS = 2_000;
+
+/** The append itself, on a MediaSource of its own that nothing plays. */
+function appendsTo(Source: typeof MediaSource) {
+  return (fragment: Uint8Array, type: string) =>
+    new Promise<boolean>((resolve) => {
+      const source = new Source();
+      const element = document.createElement('video');
+      const url = URL.createObjectURL(source);
+      const timer = setTimeout(() => done(false), APPEND_MS);
+      const done = (taken: boolean) => {
+        clearTimeout(timer);
+        URL.revokeObjectURL(url);
+        element.removeAttribute('src');
+        resolve(taken);
+      };
+      source.addEventListener(
+        'sourceopen',
+        () => {
+          try {
+            const buffer = source.addSourceBuffer(type);
+            buffer.addEventListener('updateend', () => done(buffer.buffered.length > 0), {
+              once: true,
+            });
+            buffer.addEventListener('error', () => done(false), { once: true });
+            buffer.appendBuffer(fragment.slice());
+          } catch {
+            done(false);
+          }
+        },
+        { once: true },
+      );
+      element.src = url;
+    });
+}
+
+/** The append's answer. A browser that can't be asked keeps Media Capabilities' word. */
+async function appendsAudio(probe: Probe, fragment: Uint8Array, type: string): Promise<boolean> {
+  if (!probe.appendsAudio) return true;
+  try {
+    return await probe.appendsAudio(fragment, type);
   } catch {
     return false;
   }
