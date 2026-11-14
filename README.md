@@ -295,3 +295,24 @@ instead of silently building a mismatched artifact.
 The homelab runs den-edge as the `den-edge` Quadlet unit on host port 8094, with state at
 `/var/lib/den/edge-data`; `den-update` deploys signed images and preserves its digest pin, live probe, and
 rollback path (the den repo's `deploy/`).
+
+### From merge to running
+
+1. **Merge to `main`.** Main CI builds, tests, probes and scans the candidate image for that commit. Nothing is
+   deployed yet.
+2. **Release.** From a clean checkout at the latest `origin/main`, run `scripts/release.sh X.Y.Z`. It commits
+   `VERSION` to `main`, waits for that commit's CI, and pushes `vX.Y.Z` only if it passed. Pushing to `main`
+   and creating `v*` tags both need write access to this repo.
+3. **Publish.** The tag runs `docker-publish.yml`, which signs the candidate's digest with keyless cosign and
+   moves `:latest`. The release is published once that run succeeds.
+4. **Deploy.** The homelab's daily `den-update` run picks up the new `:latest` on its own. It accepts only an
+   image signed by this repo's `docker-publish.yml` on `main` or a `vX.Y.Z` tag, probes it in a throwaway
+   container, then pins the digest and restarts den-edge, rolling back if the probe fails. A published release is
+   live within about a day with no further step.
+
+Deploying immediately, rolling back, reading production logs and changing its environment all need shell access to
+the homelab, which is not part of repo access. Without it, a release waits for the daily run.
+
+Release access is production access: den-edge serves the Den web app, so a tagged release runs in every
+household's browser, and the probe catches a broken image, not a hostile one. Grant tag or `main` push rights
+accordingly.
