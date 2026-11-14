@@ -425,6 +425,14 @@
   let airPlayCapable = $state(false);
   let airPlayActive = $state(false);
   let airPlayAvailability = $state<'unknown' | 'available' | 'unavailable'>('unknown');
+  let airPlayFunnel: CastStage | undefined;
+  let airPlayFailed = false;
+  let airPlayFailReason: CastFailReason | undefined;
+  let airPlayDelivery: 'direct' | 'remux' | undefined;
+  let airPlayAvailabilityChanges = 0;
+  let airPlayTargetChanges = 0;
+  let airPlayStartedAt: number | undefined;
+  let airPlaySessionSecs = 0;
   let webControlsVisible = $state(true);
   let webControlsTimer: ReturnType<typeof setTimeout> | undefined;
   /** The top bar, and the timeline with its dock: the pointer over either holds the controls up. */
@@ -1551,6 +1559,7 @@
     subtitleSelectionGeneration += 1;
     subtitleLoadFailure = null;
     session = result;
+    if (webTransport && airPlayActive) airPlayDelivery = result.external ? 'direct' : 'remux';
     directWithoutDenSubtitles = result.external === true && !compatibleSubtitles;
     if (!compatibleSubtitles) pendingDirectSubtitleRestore = undefined;
     playbackRouteLog({
@@ -2898,21 +2907,50 @@
    * output button. The picker itself still has to be opened synchronously from that button's user gesture.
    */
   function allowAirPlay(element: HTMLVideoElement) {
+    if (!webTransport) return;
     element.setAttribute('x-webkit-airplay', 'allow');
     const airplay = element as AirPlayVideo;
     airPlayCapable = typeof airplay.webkitShowPlaybackTargetPicker === 'function';
+    if (airPlayCapable) reachAirPlay('offered');
     airPlayActive = !!airplay.webkitCurrentPlaybackTargetIsWireless;
+    if (webTransport && airPlayActive) {
+      reachAirPlay('started');
+      airPlayDelivery = session?.external ? 'direct' : 'remux';
+      airPlayStartedAt = performance.now();
+    }
     const availability = (event: Event) => {
       const answer = (event as AirPlayAvailabilityEvent).availability;
-      airPlayAvailability = answer === 'available' ? 'available' : 'unavailable';
+      const next = answer === 'available' ? 'available' : 'unavailable';
+      if (airPlayAvailability !== 'unknown' && next !== airPlayAvailability)
+        airPlayAvailabilityChanges = Math.min(1_000, airPlayAvailabilityChanges + 1);
+      airPlayAvailability = next;
+      if (next === 'unavailable' && airPlayFunnel === 'attempted') {
+        airPlayFailed = true;
+        airPlayFailReason = 'receiver_unavailable';
+      }
     };
     const targetChanged = () => {
-      airPlayActive = !!airplay.webkitCurrentPlaybackTargetIsWireless;
+      const active = !!airplay.webkitCurrentPlaybackTargetIsWireless;
+      if (active === airPlayActive) return;
+      airPlayTargetChanges = Math.min(1_000, airPlayTargetChanges + 1);
+      airPlayActive = active;
+      if (active) {
+        reachAirPlay('started');
+        airPlayFailed = false;
+        airPlayFailReason = undefined;
+        airPlayDelivery ??= session?.external ? 'direct' : 'remux';
+        airPlayStartedAt = performance.now();
+        clearTimeout(webControlsTimer);
+      } else {
+        endAirPlaySession();
+        revealWebControls();
+      }
     };
     element.addEventListener('webkitplaybacktargetavailabilitychanged', availability);
     element.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', targetChanged);
     return {
       destroy() {
+        endAirPlaySession();
         element.removeEventListener('webkitplaybacktargetavailabilitychanged', availability);
         element.removeEventListener('webkitcurrentplaybacktargetiswirelesschanged', targetChanged);
         airPlayCapable = false;
@@ -2923,10 +2961,22 @@
   }
 
   function offerAirPlay() {
+    reachAirPlay('attempted');
+    airPlayDelivery = session?.external ? 'direct' : 'remux';
     (video as AirPlayVideo | undefined)?.webkitShowPlaybackTargetPicker?.();
   }
 
   const CAST_RANK: Record<CastStage, number> = { offered: 0, attempted: 1, started: 2 };
+  function reachAirPlay(stage: CastStage) {
+    if (!airPlayFunnel || CAST_RANK[stage] > CAST_RANK[airPlayFunnel]) airPlayFunnel = stage;
+  }
+
+  function endAirPlaySession() {
+    if (airPlayStartedAt === undefined) return;
+    airPlaySessionSecs += (performance.now() - airPlayStartedAt) / 1000;
+    airPlayStartedAt = undefined;
+  }
+
   /** Moves `castFunnel` to `stage`, never back: den-edge's own cast report (`finish()`) names the furthest
    * this visit's Chromecast attempt reached, not its last. */
   function reachCast(stage: CastStage) {
@@ -3258,6 +3308,10 @@
     source: FailSource = 'media_element',
   ) {
     if (!session || failure) return;
+    if (webTransport && airPlayActive) {
+      airPlayFailed = true;
+      airPlayFailReason = 'media_error';
+    }
     // den-edge's own outcome report (`finish()`) names the last fatal error this visit saw, whichever session it
     // belonged to: a switch away from a bad copy is still something that went wrong once.
     lastFatal = { code: code || undefined, hls: hlsFatalFromMessage(message) };
@@ -3527,7 +3581,7 @@
 
   // System fullscreen and receivers own their playlist captions. These custom players can replace a sidecar.
   function canRenderAlignedSubtitle() {
-    return !castMode && !casting && !airPlayActive && customTransport;
+    return !castMode && !casting && (!webTransport || !airPlayActive) && customTransport;
   }
 
   $effect(() => {
@@ -4332,6 +4386,7 @@
    * do; on the picture, its click decides (`pictureClick`). A mouse reveals them by moving (`onpointermove`).
    */
   function playerPointerDown(event: PointerEvent) {
+    if (webTransport && airPlayActive) return;
     lastPointer = event.pointerType;
     shownAtPress = webControlsVisible;
     if (event.pointerType !== 'mouse' && event.target !== video) revealWebControls();
@@ -4342,7 +4397,7 @@
    * they were showing is read at the press: the focus a tap gives the player (Firefox) reveals them before the click.
    */
   function pictureClick(event: MouseEvent) {
-    if (!webTransport) return;
+    if (!webTransport || airPlayActive) return;
     if (lastPointer === 'touch' || lastPointer === 'pen') pictureTap(event);
     else if (!shownAtPress) revealWebControls();
     else pictureClickMouse(event);
@@ -4688,6 +4743,7 @@
    * and, when one was open, the same session.
    */
   function sendReports(stats: ReturnType<Watcher['stats']> | undefined) {
+    if (webTransport) endAirPlaySession();
     const chosenSubtitleLanguage = selectedSubtitleLanguage();
     const subtitleLanguage = reportableLanguage(chosenSubtitleLanguage);
     const subtitleIndex = session?.subtitles?.findIndex(
@@ -4749,6 +4805,20 @@
         ...identity,
       });
     }
+    if (webTransport && airPlayFunnel) {
+      sendCastReport({
+        kind: 'airplay',
+        reached: airPlayFunnel,
+        failed: airPlayFailed || undefined,
+        failReason: airPlayFailReason,
+        sessionSecs:
+          airPlaySessionSecs > 0 ? Math.max(1, Math.round(airPlaySessionSecs)) : undefined,
+        delivery: airPlayDelivery,
+        availabilityChanges: airPlayAvailabilityChanges || undefined,
+        targetChanges: airPlayTargetChanges || undefined,
+        ...identity,
+      });
+    }
   }
 
   /**
@@ -4794,6 +4864,20 @@
     castFailReason = undefined;
     castSessionSecs = 0;
     castReceiverError = undefined;
+    if (webTransport) {
+      airPlayFunnel = undefined;
+      airPlayFailed = false;
+      airPlayFailReason = undefined;
+      airPlayDelivery = undefined;
+      airPlayAvailabilityChanges = 0;
+      airPlayTargetChanges = 0;
+      airPlayStartedAt = undefined;
+      airPlaySessionSecs = 0;
+      if (airPlayActive) {
+        airPlayFunnel = 'started';
+        airPlayStartedAt = performance.now();
+      }
+    }
     casting = false;
     segments = [];
     active = null;
@@ -5333,7 +5417,7 @@
   }
 
   function pictureDoubleClick() {
-    if (!webTransport || lastPointer === 'touch' || lastPointer === 'pen') return;
+    if (!webTransport || airPlayActive || lastPointer === 'touch' || lastPointer === 'pen') return;
     clearTimeout(clickHold);
     void toggleFullscreen();
   }
@@ -5441,6 +5525,7 @@
   }
 
   function playerKey(event: KeyboardEvent) {
+    if (webTransport && airPlayActive) return;
     if (event.key === 'Escape' && tvSubtitleTimingOpen) {
       event.preventDefault();
       void closeSubtitleTiming();
@@ -5658,58 +5743,60 @@
   onfocusout={scheduleWebControls}
 >
   {#if webTransport}
-    <!-- Close and what is playing at the top, and the one output slot at its right end: Cast or AirPlay, the same place
-         on every size. The slot's box depends only on this bar, so the cast page's frame drawn over it moves only as
-         the window does, never as the dock below gains or loses a button. -->
-    <header class="web-top" bind:this={webTop}>
-      <button
-        class="web-glyph web-close"
-        type="button"
-        aria-label="Close player"
-        data-tip={i18n.phrase('Close')}
-        data-key="Esc"
-        onclick={close}
-      >
-        <ButtonIcon name="close" />
-      </button>
-      <div class="web-heading">
-        <b>{title.title}</b>
-        {#if season !== undefined}<span>S{season} · E{episode}</span>{/if}
+    {#if !airPlayActive}
+      <!-- Close and what is playing at the top, and the one output slot at its right end: Cast or AirPlay, the same place
+           on every size. The slot's box depends only on this bar, so the cast page's frame drawn over it moves only as
+           the window does, never as the dock below gains or loses a button. -->
+      <header class="web-top" bind:this={webTop}>
+        <button
+          class="web-glyph web-close"
+          type="button"
+          aria-label="Close player"
+          data-tip={i18n.phrase('Close')}
+          data-key="Esc"
+          onclick={close}
+        >
+          <ButtonIcon name="close" />
+        </button>
+        <div class="web-heading">
+          <b>{title.title}</b>
+          {#if season !== undefined}<span>S{season} · E{episode}</span>{/if}
+        </div>
+        <span
+          class="web-output"
+          class:web-output-empty={!(session && airPlayCapable) && !castSlotShown}
+        >
+          {#if session && airPlayCapable}
+            <button
+              class="web-glyph output-action"
+              class:web-on={airPlayActive}
+              type="button"
+              aria-label={airPlayAvailability === 'unavailable'
+                ? 'AirPlay, no devices available'
+                : airPlayActive
+                  ? 'Change AirPlay device'
+                  : 'AirPlay'}
+              aria-pressed={airPlayActive}
+              data-tip={i18n.phrase('AirPlay')}
+              disabled={airPlayAvailability === 'unavailable'}
+              onclick={offerAirPlay}
+            >
+              <ButtonIcon name="airplay" />
+            </button>
+          {/if}
+          {#if castSlotShown}
+            {@render castButtonSlot('web-glyph output-action')}
+          {/if}
+        </span>
+      </header>
+      <!-- One toast at a time, under the top bar: in the black band above an upright phone's picture, never over it. An
+           actionable one or an error stays until it is answered and holds back the rest; quiet ones fade (`fades`). -->
+      <div class="notices web-toasts">
+        {#if webToast}
+          {@render banner(webToast.text, webToast)}
+        {/if}
       </div>
-      <span
-        class="web-output"
-        class:web-output-empty={!(session && airPlayCapable) && !castSlotShown}
-      >
-        {#if session && airPlayCapable}
-          <button
-            class="web-glyph output-action"
-            class:web-on={airPlayActive}
-            type="button"
-            aria-label={airPlayAvailability === 'unavailable'
-              ? 'AirPlay, no devices available'
-              : airPlayActive
-                ? 'Change AirPlay device'
-                : 'AirPlay'}
-            aria-pressed={airPlayActive}
-            data-tip={i18n.phrase('AirPlay')}
-            disabled={airPlayAvailability === 'unavailable'}
-            onclick={offerAirPlay}
-          >
-            <ButtonIcon name="airplay" />
-          </button>
-        {/if}
-        {#if castSlotShown}
-          {@render castButtonSlot('web-glyph output-action')}
-        {/if}
-      </span>
-    </header>
-    <!-- One toast at a time, under the top bar: in the black band above an upright phone's picture, never over it. An
-         actionable one or an error stays until it is answered and holds back the rest; quiet ones fade (`fades`). -->
-    <div class="notices web-toasts">
-      {#if webToast}
-        {@render banner(webToast.text, webToast)}
-      {/if}
-    </div>
+    {/if}
   {:else}
     <header>
       <b>{heading}</b>
@@ -5871,7 +5958,7 @@
         <!-- den-remux supplies subtitle renditions through the HLS playlist. -->
         <video
           bind:this={video}
-          controls={!customTransport}
+          controls={!customTransport || (webTransport && airPlayActive)}
           autoplay
           playsinline
           use:allowAirPlay
@@ -6101,7 +6188,7 @@
     </section>
   {/if}
   {#if webTransport}
-    {#if session || sourceRecovery}{@render webControls()}{/if}
+    {#if !airPlayActive && (session || sourceRecovery)}{@render webControls()}{/if}
   {:else if session}
     {@const parts = releaseParts(session)}
     {@const short = pickLabel(session.release)}
