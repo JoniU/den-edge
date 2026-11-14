@@ -1239,6 +1239,17 @@
                   glyph={more}
                 />
               </span>
+              {#if !hasOverride}
+                <p class="status wide" data-guest-torbox-nudge>
+                  Playback uses the shared TorBox. Add your own for faster, direct streaming.
+                </p>
+                <Button
+                  variant="primary"
+                  label={configuringGuest === grant.gid ? 'Opening settings…' : 'Add your TorBox'}
+                  disabled={configuringGuest !== null || resettingGuest !== null}
+                  onclick={() => configureGuest(grant.gid, grant.secret)}
+                />
+              {/if}
             </li>
           {/each}
           {#each sharedAddons as shared (`${shared.gid}/${shared.addon}`)}

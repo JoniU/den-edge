@@ -20,6 +20,46 @@ const GRANT = {
   ended: false,
 };
 
+for (const [overrides, nudged] of [
+  [[], true],
+  [['den'], false],
+]) {
+  test(`guest "Add your TorBox" action ${nudged ? 'shows without' : 'is absent with'} an override`, async ({
+    context,
+  }) => {
+    await context.addInitScript(
+      (grant) => localStorage.setItem('den.grants', JSON.stringify([grant])),
+      { ...GRANT, overrides },
+    );
+    const page = await context.newPage();
+    await guardNetwork(page);
+    await page.route('**/routes', (route) => route.fulfill({ json: {} }));
+    await page.route('**/lib/*/grants', (route) => route.fulfill({ json: { grants: [] } }));
+    await page.route('**/version', (route) => route.fulfill({ json: { version: 'guest-nudge' } }));
+    await page.route('**/config', (route) => route.fulfill({ json: {} }));
+    await page.route('**/tmdb/3/**', (route) =>
+      route.fulfill({ json: { results: [], images: {} } }),
+    );
+    await page.route('**/grant/addons', (route) =>
+      route.fulfill({
+        json: { gid: GID, name: GRANT.name, addons: GRANT.addons, overrides, expiresAt: null },
+      }),
+    );
+    await page.route(`**/{atlas,den}/~${GID}/manifest.json`, (route) =>
+      route.fulfill({ status: 404, body: 'not available' }),
+    );
+
+    await page.goto(`${E2E_ORIGIN}/test/settings.html`);
+    await page.getByRole('button', { name: /Plugins/ }).click();
+    const plugins = page.getByRole('region', { name: 'Plugins' });
+    await expect(plugins).toContainText(nudged ? 'Using shared settings' : 'Using your settings');
+    await expect(plugins.getByRole('button', { name: 'Add your TorBox' })).toHaveCount(
+      nudged ? 1 : 0,
+    );
+    await expect(plugins.getByText(/Playback uses the shared TorBox/)).toHaveCount(nudged ? 1 : 0);
+  });
+}
+
 test('guest Configure uses a native new-tab POST and follows the scoped redirect', async ({
   context,
 }) => {
