@@ -560,6 +560,7 @@ export type CastKind = 'chromecast' | 'airplay';
 export type CastStage = 'offered' | 'attempted' | 'started';
 export type CastFailReason =
   | 'receiver_not_loaded'
+  | 'receiver_unavailable'
   | 'media_error'
   | 'lan_unreachable'
   | 'session_error'
@@ -572,6 +573,11 @@ export interface CastReport extends IdentityFields, CastReceiverFields {
   failed?: boolean;
   failReason?: CastFailReason;
   sessionSecs?: number;
+  /** Which media path was handed to the receiver. */
+  delivery?: 'direct' | 'remux';
+  /** Privacy-safe WebKit event counts; no receiver or network identity is collected. */
+  availabilityChanges?: number;
+  targetChanges?: number;
 }
 
 export function sendCastReport(report: CastReport, fetchImpl: typeof fetch = fetch): void {

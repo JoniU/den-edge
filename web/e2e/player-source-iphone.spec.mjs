@@ -68,16 +68,43 @@ async function savePageTraces() {
  * platform (see `subtitle-system-player.spec.mjs`'s `iphone`): a fresh, unattached `<video>` says yes; the player's
  * own element keeps this engine's real answer, so it plays with what the engine has.
  */
-async function iphone(browser, locale) {
+async function iphone(browser, locale, { airPlay = false } = {}) {
   const context = await browser.newContext({ ...devices['iPhone 13'], locale });
   contexts.push(context);
-  await context.addInitScript(() => {
+  await context.addInitScript((airPlay) => {
     const canPlayType = HTMLMediaElement.prototype.canPlayType;
     HTMLMediaElement.prototype.canPlayType = function (type) {
       const answer = canPlayType.call(this, type);
       return answer || this.isConnected || !/mpegurl/i.test(type) ? answer : 'maybe';
     };
-  });
+    if (!airPlay) return;
+    const wireless = new WeakMap();
+    Object.defineProperty(HTMLVideoElement.prototype, 'webkitCurrentPlaybackTargetIsWireless', {
+      configurable: true,
+      get() {
+        return wireless.get(this) ?? false;
+      },
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, 'webkitShowPlaybackTargetPicker', {
+      configurable: true,
+      value() {
+        window.airPlayPickerCalls = (window.airPlayPickerCalls ?? 0) + 1;
+      },
+    });
+    window.setAirPlayAvailability = (availability) => {
+      const video = document.querySelector('.player video');
+      if (!video) return;
+      const event = new Event('webkitplaybacktargetavailabilitychanged');
+      Object.defineProperty(event, 'availability', { value: availability });
+      video.dispatchEvent(event);
+    };
+    window.setAirPlayTarget = (active) => {
+      const video = document.querySelector('.player video');
+      if (!video) return;
+      wireless.set(video, active);
+      video.dispatchEvent(new Event('webkitcurrentplaybacktargetiswirelesschanged'));
+    };
+  }, airPlay);
   return context;
 }
 
@@ -85,7 +112,10 @@ async function iphone(browser, locale) {
  * A guest of a host whose Hearth answers playback with `hearth(body)`, the title in `originalLanguage`, and the media
  * of both paths served. Returns every playback request body.
  */
-async function guestPlayer(page, { hearth, originalLanguage, automaticSubtitles = false }) {
+async function guestPlayer(
+  page,
+  { hearth, originalLanguage, automaticSubtitles = false, airPlayReports },
+) {
   const edge = newEdge();
   await routeGuestEdge(page, edge);
   await routeTmdb(page, (route) => {
@@ -123,7 +153,11 @@ async function guestPlayer(page, { hearth, originalLanguage, automaticSubtitles 
   await page.route(`${ORIGIN}/remux/releases`, (route) =>
     route.fulfill({ json: { releases: [release] } }),
   );
-  await page.route(`${ORIGIN}/playback/**`, (route) => route.fulfill({ status: 204 }));
+  await page.route(`${ORIGIN}/playback/**`, (route) => {
+    if (airPlayReports && new URL(route.request().url()).pathname.endsWith('/cast'))
+      airPlayReports.push(route.request().postDataJSON());
+    return route.fulfill({ status: 204 });
+  });
   await page.route(`${ORIGIN}/torbox/t/**`, async (route) => {
     const name = new URL(route.request().url()).pathname.split('/').pop();
     return route.fulfill({
@@ -250,6 +284,8 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
 
       const stamp = page.getByTestId('playback-source');
       await expect(stamp).toHaveText('Den Remux');
+      await expect(page.locator('.player video')).not.toHaveAttribute('controls', '');
+      await expect(page.locator('.player nav.web-transport')).toHaveCount(1);
       const sheet = await swedishSourceSheet(page);
       await expect(sheet).toBeVisible();
       await expect(sheet).toContainText('Spelas via Den Remux');
@@ -261,6 +297,8 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
 
       await toTorbox.tap();
       await expect(stamp).toHaveText('TorBox', { timeout: 30_000 });
+      await expect(page.locator('.player video')).not.toHaveAttribute('controls', '');
+      await expect(page.locator('.player nav.web-transport')).toHaveCount(1);
       expect(playback).toHaveLength(2);
       expect(playback[1]).toMatchObject({ directOnly: true, filename: 'fixture.mkv' });
       expect(playback[1]).not.toHaveProperty('directFailed');
@@ -278,7 +316,111 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
       await expect(back).toContainText('Spelas direkt från TorBox');
       await back.getByRole('menuitem', { name: 'Byt till Den Remux' }).tap();
       await expect(stamp).toHaveText('Den Remux', { timeout: 30_000 });
+      await expect(page.locator('.player video')).not.toHaveAttribute('controls', '');
+      await expect(page.locator('.player nav.web-transport')).toHaveCount(1);
       expect(playback[2]).toMatchObject({ directFailed: true, filename: 'fixture.mkv' });
+    } catch (error) {
+      await savePageTraces();
+      throw error;
+    } finally {
+      contexts.length = 0;
+      await browser.close();
+    }
+  });
+
+  test('AirPlay gives Apple sole control while active, restores Den, and reports flapping', async () => {
+    const browser = await webkit.launch();
+    try {
+      const page = await (await iphone(browser, 'en-US', { airPlay: true })).newPage();
+      const airPlayReports = [];
+      await guestPlayer(page, {
+        originalLanguage: 'en',
+        hearth: () => ({ json: torboxAnswer }),
+        airPlayReports,
+      });
+      const video = page.locator('.player video');
+      const controls = page.locator('.player nav.web-transport');
+      await expect(video).not.toHaveAttribute('controls', '');
+      await expect(controls).toHaveCount(1);
+
+      await page.evaluate(() => window.setAirPlayAvailability('available'));
+      const output = page.locator('.player .web-output .output-action');
+      await expect(output).toBeVisible();
+      await output.tap();
+      await expect.poll(() => page.evaluate(() => window.airPlayPickerCalls ?? 0)).toBe(1);
+
+      // The receiver disappears and returns before WebKit confirms a wireless target. Den keeps the picker usable,
+      // records only bounded transition counts, and does not mistake the transient loss for the final outcome.
+      await page.evaluate(() => window.setAirPlayAvailability('unavailable'));
+      await expect(output).toBeDisabled();
+      await page.evaluate(() => window.setAirPlayAvailability('available'));
+      await expect(output).toBeEnabled();
+      await output.tap();
+      await expect.poll(() => page.evaluate(() => window.airPlayPickerCalls ?? 0)).toBe(2);
+      await page.evaluate(() => window.setAirPlayTarget(true));
+
+      // Apple's native transport is the only owner while AirPlay is active. The video element is not replaced, so
+      // its HLS session and playhead survive the handoff.
+      await expect(video).toHaveAttribute('controls', '');
+      await expect(page.locator('.player > header, .player > footer')).toHaveCount(0);
+      await expect(controls).toHaveCount(0);
+
+      await page.evaluate(() => window.setAirPlayTarget(false));
+      await expect(video).not.toHaveAttribute('controls', '');
+      await expect(page.locator('.player > header.web-top')).toHaveCount(1);
+      await expect(page.locator('.player > footer')).toHaveCount(0);
+      await expect(controls).toHaveCount(1);
+
+      await page.getByRole('button', { name: 'Close player' }).tap();
+      await expect
+        .poll(() => airPlayReports.find((report) => report.kind === 'airplay'))
+        .toMatchObject({
+          kind: 'airplay',
+          reached: 'started',
+          delivery: 'direct',
+          availabilityChanges: 2,
+          targetChanges: 2,
+        });
+      expect(airPlayReports.find((report) => report.kind === 'airplay')).not.toHaveProperty(
+        'failed',
+      );
+    } catch (error) {
+      await savePageTraces();
+      throw error;
+    } finally {
+      contexts.length = 0;
+      await browser.close();
+    }
+  });
+
+  test('an AirPlay receiver that disappears after selection is reported without identity', async () => {
+    const browser = await webkit.launch();
+    try {
+      const page = await (await iphone(browser, 'en-US', { airPlay: true })).newPage();
+      const airPlayReports = [];
+      await guestPlayer(page, {
+        originalLanguage: 'en',
+        hearth: () => ({ json: remuxAnswer }),
+        airPlayReports,
+      });
+      await page.evaluate(() => window.setAirPlayAvailability('available'));
+      await page.locator('.player .web-output .output-action').tap();
+      await page.evaluate(() => window.setAirPlayAvailability('unavailable'));
+      await page.getByRole('button', { name: 'Close player' }).tap();
+
+      await expect
+        .poll(() => airPlayReports.find((report) => report.kind === 'airplay'))
+        .toMatchObject({
+          kind: 'airplay',
+          reached: 'attempted',
+          failed: true,
+          failReason: 'receiver_unavailable',
+          delivery: 'remux',
+          availabilityChanges: 1,
+        });
+      expect(Object.keys(airPlayReports[0])).toEqual(
+        expect.not.arrayContaining(['receiver', 'receiverName', 'url', 'address']),
+      );
     } catch (error) {
       await savePageTraces();
       throw error;

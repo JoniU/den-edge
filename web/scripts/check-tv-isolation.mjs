@@ -301,5 +301,11 @@ if (process.argv.includes('--capture')) {
   // Den's Cast receiver in the cast report (what its TV plays, its firmware and device type, its player's error
   // codes) brings the graph to 100,030 on a local build, in the lazy Player and castReceiver chunks only; it adds no
   // request. Allow the next 128-byte boundary past it, retaining 66.
-  if (coreTotalDelta > 100096) throw new Error('Browser total JS/CSS budget exceeded');
+  // AirPlay's single-owner handoff and privacy-safe event evidence add 386 gzip bytes to the complete graph on
+  // matched current-main/head builds (825,827 -> 826,213), 368 of them in the existing lazy Player chunk, while
+  // startup shrinks by 10 bytes. It reuses the existing video, Cast report transport and WebKit listeners, adding no
+  // request, timer, polling or CSS. Splitting the synchronous target/availability state would add a chunk request at
+  // the moment the system picker opens and cannot reduce the complete graph. Allow the next boundary with useful
+  // cross-machine variance, retaining 185 bytes on this build.
+  if (coreTotalDelta > 100608) throw new Error('Browser total JS/CSS budget exceeded');
 }
