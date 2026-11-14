@@ -4,6 +4,7 @@ import {
   drainPlaybackReceiptsOnce,
   drainWhileOpen,
   preparePlaybackReceipts,
+  publishWhileOpen,
   type ApplyOutcome,
   type OtherQueue,
   type QueuedRequest,
@@ -15,6 +16,37 @@ import {
 } from './relayFetch';
 
 const DROPBOX = { kid: '0123456789abcdef0123456789abcdef', public: 'pk-one' };
+
+test('ordinary assistant publisher ticks retain only the current cancellable wait', async () => {
+  vi.useFakeTimers();
+  const stop = new AbortController();
+  const active = new Set<EventListenerOrEventListenerObject>();
+  const add = stop.signal.addEventListener.bind(stop.signal);
+  const remove = stop.signal.removeEventListener.bind(stop.signal);
+  vi.spyOn(stop.signal, 'addEventListener').mockImplementation((type, listener, options) => {
+    if (type === 'abort') active.add(listener);
+    add(type, listener, options);
+  });
+  vi.spyOn(stop.signal, 'removeEventListener').mockImplementation((type, listener, options) => {
+    if (type === 'abort') active.delete(listener);
+    remove(type, listener, options);
+  });
+  const publish = vi.fn(async () => {});
+  const running = publishWhileOpen({ libraryId: 'listener-cleanup', publish }, stop.signal);
+  await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+  expect(active.size).toBe(1);
+
+  await vi.advanceTimersByTimeAsync(30_000);
+  await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+  expect(active.size).toBe(1);
+  expect(vi.getTimerCount()).toBe(1);
+
+  stop.abort();
+  await running;
+  expect(active.size).toBe(0);
+  expect(vi.getTimerCount()).toBe(0);
+  vi.useRealTimers();
+});
 
 test('managed playback receipt preparation is lazy, retryable, and cached only after success', async () => {
   const signal = new AbortController().signal;
