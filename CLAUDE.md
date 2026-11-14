@@ -1,5 +1,21 @@
 # den-edge — how to work in this repo
 
+## Contributor development
+
+- Start ordinary UI work with `./scripts/dev.mjs`. It uses the live public `d.oxy.fi` guest stack, including
+  centralized Hearth/TorBox/authorized Remux for a guest who redeems or transfers their grant onto localhost.
+  Treat this as live data and resource usage, never a fixture or automation target.
+- Start backend work with `./scripts/dev.mjs --local-edge`. Edge is loopback-only with isolated persistent state in
+  `.dev/data`; local Edge cannot reuse a centralized guest's authority, so use a local Hearth or focused fixtures.
+- Browser credentials are origin-local. A production invite opened normally signs in `d.oxy.fi`, not localhost;
+  paste a fresh invite in localhost Settings → Sharing, or replace only an existing guest's “Use Den on your
+  phone” link origin with `http://localhost:5173/` while preserving its fragment.
+- A local Hearth integration must first create its library in default `open` mode, then restart Edge with
+  `NEW_LIBRARIES=members`; Edge and combined Hearth share `REMUX_EDGE_SECRET` (standalone Remux calls it
+  `EDGE_SECRET`).
+- Preserve `DEN_E2E=1` isolation and never reintroduce private-LAN service defaults. Standalone addon overrides must
+  not receive Edge authority headers. The README contributor quickstart is the detailed command reference.
+
 ## What the trailers have to do
 
 **The best picture the browser can play, as soon as possible, in every browser.** Both halves, not one

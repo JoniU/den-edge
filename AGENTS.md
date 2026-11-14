@@ -1,5 +1,21 @@
 # Working in den-edge
 
+## Contributor development
+
+- `./scripts/dev.mjs` is the default contributor entry point. It runs the local Vite UI against the live public
+  `d.oxy.fi` stack; an invited guest can use centralized Hearth, their own TorBox configuration, and authorized
+  Remux without LAN access. This mode uses live guest data/resources and must never back fixtures or automation.
+- Guest state is origin-local. Redeem/paste the invite on the localhost UI, or replace an existing guest session's
+  “Use Den on your phone” link origin with `http://localhost:5173/` while preserving its fragment; merely opening
+  the production invite signs in `d.oxy.fi`.
+- `./scripts/dev.mjs --local-edge` is for Rust/backend changes. It binds Edge to loopback, keeps persistent isolated
+  state in `.dev/data`, and has no authority over centralized Hearth. Configure a local Hearth or fixtures when a
+  backend test needs services. A local Hearth flow must bootstrap the library in the default `open` mode, restart
+  with `NEW_LIBRARIES=members`, and share `REMUX_EDGE_SECRET` with combined Hearth (or Remux's `EDGE_SECRET`). Never
+  restore private `192.168.*` defaults.
+- Every Playwright/E2E server must retain `DEN_E2E=1`; real-service overrides are forbidden there. Explicit
+  standalone addon proxies must strip Edge membership, grant, token, cookie, and authorization headers.
+
 ## Testing
 
 - Do not add a regression test mechanically for every change. Trivial styling changes, copy edits, and straightforward substitutions of an existing shared component usually need the relevant static checks, not a new test.

@@ -3,7 +3,7 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import type { Plugin, ProxyOptions, ViteDevServer } from 'vite';
 import { previewBuild } from './scripts/previewBuild.ts';
 import { probe } from './scripts/probe.ts';
-import { upstream } from './scripts/upstream.ts';
+import { stripEdgeAuthority, upstream } from './scripts/upstream.ts';
 import { localizeMarkup } from './scripts/localize-markup.ts';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -57,12 +57,12 @@ for (const file of [
   );
 const translationsRevision = translationRevision.digest('hex').slice(0, 16);
 
-// In production den-edge serves the app and its API from one origin. The dev server proxies the API to a
-// den-edge — the homelab's by default, DEN_EDGE for another. Under e2e (`DEN_E2E=1`) it is never a real one.
-const edge = upstream('DEN_EDGE', 'http://192.168.86.193:8094');
-// The raw homelab listener serves several faces and deliberately gates web-only capabilities by Host. A local page
-// is the d.oxy.fi web face, even though its transport goes straight to the LAN address. Preserve that production
-// identity; an explicit DEN_EDGE may provide DEN_EDGE_HOST when it also targets a shared raw listener.
+// In production den-edge serves the app and its API from one origin. Ordinary UI development uses that public
+// stack too, so a contributor signed in as a guest exercises the real guest authority and Hearth integrations.
+// The root launcher selects loopback explicitly for backend work. Under e2e (`DEN_E2E=1`) this is always dead local.
+const edge = upstream('DEN_EDGE', 'https://d.oxy.fi');
+// The public default must retain its Web face when Vite connects to it. An explicit Edge is normally a standalone
+// local listener; DEN_EDGE_HOST remains available for a shared raw listener with several faces.
 const edgeHost =
   process.env.DEN_EDGE_HOST ??
   (!process.env.DEN_EDGE && process.env.DEN_E2E !== '1' ? 'd.oxy.fi' : undefined);
@@ -93,6 +93,8 @@ const api = [
   '/scout',
   '/tmdb',
   '/metadata',
+  '/assistant',
+  '/performance',
   // Runtime routes the installed web app receives from den-edge too. Keeping them same-origin in development lets a
   // local HTTPS page use the real library's Hearth config, playback and account integrations without CORS or a
   // second local configuration. The TV config inherits this same proxy table.
@@ -116,14 +118,17 @@ const api = [
   '/link',
   '/version',
 ];
-// atlas sits beside den-edge on the tailnet origin at /atlas; tailscale serve strips the prefix, so this does too.
-const atlas = upstream('DEN_ATLAS', 'http://192.168.86.193:8081');
-// reel the same way, for the billboard's trailers: its JSON is asked under this origin, its MP4s straight from it.
-const reel = upstream('DEN_REEL', 'http://192.168.86.193:8092');
+// The default is Edge's bounded public Atlas relay, which keeps /atlas. An explicit DEN_ATLAS names a standalone
+// Atlas service, whose listener does not have that prefix. E2E replaces either default with a dead loopback port.
+const atlasDirect = process.env.DEN_ATLAS !== undefined;
+const atlas = upstream('DEN_ATLAS', 'https://d.oxy.fi');
+// Reel also defaults to Edge's public relay. A standalone DEN_REEL listener receives the prefix-stripped path.
+const reelDirect = process.env.DEN_REEL !== undefined;
+const reel = upstream('DEN_REEL', 'https://d.oxy.fi');
 // den-remux, for the player and for test/remux.html. Unlike atlas and reel this keeps the prefix: den-remux's own
 // routes are under /remux, which is why tailscale serve sends /remux to :8095/remux rather than stripping it. A
 // rewrite here would ask it for /session, which it does not serve.
-const remux = upstream('DEN_REMUX', 'http://192.168.86.193:8095');
+const remux = upstream('DEN_REMUX', 'https://d.oxy.fi');
 // The probe is an instrument, not part of the app: it injects a beacon into every page this server hands
 // out. Left on unconditionally it reaches the e2e suite too, where `POST /__probe` reads as an unmocked
 // request and fails every spec that guards the network. On for a session someone is watching from a
@@ -276,10 +281,22 @@ export default defineConfig({
       '/atlas': {
         target: atlas,
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/atlas/, ''),
+        rewrite: (path) => (atlasDirect ? path.replace(/^\/atlas/, '') : path),
+        ...(atlasDirect ? { configure: (proxy) => proxy.on('proxyReq', stripEdgeAuthority) } : {}),
       },
-      '/reel': { target: reel, changeOrigin: true, rewrite: (path) => path.replace(/^\/reel/, '') },
-      '/remux': { target: remux, changeOrigin: true },
+      '/reel': {
+        target: reel,
+        changeOrigin: true,
+        rewrite: (path) => (reelDirect ? path.replace(/^\/reel/, '') : path),
+        ...(reelDirect ? { configure: (proxy) => proxy.on('proxyReq', stripEdgeAuthority) } : {}),
+      },
+      '/remux': {
+        target: remux,
+        changeOrigin: true,
+        ...(process.env.DEN_REMUX !== undefined
+          ? { configure: (proxy) => proxy.on('proxyReq', stripEdgeAuthority) }
+          : {}),
+      },
     },
   },
   // Keep route styles beside their already-split route chunks. Settings, Player and other uncommon screens are

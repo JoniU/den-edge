@@ -1,5 +1,7 @@
 /target
 /data
+/.dev
+/.claude
 /web/node_modules
 /web/dist
 /web/dist-cast

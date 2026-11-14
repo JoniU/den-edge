@@ -1,5 +1,59 @@
 # den-edge
 
+## Contributor quickstart
+
+Install Node 24+, npm and Git, then run:
+
+```sh
+./scripts/dev.mjs
+```
+
+This installs the pinned Web dependencies when needed and starts the local Vite UI at
+<http://localhost:5173> against the public `d.oxy.fi` stack. Redeem a guest invite to use the real guest library,
+your personal TorBox-backed Den configuration, and centralized Remux subject to the grant lifecycle and server
+limits. The grant must share the combined `den` addon; a legacy Scout-only share does not enable the full flow. No
+LAN or tailnet access is needed.
+
+Guest credentials are browser-origin-local. For a new guest, paste the invite code or full production link into
+**Settings → Sharing → Enter invite code** on `localhost`; opening a `d.oxy.fi` invite normally redeems it only on
+the production origin. If the friend already redeemed it there, use production **Settings → Use Den on your phone**,
+copy its link, and replace only the `https://d.oxy.fi/` origin with `http://localhost:5173/` while preserving the
+entire `#phone=...&code=...` fragment (the grant needs a free device slot).
+
+Default development uses live guest data and centralized resources. Do not use it for fixtures, automation, or
+destructive experiments; those belong in E2E isolation or local Edge mode.
+
+For Rust backend work, `./scripts/dev.mjs --local-edge` also starts a loopback-only Edge with isolated state in
+`.dev/data`. The state persists between runs; remove that directory yourself when you intentionally want a reset.
+This mode deliberately has separate authority from the centralized guest account. Use
+`./scripts/dev.mjs --check` to install dependencies and check prerequisites without starting servers.
+
+Standalone Vite services can be selected with `DEN_ATLAS`, `DEN_REEL`, and `DEN_REMUX`. Local Edge starts in `open`
+mode so the browser can create its first library. After doing that once, stop it and restart in `members` mode; the
+existing library becomes a household and the Web-facing Hearth routes become available. For combined local Hearth
+integration, configure the relay, playback, and shared Remux secret explicitly, for example:
+
+```sh
+ADDON_RELAY=/den=http://127.0.0.1:8090 \
+DEN_PLAYBACK_ENABLED=1 \
+DEN_REMUX=http://127.0.0.1:8090 \
+NEW_LIBRARIES=members \
+REMUX_EDGE_SECRET=local-development-secret \
+./scripts/dev.mjs --local-edge
+```
+
+Start the combined Hearth process with the same `REMUX_EDGE_SECRET=local-development-secret`; a standalone Remux
+calls the corresponding setting `EDGE_SECRET`. Use a real random secret outside loopback-only development.
+The contributor supplies their own TorBox account through Hearth's `/den/configure` UI. Centralized guest authority
+cannot be reused by local Edge; use a local Hearth or focused fixtures for backend integration work.
+
+| Capability | Default contributor mode | Backend mode |
+|---|---|---|
+| Edge/library | Centralized guest account | Local isolated, persistent state |
+| Atlas | Centralized public relay | Public relay unless overridden |
+| Hearth/Scout | Centralized, grant-authorized | Configure a local Hearth |
+| Reel/Remux | Centralized when the grant allows it | Self-host for service changes |
+
 Den's sync relay, on the homelab. It relays pairings between an Apple TV and another device, carries a paired
 device's sealed messages to the TV, keeps the library's current encrypted state and the TV's encrypted backup, and
 holds the plugin list and settings older links shared. It also serves the Den web app.
@@ -133,6 +187,7 @@ a configured public name into the LAN fallback. Malformed or duplicate Host fiel
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8080` | the port to listen on |
+| `BIND_ADDR` | `0.0.0.0` | IP address to bind. The contributor launcher forces `127.0.0.1` in local Edge mode |
 | `DATA_DIR` | `data` (the image sets `/data`) | where the state lives |
 | `STORE_CAP_BYTES` | `1073741824` (1 GiB) | the most the state may take on disk; the inbox a quarter of it |
 | `METRICS_TOKEN` | unset | bearer token for `/metrics`; unset turns it off |
@@ -203,14 +258,15 @@ cached for a year. App routes must not reuse an API path (`/lib`, `/pair`, `/inb
 answers first.
 
 ```
-cd web && npm install && npm run dev    # Vite on :5173, proxying the API to the homelab den-edge
+cd web && npm ci --ignore-scripts && npm run dev    # Vite on :5173, using the public guest stack
 npm run lint && npm test && npm run build
 ```
 
 See [web development and CSS conventions](web/README.md) for formatting and lint commands.
 
-`DEN_EDGE=http://localhost:8080 npm run dev` proxies to a local den-edge instead. Installs run with
-`--ignore-scripts` in CI and the image.
+`DEN_EDGE=http://localhost:8080 npm run dev` explicitly selects a local Edge. `DEN_ATLAS`, `DEN_REEL`, and
+`DEN_REMUX` select standalone service listeners; Vite strips the Atlas/Reel mount prefix only for those explicit
+standalone targets. Installs run with `--ignore-scripts` in CI and the image.
 
 The library's wire format lives in [den-spec](https://github.com/oxyc/den-spec), checked out at `spec/`
 (`git submodule update --init`). `web/src/lib/wire.ts` implements it and its tests load den-spec's vectors,
