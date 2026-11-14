@@ -33,6 +33,28 @@ if (process.platform === "win32") {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = resolve(root, "web");
+
+/** `NAME=value` lines; blank lines and `#` comments are skipped. Values are taken as written, unquoted. */
+function readEnvFile(file) {
+  return Object.fromEntries(
+    readFileSync(file, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.includes("=") && !line.startsWith("#"))
+      .map((line) => [
+        line.slice(0, line.indexOf("=")),
+        line.slice(line.indexOf("=") + 1),
+      ]),
+  );
+}
+
+// Optional provider keys and other settings kept between runs (gitignored). The shell's own environment wins.
+const localSettings = resolve(root, ".dev", "env");
+if (existsSync(localSettings)) {
+  for (const [name, value] of Object.entries(readEnvFile(localSettings))) {
+    process.env[name] ??= value;
+  }
+}
 const args = new Set(process.argv.slice(2));
 const allowed = new Set([
   "--check",
@@ -240,15 +262,7 @@ function hearthSecrets(file) {
     );
     writeFileSync(file, `${lines.join("\n")}\n`, { mode: 0o600 });
   }
-  return Object.fromEntries(
-    readFileSync(file, "utf8")
-      .split("\n")
-      .filter((line) => line.includes("="))
-      .map((line) => [
-        line.slice(0, line.indexOf("=")),
-        line.slice(line.indexOf("=") + 1),
-      ]),
-  );
+  return readEnvFile(file);
 }
 
 let hearth;
@@ -274,38 +288,51 @@ if (withHearth) {
     `http://localhost:${webPort}`,
     gateway,
   );
+  // Reel finds trailers with a TMDB key: the household's, unless one is given to Reel alone. It reaches the container
+  // by name from docker's own environment, so the key never appears on a command line.
+  const reelTmdbKey = process.env.REEL_TMDB_KEY ?? process.env.TMDB_KEY;
   console.log(`Starting local Hearth on http://127.0.0.1:${hearthPort}…`);
   // As den-hearth's selfhost/compose.yaml runs it: non-root, read-only, no capabilities, a named cache volume.
-  start("docker", [
-    "run",
-    "--rm",
-    "--name",
-    name,
-    "--platform",
-    hearthPlatform,
-    "--publish",
-    `127.0.0.1:${hearthPort}:${HEARTH_CONTAINER_PORT}`,
-    "--env-file",
-    secretsFile,
-    ...Object.entries(environment).flatMap(([key, value]) => [
-      "--env",
-      `${key}=${value}`,
-    ]),
-    "--user",
-    "65532:65532",
-    "--read-only",
-    "--cap-drop",
-    "ALL",
-    "--security-opt",
-    "no-new-privileges:true",
-    "--tmpfs",
-    "/tmp:size=256m,mode=1777",
-    "--tmpfs",
-    "/home/nonroot:size=64m,mode=0700,uid=65532,gid=65532",
-    "--volume",
-    "den-dev-hearth-cache:/cache",
-    hearthImage,
-  ]);
+  start(
+    "docker",
+    [
+      "run",
+      "--rm",
+      "--name",
+      name,
+      "--platform",
+      hearthPlatform,
+      "--publish",
+      `127.0.0.1:${hearthPort}:${HEARTH_CONTAINER_PORT}`,
+      "--env-file",
+      secretsFile,
+      ...Object.entries(environment).flatMap(([key, value]) => [
+        "--env",
+        `${key}=${value}`,
+      ]),
+      ...(reelTmdbKey ? ["--env", "REEL_TMDB_KEY"] : []),
+      "--user",
+      "65532:65532",
+      "--read-only",
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges:true",
+      "--tmpfs",
+      "/tmp:size=256m,mode=1777",
+      "--tmpfs",
+      "/home/nonroot:size=64m,mode=0700,uid=65532,gid=65532",
+      "--volume",
+      "den-dev-hearth-cache:/cache",
+      hearthImage,
+    ],
+    {
+      env: {
+        ...process.env,
+        ...(reelTmdbKey ? { REEL_TMDB_KEY: reelTmdbKey } : {}),
+      },
+    },
+  );
   hearth = {
     origin: `http://127.0.0.1:${hearthPort}`,
     edgeSecret: secrets.REMUX_EDGE_SECRET,

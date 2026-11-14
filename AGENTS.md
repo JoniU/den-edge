@@ -13,6 +13,9 @@
   container wired to it (relay, playback, shared secret, origins), with secrets kept in `.dev/hearth.env`. The
   launcher runs `NEW_LIBRARIES=open` until the first library exists, then restarts Edge as `members`, which guest
   invites and the member Den configure flow need; an explicit `NEW_LIBRARIES` is kept. Never restore private `192.168.*` defaults.
+- Optional provider keys for local mode (`TMDB_KEY`, `OMDB_KEY`, `DOESTHEDOGDIE_KEY`, `SIMKL_CLIENT_ID`) live in the
+  gitignored `.dev/env`, which the launcher reads on every run; `TMDB_KEY` also reaches Hearth's Reel unless
+  `REEL_TMDB_KEY` is set. Never write a key into a tracked file, a log or a command line.
 - macOS and Linux only; Windows is untested and unsupported (WSL).
 - Every Playwright/E2E server must retain `DEN_E2E=1`; real-service overrides are forbidden there. A service proxy
   carries Edge membership, grant, token, cookie and authorization headers only to the Edge that issued them: strip

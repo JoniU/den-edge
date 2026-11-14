@@ -50,6 +50,23 @@ start over. Add TorBox at <http://localhost:5173/den/configure> and install the 
 mode is on `localhost`, so a Chromecast cannot play it. Apple Silicon runs the image under emulation; the first start
 takes a minute.
 
+#### Keys worth adding in local mode
+
+Default mode uses the public stack's keys. A local Edge has none, so without keys the app works but shows less. All
+are free, and each is optional:
+
+| Key | Where to get it | What it adds |
+|---|---|---|
+| `TMDB_KEY` | themoviedb.org → Settings → API (the v3 "API Key") | title details, artwork and cast through `/tmdb/`; with `--hearth`, also Reel's trailers. Worth having first |
+| `OMDB_KEY` | omdbapi.com → API Key (free, 1,000 a day) | IMDb, Rotten Tomatoes and Metacritic ratings |
+| `DOESTHEDOGDIE_KEY` | a doesthedogdie.com account's API key (see doesthedogdie.com/api) | content warnings |
+| `SIMKL_CLIENT_ID` | the client id of an app registered with Simkl | Simkl sign-in |
+
+Put them in `.dev/env`, one `NAME=value` per line. The launcher reads it on every run, the directory is gitignored,
+and a variable set in your shell wins. To give Reel a different TMDB key from Edge, set `REEL_TMDB_KEY`. Streams need
+no key here: TorBox goes into Hearth's configure page, sealed into the addon link. The configuration table below
+lists each setting in full.
+
 `./scripts/dev.mjs --check` (with either flag, too) installs and builds everything without starting it. Standalone
 services can be selected with `DEN_ATLAS`, `DEN_REEL` and `DEN_REMUX`, and the ports with `DEN_DEV_WEB_PORT`,
 `DEN_DEV_EDGE_PORT` and `DEN_DEV_HEARTH_PORT` (the production Cast sender trusts only port 5173).
@@ -227,6 +244,12 @@ a configured public name into the LAN fallback. Malformed or duplicate Host fiel
 | `CAST_APP_ID` | unset | Cast application id the sender launches, eight hex digits: Den's own receiver (`<CAST_ORIGIN>/receiver.html`, `5718B443`), which reports what the TV plays so the viewer is not asked which Chromecast it is. Unset launches Google's Default Media Receiver; one browser can opt in with `?cast-receiver=den` (`=default` undoes it) |
 | `DEN_PLAYBACK_ENABLED` | off | exposes combined-Den playback and guest-owned Den installs. An enabled playback call is bounded, uncached and sent to Hearth with trusted Edge headers; public callers must be household members or hold the matching live guest grant. `OPTIONS /den/{config}/playback` is the live Web capability probe (`204`, `Allow: POST`); while off the new surface is concealed as `404` |
 | `SEGMENTS_KEY` | unset | den-remux's key for asking it to detect an episode's intro and credits (`X-Den-Segments-Key`). `/skipdb/<tt>/<s>/<e>` falls back to remux's `/remux/segments` (through the `/remux` relay) when SkipDB has nothing; set, it also asks remux to scan an episode remux does not know, at most once per episode per 10 minutes. Unset, detected segments are still read but no scan is requested |
+| `TMDB_KEY` | unset | the household's TMDB API key (v3, sent as `api_key`), lent through `/tmdb/` to devices that have none of their own; answers are kept in `<DATA_DIR>/tmdb` and shared by every device. Unset turns `/tmdb/` off. A secret |
+| `TMDB_DAILY_MAX` | unset (no ceiling) | questions the household key may send TMDB in a UTC day |
+| `OMDB_KEY` | unset | the household's OMDb key, for IMDb, Rotten Tomatoes and Metacritic ratings (`/ratings/imdb/<tt>`), asked only for a member of a library here; everyone else gets what is kept. A free key allows 1,000 questions a day. A secret |
+| `OMDB_DAILY_MAX` | unset | questions the household OMDb key may send in a UTC day; it also rests until UTC midnight when OMDb says the limit is reached |
+| `DOESTHEDOGDIE_KEY` | unset | the household's doesthedogdie key, for content warnings (`/warnings/imdb/<tt>`), asked only for a member; everyone else gets what is kept. The free tier allows 30 questions a minute and 5,000 a month. A secret |
+| `SIMKL_CLIENT_ID` | unset | the Simkl app's public client id, for Simkl sign-in in the browser (sent in `/config`); unset, Den Web offers no Simkl |
 | `TRUSTED_PROXIES` | unset | proxies whose report of the visitor's address counts (comma-separated IPs) — the host running `tailscale serve`, `cloudflared`. Behind one, the per-address limits read the last `X-Forwarded-For` entry, and `CF-Connecting-IP` first from an entry written `cf:<ip>` — `cloudflared`'s, since Cloudflare sets that header, while `tailscale serve` is assumed to pass on whatever a peer wrote in it (not measured). The two are told apart by the address they reach den-edge from, so `cloudflared` and `tailscale serve` must connect from different addresses: on one address, the `cf:` entry's trust covers both; from anyone else those headers are ignored. Unset, every visitor through a proxy shares its limit |
 | `LOG_REQUESTS` | off | one line per request: `<METHOD> <route> <status> <ms>ms` — a fixed route label, never a key |
 | `LOG_IDENTITY` | on | whether a playback report (`/playback/outcome`, `/playback/cast`, `/playback/startup`) logs what was played — the TMDB id and media kind, the release name and size, the chosen audio and subtitle tracks — joinable to the session by the request id den-edge logs anyway. `0` or `false` drops those fields; every other field (event, outcome, reason, durations, rid) is logged either way. The box's journal is RAM-only and reaches only its owner |
