@@ -2267,6 +2267,7 @@ impl CastStage {
 #[serde(rename_all = "snake_case")]
 enum CastFailReason {
     ReceiverNotLoaded,
+    ReceiverUnavailable,
     MediaError,
     LanUnreachable,
     SessionError,
@@ -2279,6 +2280,7 @@ impl CastFailReason {
     fn as_str(&self) -> &'static str {
         match self {
             CastFailReason::ReceiverNotLoaded => "receiver_not_loaded",
+            CastFailReason::ReceiverUnavailable => "receiver_unavailable",
             CastFailReason::MediaError => "media_error",
             CastFailReason::LanUnreachable => "lan_unreachable",
             CastFailReason::SessionError => "session_error",
@@ -2298,6 +2300,9 @@ struct CastReport {
     failed: bool,
     fail_reason: Option<CastFailReason>,
     session_secs: Option<u32>,
+    delivery: Option<Delivery>,
+    availability_changes: Option<u16>,
+    target_changes: Option<u16>,
     /// What Den's Cast receiver said of itself and its TV, and its player's last error codes; none of it for Google's
     /// receiver, which says nothing.
     #[serde(flatten)]
@@ -2424,6 +2429,15 @@ impl CastReport {
         }
         if let Some(s) = self.session_secs {
             parts.push(format!("sessionSecs:{}", s.min(MAX_SECS)));
+        }
+        if let Some(delivery) = &self.delivery {
+            parts.push(format!("delivery:{}", delivery.as_str()));
+        }
+        if let Some(changes) = self.availability_changes {
+            parts.push(format!("availabilityChanges:{}", changes.min(1_000)));
+        }
+        if let Some(changes) = self.target_changes {
+            parts.push(format!("targetChanges:{}", changes.min(1_000)));
         }
         parts.extend(self.receiver.parts());
         parts.extend(self.identity.parts(log_identity));
@@ -3220,12 +3234,27 @@ mod tests {
     fn a_failed_cast_attempt_names_its_reason_and_duration() {
         let report: CastReport = serde_json::from_value(serde_json::json!({
             "kind": "airplay", "reached": "attempted", "failed": true,
-            "failReason": "lan_unreachable", "sessionSecs": 42,
+            "failReason": "receiver_unavailable", "sessionSecs": 42, "delivery": "direct",
+            "availabilityChanges": 7, "targetChanges": 2,
         }))
         .unwrap();
         assert_eq!(
             report.tag(true),
-            "kind:airplay,reached:attempted,failed:1,failReason:lan_unreachable,sessionSecs:42"
+            "kind:airplay,reached:attempted,failed:1,failReason:receiver_unavailable,sessionSecs:42,\
+             delivery:direct,availabilityChanges:7,targetChanges:2"
+        );
+    }
+
+    #[test]
+    fn airplay_event_counts_are_bounded_before_logging() {
+        let report: CastReport = serde_json::from_value(serde_json::json!({
+            "kind": "airplay", "reached": "started",
+            "availabilityChanges": 65535, "targetChanges": 65535,
+        }))
+        .unwrap();
+        assert_eq!(
+            report.tag(false),
+            "kind:airplay,reached:started,availabilityChanges:1000,targetChanges:1000"
         );
     }
 
