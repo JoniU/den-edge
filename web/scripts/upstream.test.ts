@@ -1,6 +1,29 @@
+import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EDGE_AUTHORITY_HEADERS } from './upstream.ts';
 
-type Proxy = Record<string, { target: string }>;
+type ProxyEntry = {
+  target: string;
+  rewrite?: (path: string) => string;
+  configure?: (proxy: EventEmitter) => void;
+};
+type Proxy = Record<string, ProxyEntry>;
+
+function strippedBy(entry: ProxyEntry): string[] {
+  const proxy = new EventEmitter();
+  const removed: string[] = [];
+  entry.configure?.(proxy);
+  proxy.emit('proxyReq', { removeHeader: (name: string) => removed.push(name) });
+  return removed;
+}
+
+function headersSetBy(entry: ProxyEntry): Record<string, string> {
+  const proxy = new EventEmitter();
+  const headers: Record<string, string> = {};
+  entry.configure?.(proxy);
+  proxy.emit('proxyReq', { setHeader: (name: string, value: string) => (headers[name] = value) });
+  return headers;
+}
 
 async function proxy(tv: boolean): Promise<Proxy> {
   vi.resetModules();
@@ -33,10 +56,66 @@ describe.each([false, true])('the dev server proxy under e2e (TV: %s)', (tv) => 
     await expect(proxy(tv)).rejects.toThrow(/not loopback/);
   });
 
-  it('still points a developer at the homelab outside e2e', async () => {
+  it('uses the public guest stack without reaching the private homelab', async () => {
     vi.stubEnv('DEN_E2E', '');
-    const targets = Object.values(await proxy(tv)).map((entry) => entry.target);
-    expect(targets.some((target) => target.startsWith('http://192.168.'))).toBe(true);
+    const configured = await proxy(tv);
+    const targets = Object.values(configured).map((entry) => entry.target);
+    expect(
+      targets.some((target) =>
+        /^https?:\/\/(?:192\.168\.|10\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(target),
+      ),
+    ).toBe(false);
+    expect(configured['/health'].target).toBe('https://d.oxy.fi');
+    expect(headersSetBy(configured['/health'])).toEqual({ host: 'd.oxy.fi' });
+    expect(configured['/assistant'].target).toBe('https://d.oxy.fi');
+    expect(configured['/performance'].target).toBe('https://d.oxy.fi');
+    expect(configured['/atlas'].target).toBe('https://d.oxy.fi');
+    expect(configured['/atlas'].rewrite?.('/atlas/manifest.json')).toBe('/atlas/manifest.json');
+    expect(configured['/reel'].target).toBe('https://d.oxy.fi');
+    expect(configured['/reel'].rewrite?.('/reel/meta/movie/1.json')).toBe(
+      '/reel/meta/movie/1.json',
+    );
+    expect(configured['/remux'].target).toBe('https://d.oxy.fi');
+    expect(strippedBy(configured['/atlas'])).toEqual([]);
+    expect(strippedBy(configured['/reel'])).toEqual([]);
+    expect(strippedBy(configured['/remux'])).toEqual([]);
+  });
+
+  it('strips /atlas only for an explicitly selected standalone Atlas', async () => {
+    vi.stubEnv('DEN_E2E', '');
+    vi.stubEnv('DEN_ATLAS', 'http://127.0.0.1:8081');
+    const configured = await proxy(tv);
+    expect(configured['/atlas'].target).toBe('http://127.0.0.1:8081');
+    expect(configured['/atlas'].rewrite?.('/atlas/manifest.json')).toBe('/manifest.json');
+    expect(strippedBy(configured['/atlas'])).toEqual(EDGE_AUTHORITY_HEADERS);
+  });
+
+  it('strips /reel only for an explicitly selected standalone Reel', async () => {
+    vi.stubEnv('DEN_E2E', '');
+    vi.stubEnv('DEN_REEL', 'http://127.0.0.1:8092');
+    const configured = await proxy(tv);
+    expect(configured['/reel'].target).toBe('http://127.0.0.1:8092');
+    expect(configured['/reel'].rewrite?.('/reel/meta/movie/1.json')).toBe('/meta/movie/1.json');
+    expect(strippedBy(configured['/reel'])).toEqual(EDGE_AUTHORITY_HEADERS);
+  });
+
+  it('does not lend Edge authority to an explicitly selected standalone Remux', async () => {
+    vi.stubEnv('DEN_E2E', '');
+    vi.stubEnv('DEN_REMUX', 'http://127.0.0.1:8095');
+    const configured = await proxy(tv);
+    expect(strippedBy(configured['/remux'])).toEqual(EDGE_AUTHORITY_HEADERS);
+  });
+
+  it("keeps a local Edge's credentials off the public stack's service relays", async () => {
+    vi.stubEnv('DEN_E2E', '');
+    vi.stubEnv('DEN_EDGE', 'http://127.0.0.1:18080');
+    const configured = await proxy(tv);
+    expect(configured['/lib'].target).toBe('http://127.0.0.1:18080');
+    expect(strippedBy(configured['/lib'])).toEqual([]);
+    for (const path of ['/atlas', '/reel', '/remux']) {
+      expect(configured[path].target).toBe('https://d.oxy.fi');
+      expect(strippedBy(configured[path])).toEqual(EDGE_AUTHORITY_HEADERS);
+    }
   });
 });
 

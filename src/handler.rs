@@ -810,10 +810,9 @@ fn exclusive_operation_path(path: &str) -> bool {
     })
 }
 
-/// Which half of den-edge a request's `Host` names (oxyc/den#15). The web app's public name sits behind
-/// Cloudflare Access and the device API's bypasses it, so each serves only its own half: without this the
-/// bypassed name would hand out the web app past Access, and the split would be decorative. Any other name —
-/// the LAN address, the tailnet's — serves both, as it always has.
+/// Which half of den-edge a request's `Host` names (oxyc/den#15). The web app's public name and the device API's
+/// each serve only their own half, so neither public name answers the other's routes; route authorization protects
+/// the operations on both. Any other name — the LAN address, the tailnet's — serves both, as it always has.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Face {
     Web,
@@ -847,7 +846,7 @@ impl Face {
     /// `/health`, `/version`, `/routes` and `/config` answer on every name; the device routes and `/metrics`
     /// only where devices call; the web app's files only where browsers load it. The web app is a device too:
     /// the routes it calls on its own origin — pairing, the library log, sending to the TV — answer on its name
-    /// as well, where they sit behind Access. What only a TV does (unlinking) stays off it.
+    /// as well. What only a TV does (unlinking) stays off it.
     ///
     /// That includes draining an inbox: a browser that hosts a pairing drains it to learn the joiner's name. Off
     /// this name every drain was a 404, so Settings › Connections never learned the name and retried each unnamed
@@ -2157,7 +2156,7 @@ pub mod tests {
         assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(unchanged.headers()[header::ETAG], "\"v1\"");
         assert!(body_text(unchanged).await.is_empty());
-        // Never on the device API's name, which bypasses Access; and only what an addon's JSON takes.
+        // Never on the device API's name, which serves only the device routes; and only what an addon's JSON takes.
         let on_api = h.send("GET", "/scout/cfg/manifest.json", None, &[("host", "d-api.oxy.fi")]).await;
         assert_eq!(on_api.status(), StatusCode::NOT_FOUND);
         let put = h.send("PUT", "/scout/cfg/manifest.json", None, &[("host", "d.oxy.fi")]).await;

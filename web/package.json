@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "The Den web app: the Apple TV app's screens in a browser, served by den-edge.",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "vite",
     "dev:tv:webos": "DEN_TV_PLATFORM=webos vite --config vite.tv.config.ts",

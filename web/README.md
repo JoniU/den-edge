@@ -7,7 +7,15 @@ npm ci --ignore-scripts
 npm run dev
 ```
 
-Vite proxies the API to the homelab den-edge. Set `DEN_EDGE=http://localhost:8080` to use a local instance.
+Vite uses the public `d.oxy.fi` stack by default. A contributor can redeem a guest invite and exercise the real
+guest-authorized Atlas, Hearth, TorBox and Remux paths without LAN access. From the repository root,
+`./scripts/dev.mjs` installs dependencies when needed and starts Vite; `./scripts/dev.mjs --local-edge` also starts
+the Rust backend with isolated state in `.dev/data`, which persists until explicitly removed. E2E configurations
+always replace these defaults with dead loopback
+targets and reject real-service overrides. The default uses live guest data and resources, so never use it for
+fixtures or automation. Because browser storage is origin-local, paste a fresh invite into localhost Settings →
+Sharing, or replace only an existing guest's “Use Den on your phone” link origin with `http://localhost:5173/`
+while preserving its fragment.
 
 ## Formatting and checks
 

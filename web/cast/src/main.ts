@@ -19,6 +19,7 @@ import {
   signedMedia,
   type PlayingMedia,
 } from './media';
+import { DEFAULT_PARENT_ORIGINS, parentOrigins } from './parentOrigins';
 import { keepProfile, keptProfile } from './profile';
 import {
   DEN_RECEIVER_APP_ID,
@@ -388,12 +389,7 @@ function translateStatus(source: string): string {
         : source;
   return text(source);
 }
-const parents = new Set(
-  (import.meta.env.VITE_DEN_PARENT_ORIGINS ?? 'https://d.oxy.fi')
-    .split(/[\s,]+/)
-    .map((origin: string) => origin.trim())
-    .filter(Boolean),
-);
+const parents = parentOrigins(import.meta.env.VITE_DEN_PARENT_ORIGINS ?? DEFAULT_PARENT_ORIGINS);
 let parentOrigin: string | undefined;
 let current: LoadMessage | undefined;
 let hls: Hls | undefined;

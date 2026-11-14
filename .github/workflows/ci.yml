@@ -579,6 +579,7 @@ jobs:
             *.args.DEN_VERSION=${{ steps.source.outputs.version }}
             *.args.GIT_REVISION=${{ github.sha }}
             *.args.PREVIOUS_IMAGE=scratch
+            *.args.DEN_PARENT_ORIGINS_EXTRA=${{ vars.DEN_PARENT_ORIGINS_EXTRA }}
             *.output=type=cacheonly
 
   # Main builds and scans immutable candidates while the test jobs run. They are intentionally unsigned and never
@@ -632,6 +633,7 @@ jobs:
             *.args.DEN_VERSION=${{ steps.source.outputs.version }}
             *.args.GIT_REVISION=${{ github.sha }}
             *.args.PREVIOUS_IMAGE=${{ steps.previous.outputs.image }}
+            *.args.DEN_PARENT_ORIGINS_EXTRA=${{ vars.DEN_PARENT_ORIGINS_EXTRA }}
             edge.tags=${{ env.IMAGE }}:candidate-${{ github.sha }}
             edge.cache-to=type=gha,mode=max,scope=release-images
       - name: Record candidate digest

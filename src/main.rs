@@ -122,11 +122,11 @@ pub struct AppState {
     pub trusted_proxies: Vec<std::net::IpAddr>,
     /// The ones among them whose `CF-Connecting-IP` counts: entries written `cf:<ip>`, for `cloudflared`.
     pub cloudflare_proxies: Vec<std::net::IpAddr>,
-    /// The web app's public names (env `WEB_HOSTS`, comma-separated). They sit behind Cloudflare Access, and a
-    /// request for one gets the web app and none of the device API (`handler::Face`, oxyc/den#15).
+    /// The web app's public names (env `WEB_HOSTS`, comma-separated). A request for one gets the web app and none
+    /// of the device API (`handler::Face`, oxyc/den#15); route authorization, not Access, protects its operations.
     pub web_hosts: Vec<String>,
-    /// The device API's public names (env `API_HOSTS`). They bypass Access, so a request for one gets the
-    /// device routes and never the web app — which would otherwise be handed out past Access.
+    /// The device API's public names (env `API_HOSTS`). A request for one gets the device routes and never the
+    /// web app, so each public name serves only its own half (`handler::Face`).
     pub api_hosts: Vec<String>,
     /// Public names which serve the TV bundle (env `TV_WEB_HOSTS`), and every route the hosted bundle calls, so
     /// its requests stay on its own origin and pay no CORS preflight.
@@ -680,6 +680,14 @@ async fn main() {
     let app = axum::Router::new().fallback(handler::handle).with_state(Arc::clone(&state));
 
     let port: u16 = env_number("PORT").unwrap_or(8080);
+    let bind_addr = env_opt("BIND_ADDR")
+        .map(|value| {
+            parse_bind_addr("BIND_ADDR", &value).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            })
+        })
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
     // `PORT` is always served: it is the address other containers reach this one on. A socket handed over by the
     // supervisor is served as well, and is the one that survives this process being replaced.
     let mut listeners = inherited_listeners().unwrap_or_else(|e| {
@@ -692,8 +700,8 @@ async fn main() {
             l.local_addr().map_or("?".to_owned(), |a| a.to_string())
         );
     }
-    listeners.push(tokio::net::TcpListener::bind(("0.0.0.0", port)).await.unwrap_or_else(|e| {
-        eprintln!("bind :{port} failed: {e}");
+    listeners.push(tokio::net::TcpListener::bind((bind_addr, port)).await.unwrap_or_else(|e| {
+        eprintln!("bind {bind_addr}:{port} failed: {e}");
         std::process::exit(1);
     }));
     let shutdown = stopping(Arc::clone(&state), shutdown_signal());
@@ -975,6 +983,10 @@ fn env_number<T: std::str::FromStr>(name: &str) -> Option<T> {
 
 fn parse_number<T: std::str::FromStr>(name: &str, value: &str) -> Result<T, String> {
     value.trim().parse().map_err(|_| format!("{name} is {value:?}: expected a whole number"))
+}
+
+fn parse_bind_addr(name: &str, value: &str) -> Result<std::net::IpAddr, String> {
+    value.trim().parse().map_err(|_| format!("{name} is {value:?}: expected an IP address"))
 }
 
 /// How serving ended. A drain that ran out of time is designed and exits 0, like a clean one.
@@ -1565,6 +1577,16 @@ mod tests {
             Err(r#"TMDB_DAILY_MAX is "5k": expected a whole number"#.to_owned())
         );
         assert!(parse_number::<u16>("PORT", "80800").is_err(), "out of range");
+    }
+
+    #[test]
+    fn a_bind_address_is_an_ip_not_an_ambiguous_host_name() {
+        assert_eq!(parse_bind_addr("BIND_ADDR", " 127.0.0.1 "), Ok("127.0.0.1".parse().unwrap()));
+        assert_eq!(parse_bind_addr("BIND_ADDR", "::1"), Ok("::1".parse().unwrap()));
+        assert_eq!(
+            parse_bind_addr("BIND_ADDR", "localhost"),
+            Err(r#"BIND_ADDR is "localhost": expected an IP address"#.to_owned())
+        );
     }
 
     #[test]

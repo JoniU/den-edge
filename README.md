@@ -1,5 +1,84 @@
 # den-edge
 
+## Contributor quickstart
+
+On macOS or Linux (Windows is unsupported; use WSL), install Node 24+, npm and Git, then run:
+
+```sh
+./scripts/dev.mjs
+```
+
+This installs the pinned Web dependencies when needed and starts the local Vite UI at
+<http://localhost:5173> against the public `d.oxy.fi` stack. Redeem a guest invite to use the real guest library,
+your personal TorBox-backed Den configuration, and centralized Remux subject to the grant lifecycle and server
+limits. The grant must share the combined `den` addon; a legacy Scout-only share does not enable the full flow. No
+LAN or tailnet access is needed.
+
+Chromecast testing is supported from the default contributor URL in desktop Chrome: the centralized HTTPS Cast
+sender explicitly allows the exact `http://localhost:5173` parent origin, and playback remains on the
+guest-authorized centralized path. The browser and Chromecast still need to be on the same local network. For
+Android Chrome, connect the phone over ADB and run `adb reverse tcp:5173 tcp:5173` before opening that same URL;
+without the reverse, phone-localhost names the phone itself. A custom development port is intentionally not trusted
+by the production Cast sender.
+
+Guest credentials are browser-origin-local. For a new guest, paste the invite code or full production link into
+**Settings → Sharing → Enter invite code** on `localhost`; opening a `d.oxy.fi` invite normally redeems it only on
+the production origin. If the friend already redeemed it there, use production **Settings → Use Den on your phone**,
+copy its link, and replace only the `https://d.oxy.fi/` origin with `http://localhost:5173/` while preserving the
+entire `#phone=...&code=...` fragment (the grant needs a free device slot).
+
+Default development uses live guest data and centralized resources. Do not use it for fixtures, automation, or
+destructive experiments; those belong in E2E isolation or local Edge mode.
+
+### Local mode: no invite needed
+
+```sh
+./scripts/dev.mjs --local-edge            # your own Edge (needs Rust)
+./scripts/dev.mjs --hearth                # … plus a local Hearth for streams and playback (needs Docker)
+```
+
+`--local-edge` builds and starts a loopback-only Edge with its own library in `.dev/data`, which persists between
+runs; delete the directory when you want to start over. It shares nothing with a guest account and sends nothing to
+production but read-only Atlas catalog requests, without your local credentials. Edge runs in `open` mode until the
+browser has created its first library, then restarts itself in `members` mode, which guest invites and the member
+Den configure flow need; set `NEW_LIBRARIES` yourself to keep one mode.
+
+`--hearth` also runs the published `ghcr.io/oxyc/den-hearth` image as den-hearth's self-host setup does, and wires
+it in: Edge relays `/den` to it and offers its playback, Reel and Remux media go to it, and Edge and Hearth share a
+generated secret. Its secrets are kept in `.dev/hearth.env` so the addon you install keeps working; delete the file to
+start over. Add TorBox at <http://localhost:5173/den/configure> and install the addon it gives you. Media in this
+mode is on `localhost`, so a Chromecast cannot play it. Apple Silicon runs the image under emulation; the first start
+takes a minute.
+
+#### Keys worth adding in local mode
+
+Default mode uses the public stack's keys. A local Edge has none, so without keys the app works but shows less. All
+are free, and each is optional:
+
+| Key | Where to get it | What it adds |
+|---|---|---|
+| `TMDB_KEY` | themoviedb.org → Settings → API (the v3 "API Key") | title details, artwork and cast through `/tmdb/`; with `--hearth`, also Reel's trailers. Worth having first |
+| `OMDB_KEY` | omdbapi.com → API Key (free, 1,000 a day) | IMDb, Rotten Tomatoes and Metacritic ratings |
+| `DOESTHEDOGDIE_KEY` | a doesthedogdie.com account's API key (see doesthedogdie.com/api) | content warnings |
+| `SIMKL_CLIENT_ID` | the client id of an app registered with Simkl | Simkl sign-in |
+
+Put them in `.dev/env`, one `NAME=value` per line. The launcher reads it on every run, the directory is gitignored,
+and a variable set in your shell wins. To give Reel a different TMDB key from Edge, set `REEL_TMDB_KEY`. Streams need
+no key here: TorBox goes into Hearth's configure page, sealed into the addon link. The configuration table below
+lists each setting in full.
+
+`./scripts/dev.mjs --check` (with either flag, too) installs and builds everything without starting it. Standalone
+services can be selected with `DEN_ATLAS`, `DEN_REEL` and `DEN_REMUX`, and the ports with `DEN_DEV_WEB_PORT`,
+`DEN_DEV_EDGE_PORT` and `DEN_DEV_HEARTH_PORT` (the production Cast sender trusts only port 5173).
+
+| Capability | Default (guest) mode | `--local-edge` | `--hearth` |
+|---|---|---|---|
+| Edge/library | Centralized guest account | Local, isolated, persistent | Local, isolated, persistent |
+| Atlas | Centralized public relay | Public relay | Public relay |
+| Hearth/Scout | Centralized, grant-authorized | — | Local container, your TorBox |
+| Reel/Remux | Centralized when the grant allows it | — | Local container |
+| Chromecast | Centralized sender and playback from Chrome | — | — (media on `localhost`) |
+
 Den's sync relay, on the homelab. It relays pairings between an Apple TV and another device, carries a paired
 device's sealed messages to the TV, keeps the library's current encrypted state and the TV's encrypted backup, and
 holds the plugin list and settings older links shared. It also serves the Den web app.
@@ -133,6 +212,7 @@ a configured public name into the LAN fallback. Malformed or duplicate Host fiel
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8080` | the port to listen on |
+| `BIND_ADDR` | `0.0.0.0` | IP address to bind. The contributor launcher forces `127.0.0.1` in local Edge mode |
 | `DATA_DIR` | `data` (the image sets `/data`) | where the state lives |
 | `STORE_CAP_BYTES` | `1073741824` (1 GiB) | the most the state may take on disk; the inbox a quarter of it |
 | `METRICS_TOKEN` | unset | bearer token for `/metrics`; unset turns it off |
@@ -164,6 +244,12 @@ a configured public name into the LAN fallback. Malformed or duplicate Host fiel
 | `CAST_APP_ID` | unset | Cast application id the sender launches, eight hex digits: Den's own receiver (`<CAST_ORIGIN>/receiver.html`, `5718B443`), which reports what the TV plays so the viewer is not asked which Chromecast it is. Unset launches Google's Default Media Receiver; one browser can opt in with `?cast-receiver=den` (`=default` undoes it) |
 | `DEN_PLAYBACK_ENABLED` | off | exposes combined-Den playback and guest-owned Den installs. An enabled playback call is bounded, uncached and sent to Hearth with trusted Edge headers; public callers must be household members or hold the matching live guest grant. `OPTIONS /den/{config}/playback` is the live Web capability probe (`204`, `Allow: POST`); while off the new surface is concealed as `404` |
 | `SEGMENTS_KEY` | unset | den-remux's key for asking it to detect an episode's intro and credits (`X-Den-Segments-Key`). `/skipdb/<tt>/<s>/<e>` falls back to remux's `/remux/segments` (through the `/remux` relay) when SkipDB has nothing; set, it also asks remux to scan an episode remux does not know, at most once per episode per 10 minutes. Unset, detected segments are still read but no scan is requested |
+| `TMDB_KEY` | unset | the household's TMDB API key (v3, sent as `api_key`), lent through `/tmdb/` to devices that have none of their own; answers are kept in `<DATA_DIR>/tmdb` and shared by every device. Unset turns `/tmdb/` off. A secret |
+| `TMDB_DAILY_MAX` | unset (no ceiling) | questions the household key may send TMDB in a UTC day |
+| `OMDB_KEY` | unset | the household's OMDb key, for IMDb, Rotten Tomatoes and Metacritic ratings (`/ratings/imdb/<tt>`), asked only for a member of a library here; everyone else gets what is kept. A free key allows 1,000 questions a day. A secret |
+| `OMDB_DAILY_MAX` | unset | questions the household OMDb key may send in a UTC day; it also rests until UTC midnight when OMDb says the limit is reached |
+| `DOESTHEDOGDIE_KEY` | unset | the household's doesthedogdie key, for content warnings (`/warnings/imdb/<tt>`), asked only for a member; everyone else gets what is kept. The free tier allows 30 questions a minute and 5,000 a month. A secret |
+| `SIMKL_CLIENT_ID` | unset | the Simkl app's public client id, for Simkl sign-in in the browser (sent in `/config`); unset, Den Web offers no Simkl |
 | `TRUSTED_PROXIES` | unset | proxies whose report of the visitor's address counts (comma-separated IPs) — the host running `tailscale serve`, `cloudflared`. Behind one, the per-address limits read the last `X-Forwarded-For` entry, and `CF-Connecting-IP` first from an entry written `cf:<ip>` — `cloudflared`'s, since Cloudflare sets that header, while `tailscale serve` is assumed to pass on whatever a peer wrote in it (not measured). The two are told apart by the address they reach den-edge from, so `cloudflared` and `tailscale serve` must connect from different addresses: on one address, the `cf:` entry's trust covers both; from anyone else those headers are ignored. Unset, every visitor through a proxy shares its limit |
 | `LOG_REQUESTS` | off | one line per request: `<METHOD> <route> <status> <ms>ms` — a fixed route label, never a key |
 | `LOG_IDENTITY` | on | whether a playback report (`/playback/outcome`, `/playback/cast`, `/playback/startup`) logs what was played — the TMDB id and media kind, the release name and size, the chosen audio and subtitle tracks — joinable to the session by the request id den-edge logs anyway. `0` or `false` drops those fields; every other field (event, outcome, reason, durations, rid) is logged either way. The box's journal is RAM-only and reaches only its owner |
@@ -203,14 +289,15 @@ cached for a year. App routes must not reuse an API path (`/lib`, `/pair`, `/inb
 answers first.
 
 ```
-cd web && npm install && npm run dev    # Vite on :5173, proxying the API to the homelab den-edge
+cd web && npm ci --ignore-scripts && npm run dev    # Vite on :5173, using the public guest stack
 npm run lint && npm test && npm run build
 ```
 
 See [web development and CSS conventions](web/README.md) for formatting and lint commands.
 
-`DEN_EDGE=http://localhost:8080 npm run dev` proxies to a local den-edge instead. Installs run with
-`--ignore-scripts` in CI and the image.
+`DEN_EDGE=http://localhost:8080 npm run dev` explicitly selects a local Edge. `DEN_ATLAS`, `DEN_REEL`, and
+`DEN_REMUX` select standalone service listeners; Vite strips the Atlas/Reel mount prefix only for those explicit
+standalone targets. Installs run with `--ignore-scripts` in CI and the image.
 
 The library's wire format lives in [den-spec](https://github.com/oxyc/den-spec), checked out at `spec/`
 (`git submodule update --init`). `web/src/lib/wire.ts` implements it and its tests load den-spec's vectors,

@@ -74,11 +74,11 @@ impl Subtitles {
     }
 }
 
-/// Who may frame the page. The page is built with the same list (`VITE_DEN_PARENT_ORIGINS`) and answers only their
-/// messages.
+/// Who may frame the page, space-separated (read trimmed: an empty `DEN_PARENT_ORIGINS_EXTRA` leaves a trailing
+/// space). The page is built with the same list (`VITE_DEN_PARENT_ORIGINS`) and answers only their messages.
 const PARENT_ORIGINS: &str = match option_env!("DEN_PARENT_ORIGINS") {
     Some(value) => value,
-    None => "https://d.oxy.fi",
+    None => "https://d.oxy.fi http://localhost:5173",
 };
 
 /// A Cast application id as Google's console issues one (eight hex digits), uppercased; None for anything else.
@@ -223,7 +223,8 @@ async fn response(path: PathBuf, immutable: bool, app: Option<&str>) -> Response
     let csp = format!(
         "default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self'; \
          img-src 'self' https: data:; media-src https: blob:; connect-src https:; object-src 'none'; \
-         base-uri 'none'; form-action 'none'; frame-ancestors {PARENT_ORIGINS}"
+         base-uri 'none'; form-action 'none'; frame-ancestors {}",
+        PARENT_ORIGINS.trim()
     );
     // The receiver runs on the Chromecast, top-level and framed by nothing. Google's receiver framework comes from
     // gstatic and draws its player with inline styles, and the receiver fetches what the sender's LOAD names: the
@@ -267,8 +268,14 @@ mod tests {
         format!(
             "default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self'; \
              img-src 'self' https: data:; media-src https: blob:; connect-src https:; object-src 'none'; \
-             base-uri 'none'; form-action 'none'; frame-ancestors {PARENT_ORIGINS}"
+             base-uri 'none'; form-action 'none'; frame-ancestors {}",
+            PARENT_ORIGINS.trim()
         )
+    }
+
+    #[test]
+    fn the_default_contributor_origin_may_frame_the_cast_sender() {
+        assert!(PARENT_ORIGINS.split_ascii_whitespace().any(|origin| origin == "http://localhost:5173"));
     }
 
     /// A den-edge serving the web app on `d.oxy.fi` and the Cast page on `cast.example`.

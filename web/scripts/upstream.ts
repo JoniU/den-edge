@@ -7,6 +7,24 @@
 // must be loopback; anything else throws when the config loads.
 const DEAD_END = 'http://127.0.0.1:9';
 
+// These authorize Edge state and guest translation, never a standalone addon. A developer may point a Vite addon
+// override at a third-party or local service; do not lend that service a browser's Edge authority by accident.
+export const EDGE_AUTHORITY_HEADERS = [
+  'authorization',
+  'cookie',
+  'x-den-exclusive-attempt',
+  'x-den-grant',
+  'x-den-library-member',
+  'x-den-library-token',
+  'x-den-link',
+  'x-den-successor',
+  'x-den-successor-token',
+] as const;
+
+export function stripEdgeAuthority(request: { removeHeader(name: string): void }): void {
+  for (const header of EDGE_AUTHORITY_HEADERS) request.removeHeader(header);
+}
+
 export function upstream(variable: string, fallback: string): string {
   const given = process.env[variable];
   if (process.env.DEN_E2E !== '1') return given ?? fallback;
