@@ -19,7 +19,11 @@ function servedPolicy() {
   const source = readFileSync(join(web, '..', 'src', 'cast.rs'), 'utf8');
   const literal = /let csp = format!\(\s*"((?:[^"\\]|\\[\s\S])*)"/.exec(source)?.[1];
   if (!literal) throw new Error('no CSP literal in src/cast.rs');
-  return literal.replace(/\\\n\s*/g, '').replace('{PARENT_ORIGINS}', ORIGIN);
+  const policy = literal.replace(/\\\n\s*/g, '');
+  if (!/frame-ancestors \{(?:PARENT_ORIGINS)?\}/.test(policy)) {
+    throw new Error('no parent-origin placeholder in src/cast.rs CSP literal');
+  }
+  return policy.replace(/frame-ancestors \{(?:PARENT_ORIGINS)?\}/, `frame-ancestors ${ORIGIN}`);
 }
 
 /** Den's receiver page's policy, from its `RECEIVER_CSP` literal in `src/cast.rs`. */
