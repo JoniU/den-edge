@@ -447,7 +447,8 @@ export function playedSession(
  * - An estimate below the remembered link lowers it to the estimate, and a lowered link is held for LOWERED_LINK_MS
  *   only, after which a probe measures it again: a ratchet of bad sessions must not hold a recovered link down.
  * - An estimate at or above it, from a session that never stalled, raises it to RAISED_LINK_SHARE of the lowest of
- *   the last RECENT_ESTIMATES such estimates (kept beside the link as `recent`), so one fast session doesn't set it.
+ *   the last RECENT_ESTIMATES such estimates (kept beside the link as `recent`): the first clean session raises it
+ *   on its own, and after that one fast session can't lift it past a slower recent one.
  *   A raised link is a measurement from playback and stands as a probe's does, for LINK_MEMORY_MS.
  *
  * Nothing is changed where nothing was remembered (or at home), nor by evidence that doesn't speak for the link:
