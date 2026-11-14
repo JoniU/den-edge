@@ -307,5 +307,11 @@ if (process.argv.includes('--capture')) {
   // request, timer, polling or CSS. Splitting the synchronous target/availability state would add a chunk request at
   // the moment the system picker opens and cannot reduce the complete graph. Allow the next boundary with useful
   // cross-machine variance, retaining 185 bytes on this build.
-  if (coreTotalDelta > 100608) throw new Error('Browser total JS/CSS budget exceeded');
+  // A direct AirPlay target that stays connected but advances no media now falls back once to Den Remux after a
+  // bounded 12 s watch. It adds 230 gzip bytes to the complete graph on matched v0.271.222/head builds (826,213 ->
+  // 826,443), with the existing lazy Player chunk growing 251 bytes and startup moving five. The one timer
+  // exists only while an active, playing AirPlay target has a TorBox session and is cleared on progress, pause,
+  // disconnect, replacement and teardown. A separate lazy boundary would add a request during the handoff while the
+  // synchronous WebKit event and live video element are required. Allow 256 bytes, retaining 211 on this build.
+  if (coreTotalDelta > 100864) throw new Error('Browser total JS/CSS budget exceeded');
 }
