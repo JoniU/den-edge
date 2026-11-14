@@ -1,6 +1,7 @@
 import {
   downloadPollDelay,
   raceKey,
+  sourceAnswerComplete,
   type DownloadCoordinator,
   type DownloadStatus,
 } from './downloadCoordinator';
@@ -22,8 +23,8 @@ import { applyLog, contentWatched, emptyLibrary } from './library';
 import { projectDocument } from './libraryV4';
 import { syncPolicy } from './syncCore';
 import { ensureDeferredSyncPolicy } from './syncLoader';
-import { answerOf, rankable, type SourceAnswer, type TitleSource } from './titleSources';
-import type { ConfigValue, SettingsRow, Stamped, Stamp } from './wire';
+import { answerOf, rankable, type TitleSource } from './titleSources';
+import type { ConfigValue, SettingsRow, Stamped } from './wire';
 
 const CONCURRENCY = 4;
 /** How long a race decides on one resolve of the title's releases: its stages are hours apart. */
@@ -73,6 +74,7 @@ export class DownloadCoordinatorDriver {
   #held?: Held;
   #observed?: Observed;
   #running?: Promise<boolean>;
+  #current = () => true;
   /** The forced pass that follows the one in flight. */
   #again?: { options: DownloadDriveOptions; pass: Promise<boolean> };
   /** By row name: when a due search that got an incomplete answer may ask again. */
@@ -120,23 +122,19 @@ export class DownloadCoordinatorDriver {
 
   async #run(options: DownloadDriveOptions): Promise<boolean> {
     const now = options.now ?? this.queue.now();
-    const current = options.current ?? (() => true);
+    const current = (this.#current = options.current ?? (() => true));
     const downloads = this.queue
       .list()
       .filter((download) => !options.names || options.names.has(download.name));
-    await this.#refresh(downloads, now, options.force ?? false, current);
+    await this.#refresh(downloads, now, options.force ?? false);
     if (!current() || !downloads.length) return false;
     await ensureDeferredSyncPolicy();
-    if (!(await this.#holdLease(now, options.observedFor))) return false;
-    return this.#holderPass(now, current);
+    if (!(await this.#holdLease(now, options.observedFor)) || !current()) return false;
+    return this.#holderPass(now);
   }
 
-  async #refresh(
-    downloads: Download[],
-    now: number,
-    force: boolean,
-    current: () => boolean,
-  ): Promise<void> {
+  async #refresh(downloads: Download[], now: number, force: boolean): Promise<void> {
+    const current = this.#current;
     const polled = downloads.filter((download) => {
       const state = this.queue.status(download, now).state;
       if (
@@ -154,7 +152,7 @@ export class DownloadCoordinatorDriver {
       if (!current()) break;
       await Promise.all(
         polled.slice(index, index + CONCURRENCY).map(async (download) => {
-          await this.#pollAndRenew(download, current, now);
+          await this.#pollAndRenew(download, now);
           if (!current()) return;
           const said = JSON.stringify([
             this.queue.answers.get(download.name) ?? null,
@@ -175,7 +173,8 @@ export class DownloadCoordinatorDriver {
     if (current()) this.queue.changed();
   }
 
-  async #pollAndRenew(download: Download, current: () => boolean, now: number): Promise<void> {
+  async #pollAndRenew(download: Download, now: number): Promise<void> {
+    const current = this.#current;
     const answer = await this.queue.poll(download);
     if (!current()) return;
     for (const entry of download.race.entries) {
@@ -258,8 +257,8 @@ export class DownloadCoordinatorDriver {
     return holder === this.queue.device && Number(epoch) === mine.epoch;
   }
 
-  async #stamp(now: number): Promise<Stamp> {
-    return this.queue.stamp(now);
+  #active(now: number): boolean {
+    return this.#current() && this.#stillHeld(now);
   }
 
   async #write(
@@ -267,16 +266,17 @@ export class DownloadCoordinatorDriver {
     values: Record<string, Stamped<ConfigValue | null>>,
     now: number,
   ): Promise<boolean> {
-    if (!this.#stillHeld(now)) return false;
+    if (!this.#active(now)) return false;
     return this.queue.log.writeAt(withValues(download.row, values), download.seq);
   }
 
-  async #holderPass(now: number, current: () => boolean): Promise<boolean> {
-    let wrote = await this.#syncHearth(now, current);
+  async #holderPass(now: number): Promise<boolean> {
+    const current = this.#current;
+    let wrote = await this.#syncHearth(now);
     const states: Record<string, string> = {};
     const decided = this.queue.list();
     for (const download of decided) {
-      if (!current() || !this.#stillHeld(now)) break;
+      if (!this.#active(now)) break;
       const status = this.queue.status(download, now);
       if (status.state) states[download.name] = status.state;
       this.queue.clocks.set(download.name, status.clock);
@@ -295,8 +295,7 @@ export class DownloadCoordinatorDriver {
         // An entry whose add never landed (a relaunch, another device's ticket) is asked for again.
         const answer = this.queue.entryAnswers.get(raceKey(download.name, entry.identity));
         const url = answer?.state === 'not-queued' ? this.queue.entryUrl(download, entry) : null;
-        if (url && current() && this.#stillHeld(now))
-          await this.queue.addEntry(download.name, entry.identity, url);
+        if (url && this.#active(now)) await this.queue.addEntry(download.name, entry.identity, url);
       }
       if (
         status.state === 'starting' &&
@@ -304,7 +303,21 @@ export class DownloadCoordinatorDriver {
         download.resumeAt <= now
       ) {
         const url = this.queue.urlFor(download);
-        if (url && (await this.#write(download, await this.#resumed(now), now))) {
+        const at = url ? await this.queue.stamp(now) : undefined;
+        if (
+          url &&
+          at &&
+          current() &&
+          (await this.#write(
+            download,
+            {
+              queuedAt: { value: { int: now }, at },
+              progress: { value: clockValue({ lastProgress: 0, progressAt: now }), at },
+              resumeAt: { value: null, at },
+            },
+            now,
+          ))
+        ) {
           wrote = true;
           await this.queue.add(download.name, url);
         }
@@ -317,19 +330,21 @@ export class DownloadCoordinatorDriver {
       // A release the addon stopped listing won't arrive: move on, as for a stall. Before `renew`, which the lapsed
       // ticket that found it gone still carries.
       if (status.state === 'release_gone' && !download.race.entries.length) {
-        wrote = (await this.#fallBack(download, status, now)) || wrote;
+        wrote = (await this.#fallBack(download, now)) || wrote;
         continue;
       }
       if (status.renew) continue;
       // The race (§17 *Racing*): keep what finishes first, widen a race that isn't arriving, fall back after a day.
       const raced = await this.#race(download, status, now);
+      if (!current()) break;
       if (raced !== 'unchanged') {
         wrote = raced === 'written' || wrote;
         continue;
       }
       const values: Record<string, Stamped<ConfigValue | null>> = {};
       if (status.report || status.announce || status.write_progress || status.reannounce) {
-        const at = await this.#stamp(now);
+        const at = await this.queue.stamp(now);
+        if (!current()) break;
         if (status.report) values.reported = { value: { bool: true }, at };
         if (status.announce) values.announced = { value: { bool: true }, at };
         if (status.write_progress) values.progress = { value: clockValue(status.clock), at };
@@ -342,7 +357,7 @@ export class DownloadCoordinatorDriver {
       if (url) await this.queue.effects.cancel(url, true);
     }
 
-    if (current() && this.#stillHeld(now)) {
+    if (this.#active(now)) {
       // Only the downloaded titles' documents decide whether they were watched: a title's and its episode's season's.
       const log = this.queue.log;
       const names = new Set(
@@ -378,11 +393,9 @@ export class DownloadCoordinatorDriver {
       for (const name of pruned.remove) {
         const download = byName.get(name);
         if (!download || !this.#stillHeld(now)) continue;
-        wrote =
-          (await this.queue.log.writeAt(
-            removedRow(download.row, await this.#stamp(now)),
-            download.seq,
-          )) || wrote;
+        const at = await this.queue.stamp(now);
+        if (!current()) break;
+        wrote = (await this.queue.log.writeAt(removedRow(download.row, at), download.seq)) || wrote;
       }
     }
     if (wrote) this.queue.changed();
@@ -393,7 +406,8 @@ export class DownloadCoordinatorDriver {
    * The wanted list handed to Hearth, which searches on while no client is open, and what it started adopted. Sent when
    * it changed and otherwise every few minutes (an empty one once, to clear what Hearth holds).
    */
-  async #syncHearth(now: number, current: () => boolean): Promise<boolean> {
+  async #syncHearth(now: number): Promise<boolean> {
+    const current = this.#current;
     const send = this.queue.effects.wanted;
     if (!send) return false;
     const items = wantedItems(this.queue.list());
@@ -421,15 +435,9 @@ export class DownloadCoordinatorDriver {
    */
   async #adopt(download: Download, status: WantedStatus, now: number): Promise<boolean> {
     const { sources } = await this.queue.sourcesForTitle(download.title, true);
-    if (!this.#stillHeld(now) || !sources) return false;
+    if (!this.#active(now) || !sources) return false;
     const chosen = sources.find((source) => source.identity === status.identity);
-    if (!chosen) {
-      console.info(
-        `den: download ${download.content}: Hearth's start isn't listed here; searching on`,
-      );
-      return false;
-    }
-    console.info(`den: download ${download.content}: Hearth started ${chosen.label} meanwhile`);
+    if (!chosen) return false;
     return this.#start(
       download,
       chosen,
@@ -451,10 +459,9 @@ export class DownloadCoordinatorDriver {
    */
   async #retryExhausted(download: Download, attempt: number, now: number): Promise<boolean> {
     const { sources, answer } = await this.queue.sourcesForTitle(download.title, true);
-    if (!this.#stillHeld(now)) return false;
-    if (sources === null || !completeAnswer(answer)) {
+    if (!this.#active(now)) return false;
+    if (sources === null || !sourceAnswerComplete(answer)) {
       this.#unanswered.set(download.name, now + UNANSWERED_WAIT);
-      console.info(`den: download ${download.content}: search ${attempt + 1} got no full answer`);
       return false;
     }
     this.#unanswered.delete(download.name);
@@ -465,12 +472,9 @@ export class DownloadCoordinatorDriver {
     ]);
     const fresh = viable.filter((source) => !tried.has(source.identity));
     const chosen = this.queue.pick(fresh.length ? fresh : viable, download.title.originalLanguage);
-    const at = await this.#stamp(now);
-    const retries = { value: { int: attempt + 1 }, at };
     if (!chosen) {
-      console.info(
-        `den: download ${download.content}: search ${attempt + 1} found nothing to fetch (${sources.length} listed)`,
-      );
+      const at = await this.queue.stamp(now);
+      const retries = { value: { int: attempt + 1 }, at };
       return this.#write(
         download,
         {
@@ -481,11 +485,6 @@ export class DownloadCoordinatorDriver {
         now,
       );
     }
-    console.info(
-      `den: download ${download.content}: search ${attempt + 1} found ${chosen.label}${
-        chosen.cached ? ' (cached)' : ''
-      }`,
-    );
     return this.#start(
       download,
       chosen,
@@ -509,7 +508,7 @@ export class DownloadCoordinatorDriver {
     picked: { retries: number; tried: string[]; candidates: number; queuedAt: number },
     now: number,
   ): Promise<boolean> {
-    const at = await this.#stamp(now);
+    const at = await this.queue.stamp(now);
     const values: Record<string, Stamped<ConfigValue | null>> = {
       retries: { value: { int: picked.retries }, at },
       release: {
@@ -543,7 +542,7 @@ export class DownloadCoordinatorDriver {
     const kept = this.#raceLists.get(download.name);
     if (kept && now - kept.at < RACE_LIST_MS) return kept.sources;
     const { sources, answer } = await this.queue.sourcesForTitle(download.title, true);
-    if (!sources || !completeAnswer(answer)) return kept?.sources ?? null;
+    if (!sources || !sourceAnswerComplete(answer)) return kept?.sources ?? null;
     this.#raceLists.set(download.name, { at: now, sources });
     return sources;
   }
@@ -599,13 +598,13 @@ export class DownloadCoordinatorDriver {
       });
     // Until a race is under way a healthy download costs den-scout no list: den-core is asked first with the
     // releases last resolved (or none), and the title is resolved only when that answer escalates.
-    const first = decide(this.#raceLists.get(name)?.sources ?? []);
+    const held = entries.some((entry) => this.queue.entryRecoveryHeld(download, entry, now));
+    const first = decide(held ? [] : (this.#raceLists.get(name)?.sources ?? []));
     const finished = first.decision === 'take' && first.reason === 'finished';
     const underWay = race.stage > 0 || entries.length > 0 || first.stage !== race.stage;
     if (!underWay && (first.decision === 'wait' || finished)) return 'unchanged';
-    const held = entries.some((entry) => this.queue.entryRecoveryHeld(download, entry, now));
-    const listed = held && !this.#raceLists.has(name) ? null : await this.#raceList(download, now);
-    if (!this.#stillHeld(now)) return 'unchanged';
+    const listed = held ? null : await this.#raceList(download, now);
+    if (!this.#active(now)) return 'unchanged';
     const decided = listed ? decide(listed) : first;
     // Without a list only a finished release may be decided: nothing else can be judged.
     if (!listed && !(decided.decision === 'take' && decided.reason === 'finished'))
@@ -628,7 +627,7 @@ export class DownloadCoordinatorDriver {
     const isPrimary = identity === download.release.identity;
     if (isPrimary && !entries.length) return 'unchanged';
     if (!isPrimary && !entry && !source) return 'unchanged';
-    const at = await this.#stamp(now);
+    const at = await this.queue.stamp(now);
     const values: Record<string, Stamped<ConfigValue | null>> = {
       race: { value: raceValue(clearedRace(download.race, now)), at },
     };
@@ -664,9 +663,6 @@ export class DownloadCoordinatorDriver {
       });
     }
     if (!(await this.#write(download, values, now))) return 'failed';
-    console.info(
-      `den: download ${download.content}: kept ${entry?.label ?? source?.label ?? download.release.label} (${decided.reason})`,
-    );
     for (const other of entries)
       if (other.identity !== identity)
         await this.queue.cancelEntryIfSafe(
@@ -700,8 +696,9 @@ export class DownloadCoordinatorDriver {
     const added: DownloadRaceEntry[] = [];
     for (const identity of decided.add) {
       const source = listed.find((candidate) => candidate.identity === identity);
-      if (!source || !this.#stillHeld(now)) continue;
+      if (!source || !this.#active(now)) continue;
       const answer = await this.queue.addEntry(download.name, identity, source.url);
+      if (!this.#current()) return 'unchanged';
       if (answer.state === 'refused') {
         cappedAt = now;
         this.queue.forgetEntry(download.name, identity);
@@ -736,7 +733,7 @@ export class DownloadCoordinatorDriver {
       tried.length === download.tried.length
     )
       return 'unchanged';
-    const at = await this.#stamp(now);
+    const at = await this.queue.stamp(now);
     const values: Record<string, Stamped<ConfigValue | null>> = {
       race: { value: raceValue(exhausted ? clearedRace(race, now) : next), at },
       tried: { value: { strings: tried }, at },
@@ -765,10 +762,6 @@ export class DownloadCoordinatorDriver {
         await this.queue.effects.cancel(this.queue.entryUrl(download, entry) ?? entry.url, false);
       return 'failed';
     }
-    if (added.length)
-      console.info(
-        `den: download ${download.content}: racing ${added.map((entry) => entry.label).join(', ')} (stage ${decided.stage})`,
-      );
     for (const identity of decided.cancel) {
       if (identity === download.release.identity) await this.queue.cancelIfSafe(download);
       else {
@@ -789,34 +782,26 @@ export class DownloadCoordinatorDriver {
     return 'written';
   }
 
-  async #resumed(now: number) {
-    const at = await this.#stamp(now);
-    return {
-      queuedAt: { value: { int: now }, at },
-      progress: { value: clockValue({ lastProgress: 0, progressAt: now }), at },
-      resumeAt: { value: null, at },
-    } satisfies Record<string, Stamped<ConfigValue | null>>;
-  }
-
   async #writeTicket(download: Download, now: number): Promise<boolean> {
     const url = this.queue.urls.get(download.name);
     this.queue.lapsed.delete(download.name);
     if (!url || url === download.release.url) return false;
+    const at = await this.queue.stamp(now);
     return this.#write(
       download,
       {
         release: {
           value: releaseValue({ ...download.release, url }),
-          at: await this.#stamp(now),
+          at,
         },
       },
       now,
     );
   }
 
-  async #fallBack(download: Download, status: DownloadStatus, now: number): Promise<boolean> {
+  async #fallBack(download: Download, now: number): Promise<boolean> {
     const { sources, answer } = await this.queue.sourcesForTitle(download.title, true);
-    if (!this.#stillHeld(now)) return false;
+    if (!this.#active(now)) return false;
     const next = syncPolicy<{
       decision: 'next' | 'exhausted' | 'undecided';
       index?: number;
@@ -827,10 +812,10 @@ export class DownloadCoordinatorDriver {
       row: download.row,
       releases: sources ? rankable(sources) : [],
       resolution: sources === null ? 'undecided' : sources.length ? 'streams' : 'none',
-      complete: completeAnswer(answer),
+      complete: sourceAnswerComplete(answer),
     });
     if (next.decision === 'undecided') return false;
-    const at = await this.#stamp(now);
+    const at = await this.queue.stamp(now);
     const values: Record<string, Stamped<ConfigValue | null>> = {
       tried: { value: { strings: next.tried }, at },
     };
@@ -862,20 +847,6 @@ export class DownloadCoordinatorDriver {
     await this.queue.cancelIfSafe(download);
     this.queue.clocks.delete(download.name);
     await this.queue.add(download.name, chosen.url);
-    console.warn(
-      `den: download ${download.content}: ${download.release.label} ${
-        status.state === 'fetching' ? 'made no progress' : 'stalled'
-      }; trying ${chosen.label}`,
-    );
     return true;
   }
 }
-
-const completeAnswer = (answer: SourceAnswer | undefined): boolean =>
-  !(
-    answer?.kind === 'partial' ||
-    answer?.kind === 'unknown' ||
-    answer?.kind === 'stale' ||
-    answer?.outage ||
-    (answer?.missing ?? 0) > 0
-  );

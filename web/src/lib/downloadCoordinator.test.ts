@@ -264,11 +264,13 @@ describe('DownloadCoordinator', () => {
     expect(prepared).toEqual([stale, fresh.url]);
   });
 
-  it('does not repeat an incomplete renewal in the holder pass or a fast scheduled poll', async () => {
+  it('holds an incomplete renewal despite a stale race list, then recovers after 60 seconds', async () => {
     let now = T0 + 21 * MINUTE;
     const stale = '/scout/p/expired-scheduled-ticket';
-    const fresh = { ...second, url: '/scout/p/unsettled-scheduled-ticket' };
+    const fresh = { ...second, url: '/scout/p/renewed-scheduled-ticket' };
     const shared = testLog([racedRow(title, first, { ...second, url: stale })]);
+    let expired = false;
+    let complete = true;
     let resolves = 0;
     const queue = new DownloadCoordinator(
       shared.log,
@@ -276,22 +278,87 @@ describe('DownloadCoordinator', () => {
       {
         ...effects(),
         prepare: async (url) =>
-          url === stale ? { state: 'expired' } : { state: 'preparing', progress: 0 },
+          url === stale && expired
+            ? { state: 'expired' }
+            : url === fresh.url
+              ? { state: 'ready' }
+              : { state: 'preparing', progress: 0 },
         resolve: async () => {
           resolves++;
-          return { sources: [fresh], answer: { kind: 'partial', missing: 1 } };
+          return complete
+            ? { sources: [first, fresh], answer: { kind: 'live' as const, missing: 0 } }
+            : { sources: [fresh], answer: { kind: 'partial' as const, missing: 1 } };
         },
       },
       { now: () => now, monotonicNow: () => 0 },
     );
     const driver = new DownloadCoordinatorDriver(queue);
 
+    // Populate the driver's ten-minute race list with an ordinary complete pass.
     await driver.run({ now, observedFor: 0 });
     expect(resolves).toBe(1);
 
+    now += 11 * MINUTE;
+    expired = true;
+    complete = false;
+    await driver.run({ now, observedFor: 0 });
+    expect(resolves).toBe(2);
+    expect(readDownload(shared.log.settings(NAME)!)!.race.entries[0]?.url).toBe(stale);
+
     now += 10_000;
     await driver.run({ now, observedFor: 0 });
-    expect(resolves).toBe(1);
+    expect(resolves).toBe(2);
+
+    now += DOWNLOAD_ENTRY_RECOVERY_MS - 10_000 + 1;
+    complete = true;
+    await driver.run({ now, observedFor: 0 });
+    expect(resolves).toBe(4);
+    expect(readDownload(shared.log.settings(NAME)!)!.release).toMatchObject({
+      identity: fresh.identity,
+      url: fresh.url,
+    });
+  });
+
+  it('does not publish a race winner after profile replacement during the late list resolve', async () => {
+    const now = T0 + 21 * MINUTE;
+    const shared = testLog([racedRow(title)]);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const resolving = new Promise<void>((resolve) => (started = resolve));
+    let current = true;
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock(),
+      {
+        ...effects(),
+        prepare: async (url) =>
+          url === second.url || url.includes('expired-race-ticket')
+            ? { state: 'ready' }
+            : { state: 'preparing', progress: 0 },
+        resolve: async () => {
+          started();
+          await gate;
+          return { sources: [first, second], answer: { kind: 'live', missing: 0 } };
+        },
+      },
+      { now: () => now, monotonicNow: () => 0 },
+    );
+
+    const running = new DownloadCoordinatorDriver(queue).run({
+      now,
+      observedFor: 0,
+      current: () => current,
+    });
+    await resolving;
+    current = false;
+    release();
+    await expect(running).resolves.toBe(false);
+
+    const kept = readDownload(shared.log.settings(NAME)!)!;
+    expect(kept.release.identity).toBe(first.identity);
+    expect(kept.race.entries).toHaveLength(1);
+    expect(shared.writes.filter((write) => write === `writeAt set:${NAME}`)).toEqual([]);
   });
 
   it('publishes an exactly renewed winner by CAS and reads its fresh ticket back durably', async () => {

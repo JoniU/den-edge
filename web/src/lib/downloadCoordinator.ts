@@ -138,10 +138,8 @@ export class DownloadCoordinator {
   readonly asked = new Map<string, { at: number; quiet: number; said: string }>();
 
   readonly #entryPolls = new Map<string, Promise<Preparation | undefined>>();
-  /** Exact persisted entry values whose local ticket answered expired; their written URL must not be reused. */
-  readonly #expiredEntries = new Map<string, string>();
-  /** Incomplete renewal is retried after one maximum poll window, not again in the same pass or a fast poll. */
-  readonly #entryRecoveryUntil = new Map<string, { observation: string; until: number }>();
+  /** Exact expired entries, and when an incomplete renewal may be tried again. */
+  readonly #entryRecovery = new Map<string, { observation: string; until?: number }>();
   readonly #pending = new Map<string, Promise<Preparation>>();
   readonly #enqueuePending = new Map<string, Promise<boolean>>();
   readonly #sourceCache = new Map<
@@ -352,8 +350,8 @@ export class DownloadCoordinator {
           );
       }
       this.changed();
-    } catch (error) {
-      console.warn('den: download activation failed', error);
+    } catch {
+      return;
     }
   }
 
@@ -399,9 +397,7 @@ export class DownloadCoordinator {
     );
     if (!saved) return false;
     this.changed();
-    void this.addEntry(download.name, source.identity, source.url).catch((error: unknown) =>
-      console.warn('den: alternate download activation failed', error),
-    );
+    void this.addEntry(download.name, source.identity, source.url).catch(() => undefined);
     return true;
   }
 
@@ -591,7 +587,9 @@ export class DownloadCoordinator {
     const observation = this.#entryObservation(download, entry);
     return (
       this.entryUrls.get(key) ??
-      (this.#expiredEntries.get(key) === observation ? null : this.effects.ticket(entry.url))
+      (this.#entryRecovery.get(key)?.observation === observation
+        ? null
+        : this.effects.ticket(entry.url))
     );
   }
 
@@ -609,12 +607,16 @@ export class DownloadCoordinator {
   }
 
   entryRecoveryHeld(download: Download, entry: DownloadRaceEntry, now = this.now()): boolean {
-    const held = this.#entryRecoveryUntil.get(raceKey(download.name, entry.identity));
-    return held?.observation === this.#entryObservation(download, entry) && held.until > now;
+    const held = this.#entryRecovery.get(raceKey(download.name, entry.identity));
+    return (
+      held?.observation === this.#entryObservation(download, entry) &&
+      held.until !== undefined &&
+      held.until > now
+    );
   }
 
   #holdEntryRecovery(download: Download, entry: DownloadRaceEntry, now: number): void {
-    this.#entryRecoveryUntil.set(raceKey(download.name, entry.identity), {
+    this.#entryRecovery.set(raceKey(download.name, entry.identity), {
       observation: this.#entryObservation(download, entry),
       until: now + DOWNLOAD_ENTRY_RECOVERY_MS,
     });
@@ -635,7 +637,7 @@ export class DownloadCoordinator {
     if (options.current && (!options.current() || !this.#entryCurrent(download, entry)))
       return undefined;
     if (!sources) return undefined;
-    if (options.requireComplete && !completeSourceAnswer(answer)) return undefined;
+    if (options.requireComplete && !sourceAnswerComplete(answer)) return undefined;
     const same = sources.find((source) => source.identity === entry.identity);
     if (same) {
       this.entryUrls.set(raceKey(download.name, entry.identity), same.url);
@@ -659,17 +661,16 @@ export class DownloadCoordinator {
     const now = options.now ?? this.now();
     const run = (async () => {
       const observation = this.#entryObservation(download, entry);
-      const held = this.#entryRecoveryUntil.get(key);
+      const held = this.#entryRecovery.get(key);
       if (held && held.observation !== observation) {
-        this.#entryRecoveryUntil.delete(key);
-        this.#expiredEntries.delete(key);
+        this.#entryRecovery.delete(key);
         this.entryAnswers.delete(key);
         this.entryUrls.delete(key);
       }
       if (this.entryRecoveryHeld(download, entry, now)) return undefined;
       let renewed = false;
       while (current() && this.#entryCurrent(download, entry)) {
-        const expired = this.#expiredEntries.get(key) === observation;
+        const expired = this.#entryRecovery.get(key)?.observation === observation;
         const url = expired
           ? await this.renewEntryUrl(download, entry, {
               requireComplete: true,
@@ -685,13 +686,12 @@ export class DownloadCoordinator {
         const answer = await this.effects.prepare(url, false, false);
         if (!current() || !this.#entryCurrent(download, entry)) return undefined;
         if (answer.state !== 'expired') {
-          this.#expiredEntries.delete(key);
-          this.#entryRecoveryUntil.delete(key);
+          this.#entryRecovery.delete(key);
           return answer;
         }
         this.entryAnswers.delete(key);
         this.entryUrls.delete(key);
-        this.#expiredEntries.set(key, observation);
+        this.#entryRecovery.set(key, { observation });
         if (renewed) {
           this.#holdEntryRecovery(download, entry, now);
           return undefined;
@@ -725,18 +725,11 @@ export class DownloadCoordinator {
     this.entryAnswers.delete(key);
     this.entryUrls.delete(key);
     this.#entryPolls.delete(key);
-    this.#expiredEntries.delete(key);
-    this.#entryRecoveryUntil.delete(key);
+    this.#entryRecovery.delete(key);
   }
 
   clearEntries(name: string): void {
-    for (const map of [
-      this.entryAnswers,
-      this.entryUrls,
-      this.#entryPolls,
-      this.#expiredEntries,
-      this.#entryRecoveryUntil,
-    ])
+    for (const map of [this.entryAnswers, this.entryUrls, this.#entryPolls, this.#entryRecovery])
       for (const key of [...map.keys()]) if (key.startsWith(`${name}\n`)) map.delete(key);
   }
 
@@ -748,8 +741,7 @@ export class DownloadCoordinator {
         rows: this.list().map((item) => item.row),
         ...(identity ? { identity } : {}),
       });
-    } catch (error) {
-      console.warn(`den: download ${download.content}: cancel check refused`, error);
+    } catch {
       return false;
     }
   }
@@ -768,7 +760,7 @@ export class DownloadCoordinator {
 export const downloadIsInFlight = (state: DownloadStatus['state']) =>
   state === 'starting' || state === 'fetching' || state === 'not_started' || state === 'paused';
 
-const completeSourceAnswer = (answer: SourceAnswer | undefined): boolean =>
+export const sourceAnswerComplete = (answer: SourceAnswer | undefined): boolean =>
   !(
     answer?.kind === 'partial' ||
     answer?.kind === 'unknown' ||
