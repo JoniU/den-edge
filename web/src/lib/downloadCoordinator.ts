@@ -34,6 +34,7 @@ import type { ConfigValue, SettingsRow, Stamped } from './wire';
 export const DOWNLOAD_POLL_MS = 5_000;
 export const DOWNLOAD_POLL_MAX_MS = 60_000;
 export const DOWNLOAD_SOURCE_SNAPSHOT_MS = 30_000;
+export const DOWNLOAD_ENTRY_RECOVERY_MS = 60_000;
 const DOWNLOAD_SOURCE_SNAPSHOTS = 64;
 
 export const downloadPollDelay = (quiet: number): number =>
@@ -137,6 +138,10 @@ export class DownloadCoordinator {
   readonly asked = new Map<string, { at: number; quiet: number; said: string }>();
 
   readonly #entryPolls = new Map<string, Promise<Preparation | undefined>>();
+  /** Exact persisted entry values whose local ticket answered expired; their written URL must not be reused. */
+  readonly #expiredEntries = new Map<string, string>();
+  /** Incomplete renewal is retried after one maximum poll window, not again in the same pass or a fast poll. */
+  readonly #entryRecoveryUntil = new Map<string, { observation: string; until: number }>();
   readonly #pending = new Map<string, Promise<Preparation>>();
   readonly #enqueuePending = new Map<string, Promise<boolean>>();
   readonly #sourceCache = new Map<
@@ -582,9 +587,37 @@ export class DownloadCoordinator {
 
   /** The ticket this instance reaches a race entry by, without asking anyone. */
   entryUrl(download: Download, entry: DownloadRaceEntry): string | null {
+    const key = raceKey(download.name, entry.identity);
+    const observation = this.#entryObservation(download, entry);
     return (
-      this.entryUrls.get(raceKey(download.name, entry.identity)) ?? this.effects.ticket(entry.url)
+      this.entryUrls.get(key) ??
+      (this.#expiredEntries.get(key) === observation ? null : this.effects.ticket(entry.url))
     );
+  }
+
+  #entryObservation(download: Download, entry: DownloadRaceEntry): string {
+    return JSON.stringify([download.content, download.release.identity, download.title, entry]);
+  }
+
+  #entryCurrent(download: Download, entry: DownloadRaceEntry): boolean {
+    const current = this.get(download.name);
+    if (!current) return false;
+    const observation = this.#entryObservation(download, entry);
+    return current.race.entries.some(
+      (candidate) => this.#entryObservation(current, candidate) === observation,
+    );
+  }
+
+  entryRecoveryHeld(download: Download, entry: DownloadRaceEntry, now = this.now()): boolean {
+    const held = this.#entryRecoveryUntil.get(raceKey(download.name, entry.identity));
+    return held?.observation === this.#entryObservation(download, entry) && held.until > now;
+  }
+
+  #holdEntryRecovery(download: Download, entry: DownloadRaceEntry, now: number): void {
+    this.#entryRecoveryUntil.set(raceKey(download.name, entry.identity), {
+      observation: this.#entryObservation(download, entry),
+      until: now + DOWNLOAD_ENTRY_RECOVERY_MS,
+    });
   }
 
   /**
@@ -594,11 +627,15 @@ export class DownloadCoordinator {
   async renewEntryUrl(
     download: Download,
     entry: DownloadRaceEntry,
+    options: { requireComplete?: boolean; current?: () => boolean } = {},
   ): Promise<string | 'gone' | undefined> {
     const known = this.entryUrl(download, entry);
     if (known) return known;
     const { sources, answer } = await this.sourcesForTitle(download.title, true);
+    if (options.current && (!options.current() || !this.#entryCurrent(download, entry)))
+      return undefined;
     if (!sources) return undefined;
+    if (options.requireComplete && !completeSourceAnswer(answer)) return undefined;
     const same = sources.find((source) => source.identity === entry.identity);
     if (same) {
       this.entryUrls.set(raceKey(download.name, entry.identity), same.url);
@@ -610,14 +647,58 @@ export class DownloadCoordinator {
   }
 
   /** Ask den-scout about one race entry (`?probe=1`). A release no longer listed reads as failed. */
-  async pollEntry(download: Download, entry: DownloadRaceEntry): Promise<Preparation | undefined> {
+  async pollEntry(
+    download: Download,
+    entry: DownloadRaceEntry,
+    options: { current?: () => boolean; now?: number } = {},
+  ): Promise<Preparation | undefined> {
     const key = raceKey(download.name, entry.identity);
     const pending = this.#entryPolls.get(key);
     if (pending) return pending;
+    const current = options.current ?? (() => true);
+    const now = options.now ?? this.now();
     const run = (async () => {
-      const url = await this.renewEntryUrl(download, entry);
-      if (url === 'gone') return { state: 'failed', message: GONE } satisfies Preparation;
-      return url ? this.effects.prepare(url, false, false) : undefined;
+      const observation = this.#entryObservation(download, entry);
+      const held = this.#entryRecoveryUntil.get(key);
+      if (held && held.observation !== observation) {
+        this.#entryRecoveryUntil.delete(key);
+        this.#expiredEntries.delete(key);
+        this.entryAnswers.delete(key);
+        this.entryUrls.delete(key);
+      }
+      if (this.entryRecoveryHeld(download, entry, now)) return undefined;
+      let renewed = false;
+      while (current() && this.#entryCurrent(download, entry)) {
+        const expired = this.#expiredEntries.get(key) === observation;
+        const url = expired
+          ? await this.renewEntryUrl(download, entry, {
+              requireComplete: true,
+              current,
+            })
+          : this.entryUrl(download, entry);
+        if (!current() || !this.#entryCurrent(download, entry)) return undefined;
+        if (url === 'gone') return { state: 'failed', message: GONE } satisfies Preparation;
+        if (!url) {
+          if (expired) this.#holdEntryRecovery(download, entry, now);
+          return undefined;
+        }
+        const answer = await this.effects.prepare(url, false, false);
+        if (!current() || !this.#entryCurrent(download, entry)) return undefined;
+        if (answer.state !== 'expired') {
+          this.#expiredEntries.delete(key);
+          this.#entryRecoveryUntil.delete(key);
+          return answer;
+        }
+        this.entryAnswers.delete(key);
+        this.entryUrls.delete(key);
+        this.#expiredEntries.set(key, observation);
+        if (renewed) {
+          this.#holdEntryRecovery(download, entry, now);
+          return undefined;
+        }
+        renewed = true;
+      }
+      return undefined;
     })();
     this.#entryPolls.set(key, run);
     try {
@@ -644,10 +725,18 @@ export class DownloadCoordinator {
     this.entryAnswers.delete(key);
     this.entryUrls.delete(key);
     this.#entryPolls.delete(key);
+    this.#expiredEntries.delete(key);
+    this.#entryRecoveryUntil.delete(key);
   }
 
   clearEntries(name: string): void {
-    for (const map of [this.entryAnswers, this.entryUrls, this.#entryPolls])
+    for (const map of [
+      this.entryAnswers,
+      this.entryUrls,
+      this.#entryPolls,
+      this.#expiredEntries,
+      this.#entryRecoveryUntil,
+    ])
       for (const key of [...map.keys()]) if (key.startsWith(`${name}\n`)) map.delete(key);
   }
 
@@ -678,3 +767,12 @@ export class DownloadCoordinator {
 
 export const downloadIsInFlight = (state: DownloadStatus['state']) =>
   state === 'starting' || state === 'fetching' || state === 'not_started' || state === 'paused';
+
+const completeSourceAnswer = (answer: SourceAnswer | undefined): boolean =>
+  !(
+    answer?.kind === 'partial' ||
+    answer?.kind === 'unknown' ||
+    answer?.kind === 'stale' ||
+    answer?.outage ||
+    (answer?.missing ?? 0) > 0
+  );

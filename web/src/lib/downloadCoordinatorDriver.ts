@@ -154,7 +154,7 @@ export class DownloadCoordinatorDriver {
       if (!current()) break;
       await Promise.all(
         polled.slice(index, index + CONCURRENCY).map(async (download) => {
-          await this.#pollAndRenew(download, current);
+          await this.#pollAndRenew(download, current, now);
           if (!current()) return;
           const said = JSON.stringify([
             this.queue.answers.get(download.name) ?? null,
@@ -175,12 +175,12 @@ export class DownloadCoordinatorDriver {
     if (current()) this.queue.changed();
   }
 
-  async #pollAndRenew(download: Download, current: () => boolean): Promise<void> {
+  async #pollAndRenew(download: Download, current: () => boolean, now: number): Promise<void> {
     const answer = await this.queue.poll(download);
     if (!current()) return;
     for (const entry of download.race.entries) {
       if (!current()) return;
-      await this.queue.pollEntry(download, entry);
+      await this.queue.pollEntry(download, entry, { current, now });
     }
     if (!current() || answer.state !== 'expired' || answer.message === GONE) return;
     const url = await this.queue.renew(download);
@@ -603,7 +603,8 @@ export class DownloadCoordinatorDriver {
     const finished = first.decision === 'take' && first.reason === 'finished';
     const underWay = race.stage > 0 || entries.length > 0 || first.stage !== race.stage;
     if (!underWay && (first.decision === 'wait' || finished)) return 'unchanged';
-    const listed = await this.#raceList(download, now);
+    const held = entries.some((entry) => this.queue.entryRecoveryHeld(download, entry, now));
+    const listed = held && !this.#raceLists.has(name) ? null : await this.#raceList(download, now);
     if (!this.#stillHeld(now)) return 'unchanged';
     const decided = listed ? decide(listed) : first;
     // Without a list only a finished release may be decided: nothing else can be judged.
@@ -640,12 +641,13 @@ export class DownloadCoordinatorDriver {
         cached: source!.cached,
         queuedAt: now,
       };
+      const url = entry ? (this.queue.entryUrl(download, entry) ?? taken.url) : taken.url;
       Object.assign(values, {
         release: {
           value: releaseValue({
             identity,
             label: taken.label ?? identity,
-            url: taken.url,
+            url,
             sizeBytes: taken.sizeBytes,
             cached: taken.cached,
           }),
@@ -746,7 +748,7 @@ export class DownloadCoordinatorDriver {
           value: releaseValue({
             identity: promoted.identity,
             label: promoted.label ?? promoted.identity,
-            url: promoted.url,
+            url: this.queue.entryUrl(download, promoted) ?? promoted.url,
             sizeBytes: promoted.sizeBytes,
             cached: promoted.cached,
           }),
