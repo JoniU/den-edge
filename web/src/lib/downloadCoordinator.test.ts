@@ -1,11 +1,28 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ClockStore } from './clockStore';
-import { DownloadCoordinator, downloadIsInFlight, downloadPollDelay } from './downloadCoordinator';
+import {
+  DOWNLOAD_ENTRY_RECOVERY_MS,
+  DownloadCoordinator,
+  downloadDiagnostic,
+  downloadIsInFlight,
+  downloadPollDelay,
+} from './downloadCoordinator';
 import { DownloadCoordinatorDriver } from './downloadCoordinatorDriver';
-import { clockValue, downloadName, readDownload, releaseValue, titleValue } from './downloadRows';
+import {
+  clockValue,
+  downloadName,
+  LEASE_ROW,
+  raceValue,
+  readDownload,
+  releaseValue,
+  removedRow,
+  titleValue,
+  withValues,
+  type DownloadTitle,
+} from './downloadRows';
 import { source, testLog } from './downloadTestLog';
 import type { Preparation } from './titleSources';
-import type { SettingsRow, Stamp } from './wire';
+import type { DocumentRow, SettingsRow, Stamp } from './wire';
 
 const DEVICE = 'bbbbbbbbbbbbbbbb';
 const TV = 'aaaaaaaaaaaaaaaa';
@@ -33,11 +50,14 @@ const second = source('Rebecka.S02E03.1080p.WEB-DL.mkv', {
   seeders: 20,
 });
 
-function clock(options: { gate?: Promise<void>; issued?: Stamp[] } = {}): ClockStore {
+function clock(
+  options: { gate?: Promise<void>; issued?: Stamp[]; starting?: () => void } = {},
+): ClockStore {
   let last: Stamp = [0, 0, DEVICE];
   return {
     device: DEVICE,
     async issue(now = Date.now()) {
+      options.starting?.();
       await options.gate;
       last = now > last[0] ? [now, 0, DEVICE] : [last[0], last[1] + 1, DEVICE];
       options.issued?.push([...last]);
@@ -91,7 +111,74 @@ function stalledRow(): SettingsRow {
   };
 }
 
+function racedRow(
+  raceTitle: DownloadTitle,
+  primary = first,
+  entry = { ...second, url: '/scout/p/expired-race-ticket' },
+): SettingsRow {
+  const at: Stamp = [T0, 0, TV];
+  const name = downloadName(
+    `${raceTitle.mediaType}:${raceTitle.mediaId}:${raceTitle.season ?? -1}:${raceTitle.episode ?? -1}`,
+  );
+  return withValues(
+    {
+      kind: 'set',
+      schema: 2,
+      name,
+      values: {
+        release: {
+          value: releaseValue({
+            identity: primary.identity,
+            label: primary.label,
+            url: primary.url,
+          }),
+          at,
+        },
+        title: { value: titleValue(raceTitle), at },
+        queuedAt: { value: { int: T0 }, at },
+        progress: { value: clockValue({ lastProgress: 0, progressAt: T0 }), at },
+      },
+    },
+    {
+      race: {
+        value: raceValue({
+          stage: 1,
+          stageAt: T0,
+          startedAt: T0,
+          entries: [
+            {
+              identity: entry.identity,
+              label: entry.label,
+              url: entry.url,
+              queuedAt: T0,
+            },
+          ],
+        }),
+        at,
+      },
+    },
+  );
+}
+
 describe('DownloadCoordinator', () => {
+  it('emits only fixed privacy-safe download diagnostic codes', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    for (let code = 1; code <= 11; code++) downloadDiagnostic(code);
+
+    expect(warn.mock.calls).toEqual([
+      ['den: download', 1],
+      ['den: download', 2],
+      ['den: download', 3],
+    ]);
+    expect(info.mock.calls).toEqual(
+      Array.from({ length: 8 }, (_, index) => ['den: download', index + 4]),
+    );
+    warn.mockRestore();
+    info.mockRestore();
+  });
+
   it('has the same bounded polling backoff without page state', () => {
     expect(downloadPollDelay(0)).toBe(5_000);
     expect(downloadPollDelay(3)).toBe(40_000);
@@ -102,6 +189,465 @@ describe('DownloadCoordinator', () => {
     expect(downloadIsInFlight('paused')).toBe(true);
     expect(downloadIsInFlight('not_started')).toBe(true);
     expect(downloadIsInFlight('ready')).toBe(false);
+  });
+
+  it.each([
+    {
+      label: 'movie /scout',
+      exact: {
+        mediaType: 'movie' as const,
+        mediaId: 44,
+        imdbId: 'tt0044',
+        title: 'Movie',
+      },
+      stale: '/scout/p/expired-movie-ticket',
+    },
+    {
+      label: 'episode /den',
+      exact: title,
+      stale: '/den/p/expired-episode-ticket',
+    },
+  ])(
+    'renews an expired persisted $label ticket by exact content and file identity',
+    async ({ exact, stale }) => {
+      const persisted = { ...second, url: stale };
+      const fresh = { ...second, url: `${stale}-fresh` };
+      const shared = testLog([racedRow(exact, first, persisted)]);
+      const prepared: string[] = [];
+      const resolved: DownloadTitle[] = [];
+      const queue = new DownloadCoordinator(
+        shared.log,
+        clock(),
+        {
+          ...effects(),
+          ticket: (url) => (/^\/(?:scout|den)\//.test(url) ? url : null),
+          prepare: async (url) => {
+            prepared.push(url);
+            return url === stale ? { state: 'expired' } : { state: 'ready' };
+          },
+          resolve: async (asked) => {
+            resolved.push(asked);
+            return { sources: [fresh], answer: { kind: 'live', missing: 0 } };
+          },
+        },
+        { now: () => T0 + MINUTE },
+      );
+      const download = queue.list()[0]!;
+      const entry = download.race.entries[0]!;
+
+      await expect(queue.pollEntry(download, entry)).resolves.toMatchObject({ state: 'ready' });
+
+      expect(resolved).toEqual([exact]);
+      expect(prepared).toEqual([stale, fresh.url]);
+      expect(queue.entryUrl(download, entry)).toBe(fresh.url);
+      expect(entry.identity).toBe(fresh.identity);
+    },
+  );
+
+  it('holds an incomplete expired-ticket renewal for 60 seconds, then recovers without reusing the stale URL', async () => {
+    let now = T0 + MINUTE;
+    let complete = false;
+    const stale = '/scout/p/expired-race-ticket';
+    const fresh = { ...second, url: '/scout/p/eventual-race-ticket' };
+    const shared = testLog([racedRow(title, first, { ...second, url: stale })]);
+    const prepared: string[] = [];
+    let resolves = 0;
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock(),
+      {
+        ...effects(),
+        prepare: async (url) => {
+          prepared.push(url);
+          return url === fresh.url ? { state: 'ready' } : { state: 'expired' };
+        },
+        resolve: async () => {
+          resolves++;
+          return complete
+            ? { sources: [fresh], answer: { kind: 'live' as const, missing: 0 } }
+            : { sources: [fresh], answer: { kind: 'partial' as const, missing: 1 } };
+        },
+      },
+      { now: () => now },
+    );
+    const download = queue.list()[0]!;
+    const entry = download.race.entries[0]!;
+
+    await expect(queue.pollEntry(download, entry, { now })).resolves.toBeUndefined();
+    await expect(queue.pollEntry(download, entry, { now: now + 10_000 })).resolves.toBeUndefined();
+    expect(resolves).toBe(1);
+    expect(prepared).toEqual([stale]);
+
+    complete = true;
+    now += DOWNLOAD_ENTRY_RECOVERY_MS + 1;
+    await expect(queue.pollEntry(download, entry, { now })).resolves.toMatchObject({
+      state: 'ready',
+    });
+    expect(resolves).toBe(2);
+    expect(prepared).toEqual([stale, fresh.url]);
+  });
+
+  it('holds an incomplete renewal despite a stale race list, then recovers after 60 seconds', async () => {
+    let now = T0 + 21 * MINUTE;
+    const stale = '/scout/p/expired-scheduled-ticket';
+    const fresh = { ...second, url: '/scout/p/renewed-scheduled-ticket' };
+    const shared = testLog([racedRow(title, first, { ...second, url: stale })]);
+    let expired = false;
+    let complete = true;
+    let resolves = 0;
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock(),
+      {
+        ...effects(),
+        prepare: async (url) =>
+          url === stale && expired
+            ? { state: 'expired' }
+            : url === fresh.url
+              ? { state: 'ready' }
+              : { state: 'preparing', progress: 0 },
+        resolve: async () => {
+          resolves++;
+          return complete
+            ? { sources: [first, fresh], answer: { kind: 'live' as const, missing: 0 } }
+            : { sources: [fresh], answer: { kind: 'partial' as const, missing: 1 } };
+        },
+      },
+      { now: () => now, monotonicNow: () => 0 },
+    );
+    const driver = new DownloadCoordinatorDriver(queue);
+
+    // Populate the driver's ten-minute race list with an ordinary complete pass.
+    await driver.run({ now, observedFor: 0 });
+    expect(resolves).toBe(1);
+
+    now += 11 * MINUTE;
+    expired = true;
+    complete = false;
+    await driver.run({ now, observedFor: 0 });
+    expect(resolves).toBe(2);
+    expect(readDownload(shared.log.settings(NAME)!)!.race.entries[0]?.url).toBe(stale);
+
+    now += 10_000;
+    await driver.run({ now, observedFor: 0 });
+    expect(resolves).toBe(2);
+
+    now += DOWNLOAD_ENTRY_RECOVERY_MS - 10_000 + 1;
+    complete = true;
+    await driver.run({ now, observedFor: 0 });
+    expect(resolves).toBe(4);
+    expect(readDownload(shared.log.settings(NAME)!)!.release).toMatchObject({
+      identity: fresh.identity,
+      url: fresh.url,
+    });
+  });
+
+  it('does not publish a race winner after profile replacement during the late list resolve', async () => {
+    const now = T0 + 21 * MINUTE;
+    const shared = testLog([racedRow(title)]);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const resolving = new Promise<void>((resolve) => (started = resolve));
+    let current = true;
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock(),
+      {
+        ...effects(),
+        prepare: async (url) =>
+          url === second.url || url.includes('expired-race-ticket')
+            ? { state: 'ready' }
+            : { state: 'preparing', progress: 0 },
+        resolve: async () => {
+          started();
+          await gate;
+          return { sources: [first, second], answer: { kind: 'live', missing: 0 } };
+        },
+      },
+      { now: () => now, monotonicNow: () => 0 },
+    );
+
+    const running = new DownloadCoordinatorDriver(queue).run({
+      now,
+      observedFor: 0,
+      current: () => current,
+    });
+    await resolving;
+    current = false;
+    release();
+    await expect(running).resolves.toBe(false);
+
+    const kept = readDownload(shared.log.settings(NAME)!)!;
+    expect(kept.release.identity).toBe(first.identity);
+    expect(kept.race.entries).toHaveLength(1);
+    expect(shared.writes.filter((write) => write === `writeAt set:${NAME}`)).toEqual([]);
+  });
+
+  it('does not acquire a lease after profile replacement during the durable stamp', async () => {
+    const shared = testLog([stalledRow()]);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const issuing = new Promise<void>((resolve) => (started = resolve));
+    let current = true;
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock({ gate, starting: () => started() }),
+      effects(),
+      { now: () => T0 + MINUTE, monotonicNow: () => 0 },
+    );
+
+    const running = new DownloadCoordinatorDriver(queue).run({
+      now: T0 + MINUTE,
+      observedFor: 0,
+      current: () => current,
+    });
+    await issuing;
+    current = false;
+    release();
+
+    await expect(running).resolves.toBe(false);
+    expect(shared.log.settings(LEASE_ROW)).toBeUndefined();
+    expect(shared.writes).toEqual([]);
+  });
+
+  it('does not acquire a lease after another holder takes it during the durable stamp', async () => {
+    const shared = testLog([stalledRow()]);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const issuing = new Promise<void>((resolve) => (started = resolve));
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock({ gate, starting: () => started() }),
+      effects(),
+      { now: () => T0 + MINUTE, monotonicNow: () => 0 },
+    );
+    const running = new DownloadCoordinatorDriver(queue).run({
+      now: T0 + MINUTE,
+      observedFor: 0,
+    });
+
+    await issuing;
+    shared.land({
+      kind: 'set',
+      schema: 2,
+      name: LEASE_ROW,
+      values: {
+        lease: { value: { strings: [TV, '1'] }, at: [T0 + MINUTE, 0, TV] },
+      },
+    });
+    release();
+
+    await expect(running).resolves.toBe(false);
+    expect(shared.log.settings(LEASE_ROW)?.values.lease?.value).toEqual({ strings: [TV, '1'] });
+    expect(shared.writes).toEqual([]);
+  });
+
+  it('does not prune a watched download after losing the lease during its durable stamp', async () => {
+    const now = T0 + 3 * 24 * 60 * MINUTE;
+    const announced = withValues(stalledRow(), {
+      announced: { value: { bool: true }, at: [T0, 1, TV] },
+    });
+    const shared = testLog([announced]);
+    const watched: DocumentRow = {
+      format: 4,
+      kind: 'season',
+      title: { type: 'tv', id: title.mediaId },
+      season: title.season,
+      seasonReset: null,
+      episodes: {
+        [title.episode]: {
+          progress: { value: 1, at: [T0 + MINUTE, 0, TV], viewing: 0 },
+          imported: false,
+          plays: {},
+          cleared: null,
+        },
+      },
+    };
+    shared.log.documentNamed = (name) =>
+      name === `season:tv:${title.mediaId}:${title.season}` ? watched : undefined;
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const issuing = new Promise<void>((resolve) => (started = resolve));
+    const baseClock = clock();
+    let issues = 0;
+    const heldClock: ClockStore = {
+      ...baseClock,
+      async issue(at) {
+        if (++issues === 2) {
+          started();
+          await gate;
+        }
+        return baseClock.issue(at);
+      },
+    };
+    const queue = new DownloadCoordinator(
+      shared.log,
+      heldClock,
+      { ...effects(), prepare: async () => ({ state: 'ready' }) },
+      { now: () => now, monotonicNow: () => 0 },
+    );
+    const running = new DownloadCoordinatorDriver(queue).run({ now, observedFor: 0 });
+
+    await issuing;
+    const lease = shared.log.settings(LEASE_ROW)!;
+    shared.land({
+      ...lease,
+      values: {
+        ...lease.values,
+        lease: { value: { strings: [TV, '999'] }, at: [now + 1, 0, TV] },
+      },
+    });
+    release();
+
+    await expect(running).resolves.toBe(false);
+    expect(readDownload(shared.log.settings(NAME)!)?.release.identity).toBe(first.identity);
+    expect(shared.writes.filter((write) => write === `writeAt set:${NAME}`)).toEqual([]);
+  });
+
+  it('publishes an exactly renewed winner by CAS and reads its fresh ticket back durably', async () => {
+    const now = T0 + 21 * MINUTE;
+    const stale = '/scout/p/expired-winning-ticket';
+    const fresh = { ...second, url: '/scout/p/fresh-winning-ticket' };
+    const shared = testLog([racedRow(title, first, { ...second, url: stale })]);
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock(),
+      {
+        ...effects(),
+        prepare: async (url) =>
+          url === stale
+            ? { state: 'expired' }
+            : url === fresh.url
+              ? { state: 'ready' }
+              : { state: 'preparing', progress: 0 },
+        resolve: async () => ({
+          sources: [first, fresh],
+          answer: { kind: 'live', missing: 0 },
+        }),
+      },
+      { now: () => now, monotonicNow: () => 0 },
+    );
+
+    await expect(new DownloadCoordinatorDriver(queue).run({ now, observedFor: 0 })).resolves.toBe(
+      true,
+    );
+
+    const won = readDownload(shared.log.settings(NAME)!)!;
+    expect(won.release).toMatchObject({ identity: fresh.identity, url: fresh.url });
+    expect(won.race.entries).toEqual([]);
+    expect(shared.writes.filter((write) => write === `writeAt set:${NAME}`)).toHaveLength(1);
+
+    const reopened = new DownloadCoordinator(shared.window(), clock(), effects());
+    expect(reopened.get(NAME)?.release).toMatchObject({
+      identity: fresh.identity,
+      url: fresh.url,
+    });
+  });
+
+  it('keeps the durable race receipt on CAS loss while later probes use only the renewed ticket', async () => {
+    const now = T0 + 21 * MINUTE;
+    const stale = '/scout/p/expired-cas-ticket';
+    const fresh = { ...second, url: '/scout/p/fresh-cas-ticket' };
+    const shared = testLog([racedRow(title, first, { ...second, url: stale })]);
+    const writeAt = shared.log.writeAt.bind(shared.log);
+    shared.log.writeAt = async (row, base) => (row.name === NAME ? false : writeAt(row, base));
+    const prepared: string[] = [];
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock(),
+      {
+        ...effects(),
+        prepare: async (url) => {
+          prepared.push(url);
+          return url === stale
+            ? { state: 'expired' }
+            : url === fresh.url
+              ? { state: 'ready' }
+              : { state: 'preparing', progress: 0 };
+        },
+        resolve: async () => ({
+          sources: [first, fresh],
+          answer: { kind: 'live', missing: 0 },
+        }),
+      },
+      { now: () => now, monotonicNow: () => 0 },
+    );
+
+    await new DownloadCoordinatorDriver(queue).run({ now, observedFor: 0 });
+
+    const kept = readDownload(shared.log.settings(NAME)!)!;
+    const entry = kept.race.entries[0]!;
+    expect(kept.release.identity).toBe(first.identity);
+    expect(entry).toMatchObject({ identity: fresh.identity, url: stale });
+    expect(queue.entryUrl(kept, entry)).toBe(fresh.url);
+    await queue.pollEntry(kept, entry, { now: now + 10_000 });
+    expect(prepared.filter((url) => url === stale)).toHaveLength(1);
+    expect(prepared.at(-1)).toBe(fresh.url);
+  });
+
+  it('drops a late renewal after profile replacement', async () => {
+    const shared = testLog([racedRow(title)]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let current = true;
+    const prepared: string[] = [];
+    const fresh = { ...second, url: '/scout/p/late-race-ticket' };
+    const queue = new DownloadCoordinator(shared.log, clock(), {
+      ...effects(),
+      prepare: async (url) => {
+        prepared.push(url);
+        return { state: 'expired' };
+      },
+      resolve: async () => {
+        await gate;
+        return { sources: [fresh], answer: { kind: 'live', missing: 0 } };
+      },
+    });
+    const download = queue.list()[0]!;
+    const entry = download.race.entries[0]!;
+    const polling = queue.pollEntry(download, entry, { current: () => current });
+    await Promise.resolve();
+    await Promise.resolve();
+    current = false;
+    release();
+
+    await expect(polling).resolves.toBeUndefined();
+    expect(prepared).toEqual([entry.url]);
+    expect(queue.entryUrl(download, entry)).toBeNull();
+  });
+
+  it('drops a late renewal after the exact durable entry is cancelled', async () => {
+    const shared = testLog([racedRow(title)]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const prepared: string[] = [];
+    const fresh = { ...second, url: '/scout/p/cancelled-race-ticket' };
+    const queue = new DownloadCoordinator(shared.log, clock(), {
+      ...effects(),
+      prepare: async (url) => {
+        prepared.push(url);
+        return { state: 'expired' };
+      },
+      resolve: async () => {
+        await gate;
+        return { sources: [fresh], answer: { kind: 'live', missing: 0 } };
+      },
+    });
+    const download = queue.list()[0]!;
+    const entry = download.race.entries[0]!;
+    const polling = queue.pollEntry(download, entry);
+    await Promise.resolve();
+    await Promise.resolve();
+    shared.land(removedRow(download.row, [T0 + MINUTE, 0, DEVICE]));
+    release();
+
+    await expect(polling).resolves.toBeUndefined();
+    expect(prepared).toEqual([entry.url]);
+    expect(queue.get(download.name)).toBeUndefined();
   });
 
   it('does not write until its durable asynchronous stamp has committed', async () => {
