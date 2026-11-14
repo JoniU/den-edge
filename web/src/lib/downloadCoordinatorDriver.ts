@@ -1,4 +1,5 @@
 import {
+  downloadDiagnostic,
   downloadPollDelay,
   raceKey,
   sourceAnswerComplete,
@@ -232,6 +233,7 @@ export class DownloadCoordinatorDriver {
     const next = decision.epoch ?? epoch + 1;
     const base: SettingsRow = row ?? emptyRow(LEASE_ROW);
     const at = await this.queue.stamp(now);
+    if (!this.#current() || log.seqOf(name) !== seq) return false;
     const leased: SettingsRow = {
       ...base,
       values: {
@@ -392,9 +394,9 @@ export class DownloadCoordinatorDriver {
       const byName = new Map(decided.map((download) => [download.name, download]));
       for (const name of pruned.remove) {
         const download = byName.get(name);
-        if (!download || !this.#stillHeld(now)) continue;
+        if (!download || !this.#active(now)) continue;
         const at = await this.queue.stamp(now);
-        if (!current()) break;
+        if (!this.#active(now)) break;
         wrote = (await this.queue.log.writeAt(removedRow(download.row, at), download.seq)) || wrote;
       }
     }
@@ -437,7 +439,11 @@ export class DownloadCoordinatorDriver {
     const { sources } = await this.queue.sourcesForTitle(download.title, true);
     if (!this.#active(now) || !sources) return false;
     const chosen = sources.find((source) => source.identity === status.identity);
-    if (!chosen) return false;
+    if (!chosen) {
+      downloadDiagnostic(4);
+      return false;
+    }
+    downloadDiagnostic(5);
     return this.#start(
       download,
       chosen,
@@ -462,6 +468,7 @@ export class DownloadCoordinatorDriver {
     if (!this.#active(now)) return false;
     if (sources === null || !sourceAnswerComplete(answer)) {
       this.#unanswered.set(download.name, now + UNANSWERED_WAIT);
+      downloadDiagnostic(6);
       return false;
     }
     this.#unanswered.delete(download.name);
@@ -473,6 +480,7 @@ export class DownloadCoordinatorDriver {
     const fresh = viable.filter((source) => !tried.has(source.identity));
     const chosen = this.queue.pick(fresh.length ? fresh : viable, download.title.originalLanguage);
     if (!chosen) {
+      downloadDiagnostic(7);
       const at = await this.queue.stamp(now);
       const retries = { value: { int: attempt + 1 }, at };
       return this.#write(
@@ -485,6 +493,7 @@ export class DownloadCoordinatorDriver {
         now,
       );
     }
+    downloadDiagnostic(8);
     return this.#start(
       download,
       chosen,
@@ -663,6 +672,7 @@ export class DownloadCoordinatorDriver {
       });
     }
     if (!(await this.#write(download, values, now))) return 'failed';
+    downloadDiagnostic(9);
     for (const other of entries)
       if (other.identity !== identity)
         await this.queue.cancelEntryIfSafe(
@@ -762,6 +772,7 @@ export class DownloadCoordinatorDriver {
         await this.queue.effects.cancel(this.queue.entryUrl(download, entry) ?? entry.url, false);
       return 'failed';
     }
+    if (added.length) downloadDiagnostic(10);
     for (const identity of decided.cancel) {
       if (identity === download.release.identity) await this.queue.cancelIfSafe(download);
       else {
@@ -847,6 +858,7 @@ export class DownloadCoordinatorDriver {
     await this.queue.cancelIfSafe(download);
     this.queue.clocks.delete(download.name);
     await this.queue.add(download.name, chosen.url);
+    downloadDiagnostic(11);
     return true;
   }
 }

@@ -37,6 +37,14 @@ export const DOWNLOAD_SOURCE_SNAPSHOT_MS = 30_000;
 export const DOWNLOAD_ENTRY_RECOVERY_MS = 60_000;
 const DOWNLOAD_SOURCE_SNAPSHOTS = 64;
 
+/**
+ * Fixed privacy-safe console diagnostics. Codes 1–3 are failures (activation, alternate activation, cancel policy);
+ * 4–11 are holder lifecycle observations (Hearth miss/start, retry incomplete/empty/pick, take, widen, fallback).
+ * Never add a ticket, title, label, provider response, header, body or arbitrary error to this payload.
+ */
+export const downloadDiagnostic = (code: number): void =>
+  console[code < 4 ? 'warn' : 'info']('den: download', code);
+
 export const downloadPollDelay = (quiet: number): number =>
   Math.min(DOWNLOAD_POLL_MS * 2 ** Math.max(0, quiet), DOWNLOAD_POLL_MAX_MS);
 
@@ -351,7 +359,7 @@ export class DownloadCoordinator {
       }
       this.changed();
     } catch {
-      return;
+      downloadDiagnostic(1);
     }
   }
 
@@ -397,7 +405,9 @@ export class DownloadCoordinator {
     );
     if (!saved) return false;
     this.changed();
-    void this.addEntry(download.name, source.identity, source.url).catch(() => undefined);
+    void this.addEntry(download.name, source.identity, source.url).catch(() =>
+      downloadDiagnostic(2),
+    );
     return true;
   }
 
@@ -742,6 +752,7 @@ export class DownloadCoordinator {
         ...(identity ? { identity } : {}),
       });
     } catch {
+      downloadDiagnostic(3);
       return false;
     }
   }

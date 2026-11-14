@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ClockStore } from './clockStore';
 import {
   DOWNLOAD_ENTRY_RECOVERY_MS,
   DownloadCoordinator,
+  downloadDiagnostic,
   downloadIsInFlight,
   downloadPollDelay,
 } from './downloadCoordinator';
@@ -10,6 +11,7 @@ import { DownloadCoordinatorDriver } from './downloadCoordinatorDriver';
 import {
   clockValue,
   downloadName,
+  LEASE_ROW,
   raceValue,
   readDownload,
   releaseValue,
@@ -20,7 +22,7 @@ import {
 } from './downloadRows';
 import { source, testLog } from './downloadTestLog';
 import type { Preparation } from './titleSources';
-import type { SettingsRow, Stamp } from './wire';
+import type { DocumentRow, SettingsRow, Stamp } from './wire';
 
 const DEVICE = 'bbbbbbbbbbbbbbbb';
 const TV = 'aaaaaaaaaaaaaaaa';
@@ -48,11 +50,14 @@ const second = source('Rebecka.S02E03.1080p.WEB-DL.mkv', {
   seeders: 20,
 });
 
-function clock(options: { gate?: Promise<void>; issued?: Stamp[] } = {}): ClockStore {
+function clock(
+  options: { gate?: Promise<void>; issued?: Stamp[]; starting?: () => void } = {},
+): ClockStore {
   let last: Stamp = [0, 0, DEVICE];
   return {
     device: DEVICE,
     async issue(now = Date.now()) {
+      options.starting?.();
       await options.gate;
       last = now > last[0] ? [now, 0, DEVICE] : [last[0], last[1] + 1, DEVICE];
       options.issued?.push([...last]);
@@ -156,6 +161,24 @@ function racedRow(
 }
 
 describe('DownloadCoordinator', () => {
+  it('emits only fixed privacy-safe download diagnostic codes', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    for (let code = 1; code <= 11; code++) downloadDiagnostic(code);
+
+    expect(warn.mock.calls).toEqual([
+      ['den: download', 1],
+      ['den: download', 2],
+      ['den: download', 3],
+    ]);
+    expect(info.mock.calls).toEqual(
+      Array.from({ length: 8 }, (_, index) => ['den: download', index + 4]),
+    );
+    warn.mockRestore();
+    info.mockRestore();
+  });
+
   it('has the same bounded polling backoff without page state', () => {
     expect(downloadPollDelay(0)).toBe(5_000);
     expect(downloadPollDelay(3)).toBe(40_000);
@@ -358,6 +381,130 @@ describe('DownloadCoordinator', () => {
     const kept = readDownload(shared.log.settings(NAME)!)!;
     expect(kept.release.identity).toBe(first.identity);
     expect(kept.race.entries).toHaveLength(1);
+    expect(shared.writes.filter((write) => write === `writeAt set:${NAME}`)).toEqual([]);
+  });
+
+  it('does not acquire a lease after profile replacement during the durable stamp', async () => {
+    const shared = testLog([stalledRow()]);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const issuing = new Promise<void>((resolve) => (started = resolve));
+    let current = true;
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock({ gate, starting: () => started() }),
+      effects(),
+      { now: () => T0 + MINUTE, monotonicNow: () => 0 },
+    );
+
+    const running = new DownloadCoordinatorDriver(queue).run({
+      now: T0 + MINUTE,
+      observedFor: 0,
+      current: () => current,
+    });
+    await issuing;
+    current = false;
+    release();
+
+    await expect(running).resolves.toBe(false);
+    expect(shared.log.settings(LEASE_ROW)).toBeUndefined();
+    expect(shared.writes).toEqual([]);
+  });
+
+  it('does not acquire a lease after another holder takes it during the durable stamp', async () => {
+    const shared = testLog([stalledRow()]);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const issuing = new Promise<void>((resolve) => (started = resolve));
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock({ gate, starting: () => started() }),
+      effects(),
+      { now: () => T0 + MINUTE, monotonicNow: () => 0 },
+    );
+    const running = new DownloadCoordinatorDriver(queue).run({
+      now: T0 + MINUTE,
+      observedFor: 0,
+    });
+
+    await issuing;
+    shared.land({
+      kind: 'set',
+      schema: 2,
+      name: LEASE_ROW,
+      values: {
+        lease: { value: { strings: [TV, '1'] }, at: [T0 + MINUTE, 0, TV] },
+      },
+    });
+    release();
+
+    await expect(running).resolves.toBe(false);
+    expect(shared.log.settings(LEASE_ROW)?.values.lease?.value).toEqual({ strings: [TV, '1'] });
+    expect(shared.writes).toEqual([]);
+  });
+
+  it('does not prune a watched download after losing the lease during its durable stamp', async () => {
+    const now = T0 + 3 * 24 * 60 * MINUTE;
+    const announced = withValues(stalledRow(), {
+      announced: { value: { bool: true }, at: [T0, 1, TV] },
+    });
+    const shared = testLog([announced]);
+    const watched: DocumentRow = {
+      format: 4,
+      kind: 'season',
+      title: { type: 'tv', id: title.mediaId },
+      season: title.season,
+      seasonReset: null,
+      episodes: {
+        [title.episode]: {
+          progress: { value: 1, at: [T0 + MINUTE, 0, TV], viewing: 0 },
+          imported: false,
+          plays: {},
+          cleared: null,
+        },
+      },
+    };
+    shared.log.documentNamed = (name) =>
+      name === `season:tv:${title.mediaId}:${title.season}` ? watched : undefined;
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const issuing = new Promise<void>((resolve) => (started = resolve));
+    const baseClock = clock();
+    let issues = 0;
+    const heldClock: ClockStore = {
+      ...baseClock,
+      async issue(at) {
+        if (++issues === 2) {
+          started();
+          await gate;
+        }
+        return baseClock.issue(at);
+      },
+    };
+    const queue = new DownloadCoordinator(
+      shared.log,
+      heldClock,
+      { ...effects(), prepare: async () => ({ state: 'ready' }) },
+      { now: () => now, monotonicNow: () => 0 },
+    );
+    const running = new DownloadCoordinatorDriver(queue).run({ now, observedFor: 0 });
+
+    await issuing;
+    const lease = shared.log.settings(LEASE_ROW)!;
+    shared.land({
+      ...lease,
+      values: {
+        ...lease.values,
+        lease: { value: { strings: [TV, '999'] }, at: [now + 1, 0, TV] },
+      },
+    });
+    release();
+
+    await expect(running).resolves.toBe(false);
+    expect(readDownload(shared.log.settings(NAME)!)?.release.identity).toBe(first.identity);
     expect(shared.writes.filter((write) => write === `writeAt set:${NAME}`)).toEqual([]);
   });
 
