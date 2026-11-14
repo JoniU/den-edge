@@ -317,5 +317,9 @@ if (process.argv.includes('--capture')) {
   // it supersedes) and the host's "own settings" mark and revoke warning bring the graph to 101,232 in CI, in the
   // grants module and the lazy Sharing settings; one leave request is added, only on a redeem that supersedes a grant.
   // Allow the next 128-byte boundary past it, retaining 144.
-  if (coreTotalDelta > 101376) throw new Error('Browser total JS/CSS budget exceeded');
+  // Learning a remote link from playback (raised only on two clean sessions, the history kept through a probe, a
+  // short stall in the opening seconds not held against it) and the 60 s start hold bring the graph to 101,467 in
+  // CI, in the remux and playback-stats modules; it adds no request, timer or storage key. Allow 256 bytes, since the
+  // next 128-byte boundary would retain only 37: 165 retained.
+  if (coreTotalDelta > 101632) throw new Error('Browser total JS/CSS budget exceeded');
 }
