@@ -64,6 +64,9 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'Add Den Scout in': 'Añadir Den Scout en',
   'Add manually': 'Agregar manualmente',
   'Add plugin': 'Agregar complemento',
+  'Add your TorBox': 'Añade tu TorBox',
+  'Playback uses the shared TorBox. Add your own for faster, direct streaming.':
+    'La reproducción usa el TorBox compartido. Añade el tuyo para una transmisión directa y más rápida.',
   'Add-ons can see what you browse and choose what plays. An Apple TV may ask you to approve a new one.':
     'Los complementos pueden ver lo que navegas y elegir lo que se reproduce. Un Apple TV puede pedirle que apruebe uno nuevo.',
   Addiction: 'adicción',

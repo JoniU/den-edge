@@ -61,6 +61,9 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'Add Den Scout in': 'Lägg till Den Scout',
   'Add manually': 'Lägg till manuellt',
   'Add plugin': 'Lägg till plugin',
+  'Add your TorBox': 'Lägg till din TorBox',
+  'Playback uses the shared TorBox. Add your own for faster, direct streaming.':
+    'Uppspelningen använder den delade TorBox. Lägg till din egen för snabbare, direkt streaming.',
   'Add-ons can see what you browse and choose what plays. An Apple TV may ask you to approve a new one.':
     'Tillägg kan se vad du bläddrar i och välja vad som ska spelas. En Apple TV kan be dig att godkänna en ny.',
   Addiction: 'Beroende',
