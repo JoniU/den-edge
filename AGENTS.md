@@ -1,5 +1,14 @@
 # Working in den-edge
 
+## Releasing and deploying
+
+- A merge to `main` deploys nothing. A release is `scripts/release.sh X.Y.Z`; it tags only a `main` commit whose CI
+  passed, and the tag workflow promotes that same image. Never tag or push a `v*` tag by hand.
+- Production picks up a published release within about a day on its own. Deploying sooner or rolling back needs
+  homelab shell access; if you don't have it, say the release is published and awaiting the daily deploy, not
+  that it is live. The full path is in the README's "From merge to running".
+- Release only when asked: a tag ships to every household's browser.
+
 ## Testing
 
 - Do not add a regression test mechanically for every change. Trivial styling changes, copy edits, and straightforward substitutions of an existing shared component usually need the relevant static checks, not a new test.
