@@ -125,7 +125,11 @@ export interface Probe {
   apple?: boolean;
 }
 
-export function browserProbe(): Probe {
+/**
+ * This browser's answers. `native`: the session plays in the element's own HLS player (Safari, Samsung's AVPlay,
+ * webOS), about which a MediaSource append says nothing, so none is made.
+ */
+export function browserProbe({ native = false }: { native?: boolean } = {}): Probe {
   const element = document.createElement('video');
   const source =
     globalThis.MediaSource ??
@@ -141,7 +145,7 @@ export function browserProbe(): Probe {
     decodesAudio: capabilities
       ? async (audio) => (await capabilities.decodingInfo({ type, audio })).supported
       : undefined,
-    appendsAudio: globalThis.MediaSource ? appendsTo(globalThis.MediaSource) : undefined,
+    appendsAudio: globalThis.MediaSource && !native ? appendsTo(globalThis.MediaSource) : undefined,
     apple: globalThis.navigator?.vendor?.startsWith('Apple') ?? false,
   };
 }
@@ -231,7 +235,8 @@ export async function playable(probe: Probe = browserProbe()): Promise<Playable>
     flac: probe.supports('audio/mp4; codecs="fLaC"'),
     // Media Capabilities is asked first, and the append has the last word: Chrome 156 on macOS answered yes to
     // 8-channel AAC there and then refused a release's 7.1 AAC track at its first segment
-    // (`mediaSourceRequiresReset`). `AAC71_FRAGMENT` is refused the same way, and its 5.1 twin is taken.
+    // (`mediaSourceRequiresReset`). Its SourceBuffer takes 7.1 in channel configuration 7 and refuses configuration
+    // 12 (`AAC71_FRAGMENT`); this report has one `aac71`, so it claims only what holds for both.
     aac71:
       (await decodesAudio(probe, {
         contentType: 'audio/mp4; codecs="mp4a.40.2"',
@@ -270,9 +275,10 @@ async function decodesAudio(probe: Probe, audio: AudioConfiguration): Promise<bo
 }
 
 /**
- * 30 ms of silent 7.1 AAC-LC at 48 kHz as fragmented MP4 (init and one fragment), from
- * `ffmpeg -f lavfi -i anullsrc=channel_layout=7.1:sample_rate=48000 -t 0.03 -c:a aac
- * -movflags frag_keyframe+empty_moov+default_base_moof -f mp4`.
+ * 30 ms of silent 7.1 AAC-LC at 44.1 kHz as fragmented MP4 (init and one fragment), naming channel configuration 12,
+ * from `ffmpeg -f lavfi -i anullsrc=channel_layout=7.1 -t 0.03 -c:a aac
+ * -movflags frag_keyframe+empty_moov+default_base_moof -f mp4` with libavcodec 63. libavcodec 62 writes configuration
+ * 7 for the same command, which Chrome 156's SourceBuffer takes: regenerate with 63 or this probes something else.
  */
 const AAC71_FRAGMENT = Uint8Array.from(
   atob(
@@ -291,11 +297,18 @@ function appendsTo(Source: typeof MediaSource) {
       const source = new Source();
       const element = document.createElement('video');
       const url = URL.createObjectURL(source);
+      let settled = false;
       const timer = setTimeout(() => done(false), APPEND_MS);
       const done = (taken: boolean) => {
+        // A refusal fires `error` and then `updateend`.
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         URL.revokeObjectURL(url);
+        // Removing `src` alone left the MediaSource attached and open after a taken append (Chrome 156); `load()`
+        // detaches it.
         element.removeAttribute('src');
+        element.load();
         resolve(taken);
       };
       source.addEventListener(

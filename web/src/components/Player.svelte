@@ -23,7 +23,7 @@
   import type { Title } from '../lib/library';
   import type { Episode as EpisodeDetail } from '../lib/detail';
   import { PlaybackProgressReporter } from '../lib/playbackProgress';
-  import { playable, withoutRefused, type Playable } from '../lib/playable';
+  import { browserProbe, playable, withoutRefused, type Playable } from '../lib/playable';
   import {
     autoSubtitleLanguage,
     preferredSubtitleTrack,
@@ -850,7 +850,9 @@
           navigator.languages,
           subtitleLanguages.map((language) => ({ language })),
         ) !== null);
-    const claimed = (decodes ??= await playable());
+    // The element's own HLS player takes what a MediaSource append does not decide.
+    const nativePlayer = samsungAvplay || webOsNative || nativeHls(document.createElement('video'));
+    const claimed = (decodes ??= await playable(browserProbe({ native: nativePlayer })));
     if (ended) return false;
     // What this browser hasn't disproved. After a refusal it asks as something that takes no HEVC, no HDR and no
     // E-AC-3, so den-remux copies another release this browser does decode — never converting one mid-film.
@@ -890,11 +892,7 @@
       startAt: at,
       maxBitrate,
       // For den-remux's log only, so a session can be told apart by the player that played it.
-      player: castMode
-        ? 'cast'
-        : samsungAvplay || webOsNative || nativeHls(document.createElement('video'))
-          ? 'native'
-          : 'hls.js',
+      player: castMode ? 'cast' : nativePlayer ? 'native' : 'hls.js',
       ...(__DEN_TV_PLATFORM__ === 'webos' || __DEN_TV_PLATFORM__ === 'tizen'
         ? { platform: __DEN_TV_PLATFORM__ }
         : {}),
