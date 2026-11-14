@@ -324,8 +324,17 @@ export interface RememberedLink {
 
 /** How many clean sessions' estimates a raise looks across, and takes the lowest of. */
 export const RECENT_ESTIMATES = 3;
-/** The share of the lowest recent clean estimate a raised link is set to. */
+/** The share of the lowest recent estimate a learned link is set to, raised or lowered. */
 export const RAISED_LINK_SHARE = 0.85;
+/** The fewest clean estimates a raise is taken from: one fast session is a moment, not the link. */
+export const MIN_RAISE_ESTIMATES = 2;
+
+/** The link `recent` vouches for: RAISED_LINK_SHARE of its lowest, once it holds MIN_RAISE_ESTIMATES. */
+function vouchedLink(recent: number[] | undefined): number | undefined {
+  return recent && recent.length >= MIN_RAISE_ESTIMATES
+    ? Math.round(Math.min(...recent) * RAISED_LINK_SHARE)
+    : undefined;
+}
 
 /**
  * How long a link that playback lowered is held before a probe may measure it again: long enough that the next plays
@@ -444,11 +453,12 @@ export function playedSession(
  * from the source den-remux reads and through whatever else the connection carries, and it was 14 Mbit/s against a
  * measured 40 — and 12–16 against a probed 8.75.
  *
- * - An estimate below the remembered link lowers it to the estimate, and a lowered link is held for LOWERED_LINK_MS
- *   only, after which a probe measures it again: a ratchet of bad sessions must not hold a recovered link down.
- * - An estimate at or above it, from a session that never stalled, raises it to RAISED_LINK_SHARE of the lowest of
- *   the last RECENT_ESTIMATES such estimates (kept beside the link as `recent`): the first clean session raises it
- *   on its own, and after that one fast session can't lift it past a slower recent one.
+ * - An estimate below the remembered link lowers it to RAISED_LINK_SHARE of the estimate, and a lowered link is held
+ *   for LOWERED_LINK_MS only, after which a probe measures it again: a ratchet of bad sessions must not hold a
+ *   recovered link down. The estimate joins `recent`, so a later raise starts from it.
+ * - An estimate at or above it, from a session with no stall that counts (`linkStalls`), joins the last
+ *   RECENT_ESTIMATES such estimates (kept beside the link as `recent`); once MIN_RAISE_ESTIMATES are there, the
+ *   link rises to RAISED_LINK_SHARE of their lowest. One fast session — a quiet morning — never raises it alone.
  *   A raised link is a measurement from playback and stands as a probe's does, for LINK_MEMORY_MS.
  *
  * Nothing is changed where nothing was remembered (or at home), nor by evidence that doesn't speak for the link:
@@ -483,14 +493,16 @@ export function learnLink(
     return;
   const kept = rememberedLink(base, now, storage);
   if (kept?.maxBitrate === undefined) return;
+  const recent = [...(kept.recent ?? []), Math.round(bps)].slice(-RECENT_ESTIMATES);
   if (bps < kept.maxBitrate) {
-    rememberLink(base, Math.round(bps), now, storage, true);
+    const lowered = Math.max(ESTIMATE_FLOOR_BPS, Math.round(bps * RAISED_LINK_SHARE));
+    rememberLink(base, lowered, now, storage, true, recent);
     return;
   }
   if (evidence.stalls !== 0) return;
-  const recent = [...(kept.recent ?? []), Math.round(bps)].slice(-RECENT_ESTIMATES);
-  const raised = Math.round(Math.min(...recent) * RAISED_LINK_SHARE);
-  if (raised > kept.maxBitrate) rememberLink(base, raised, now, storage, false, recent);
+  const raised = vouchedLink(recent);
+  if (raised !== undefined && raised > kept.maxBitrate)
+    rememberLink(base, raised, now, storage, false, recent);
   else rememberLink(base, kept.maxBitrate, kept.at, storage, kept.lowered === true, recent);
 }
 
@@ -704,8 +716,11 @@ export async function linkLimit(
   if (holdsLink(kept)) return kept?.maxBitrate;
   const rate = await measureLink(base, fetchImpl, now);
   // A lowered link that has lapsed stands where the probe fails: the last word on the link is still its word.
-  const limit = rate ? Math.round(rate) : kept?.maxBitrate;
-  if (rate) rememberLink(base, limit, Date.now(), storage);
+  if (!rate) return kept?.maxBitrate;
+  // A probe is one short transfer and reads low over a long route; the sessions behind it keep their say, so a
+  // probe replacing a lapsed link neither forgets them nor lands below what they vouch for.
+  const limit = Math.max(Math.round(rate), vouchedLink(kept?.recent) ?? 0);
+  rememberLink(base, limit, Date.now(), storage, false, kept?.recent);
   return limit;
 }
 
