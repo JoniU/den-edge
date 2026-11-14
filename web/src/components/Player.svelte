@@ -433,6 +433,10 @@
   let airPlayTargetChanges = 0;
   let airPlayStartedAt: number | undefined;
   let airPlaySessionSecs = 0;
+  let airPlayProgressTimer: ReturnType<typeof setTimeout> | undefined;
+  let airPlayFallbackSession: Session | undefined;
+  const AIRPLAY_DIRECT_PROGRESS_MS = 12_000;
+  const AIRPLAY_DIRECT_PROGRESS_SECS = 0.5;
   let webControlsVisible = $state(true);
   let webControlsTimer: ReturnType<typeof setTimeout> | undefined;
   /** The top bar, and the timeline with its dock: the pointer over either holds the controls up. */
@@ -1559,7 +1563,11 @@
     subtitleSelectionGeneration += 1;
     subtitleLoadFailure = null;
     session = result;
-    if (webTransport && airPlayActive) airPlayDelivery = result.external ? 'direct' : 'remux';
+    if (webTransport && airPlayActive) {
+      clearAirPlayProgressWatch();
+      airPlayDelivery = result.external ? 'direct' : 'remux';
+      queueMicrotask(watchAirPlayDirectProgress);
+    }
     directWithoutDenSubtitles = result.external === true && !compatibleSubtitles;
     if (!compatibleSubtitles) pendingDirectSubtitleRestore = undefined;
     playbackRouteLog({
@@ -2941,7 +2949,10 @@
         airPlayDelivery ??= session?.external ? 'direct' : 'remux';
         airPlayStartedAt = performance.now();
         clearTimeout(webControlsTimer);
+        watchAirPlayDirectProgress();
       } else {
+        clearAirPlayProgressWatch();
+        airPlayFallbackSession = undefined;
         endAirPlaySession();
         revealWebControls();
       }
@@ -2950,6 +2961,7 @@
     element.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', targetChanged);
     return {
       destroy() {
+        clearAirPlayProgressWatch();
         endAirPlaySession();
         element.removeEventListener('webkitplaybacktargetavailabilitychanged', availability);
         element.removeEventListener('webkitcurrentplaybacktargetiswirelesschanged', targetChanged);
@@ -2975,6 +2987,84 @@
     if (airPlayStartedAt === undefined) return;
     airPlaySessionSecs += (performance.now() - airPlayStartedAt) / 1000;
     airPlayStartedAt = undefined;
+  }
+
+  function clearAirPlayProgressWatch() {
+    clearTimeout(airPlayProgressTimer);
+    airPlayProgressTimer = undefined;
+  }
+
+  async function recoverAirPlayDirect(current: Session): Promise<boolean> {
+    if (session !== current || !current.external || airPlayFallbackSession === current)
+      return false;
+    clearAirPlayProgressWatch();
+    airPlayFallbackSession = current;
+    playbackRouteLog({
+      event: 'recovery',
+      from: 'torbox',
+      to: 'den_remux',
+      stage: played ? 'mid_playback' : 'startup',
+      attempt: directAttempt ?? 'initial',
+    });
+    report();
+    carryPosition();
+    const moved = await begin(
+      { filename: current.release.filename },
+      { transcode: 'never' },
+      current,
+      'fallback',
+      null,
+      true,
+    ).catch((error: unknown): Failure => {
+      console.warn('AirPlay direct recovery got no answer; the direct session remains.', error);
+      return 'unreachable';
+    });
+    if (moved === true) {
+      airPlayFailed = false;
+      airPlayFailReason = undefined;
+      return true;
+    }
+    if (session === current) {
+      airPlayFailed = true;
+      airPlayFailReason = 'media_error';
+    }
+    return false;
+  }
+
+  /**
+   * WebKit can finish an AirPlay handoff even when the receiver never starts the direct media URL. The LG then
+   * stays on its connected screen and emits no media error back to Safari. Preserve direct delivery for receivers
+   * such as Apple TV that advance it; only a playing target whose clock remains still for the whole bound falls
+   * back to the same release through Den Remux.
+   */
+  function watchAirPlayDirectProgress() {
+    clearAirPlayProgressWatch();
+    const current = session;
+    const element = video;
+    if (
+      !webTransport ||
+      !airPlayActive ||
+      !current?.external ||
+      !element ||
+      element.paused ||
+      element.ended ||
+      airPlayFallbackSession === current
+    )
+      return;
+    const position = element.currentTime;
+    airPlayProgressTimer = setTimeout(() => {
+      airPlayProgressTimer = undefined;
+      if (
+        !airPlayActive ||
+        session !== current ||
+        video !== element ||
+        element.paused ||
+        element.ended ||
+        Math.abs(element.currentTime - position) > AIRPLAY_DIRECT_PROGRESS_SECS
+      )
+        return;
+      void recoverAirPlayDirect(current);
+    }, AIRPLAY_DIRECT_PROGRESS_MS);
   }
 
   /** Moves `castFunnel` to `stage`, never back: den-edge's own cast report (`finish()`) names the furthest
@@ -3330,6 +3420,17 @@
     watcher?.spent();
     reportFailure(current, code, message);
     if (current.external) {
+      if (webTransport && airPlayActive) {
+        // The silent-target watchdog may already be replacing this exact session. A late media error from the
+        // outgoing element must not tear it down underneath that in-flight Remux answer.
+        if (airPlayFallbackSession === current) return;
+        const moved = await recoverAirPlayDirect(current);
+        if (!moved && session === current) {
+          letGo();
+          failure = 'source';
+        }
+        return;
+      }
       const recovery = directRecovery(played, directAttempt ?? 'initial');
       // The browser's native error may contain a signed media URL, so log only this closed recovery state. The
       // eventual Hearth refusal, if any, is logged separately with its allow-listed status/code/cause.
@@ -3508,9 +3609,11 @@
     timer = setInterval(() => report(), REPORT_MS);
     // The segment requests playback itself makes already say this viewer is here.
     clearInterval(heartbeat);
+    if (webTransport && airPlayActive) watchAirPlayDirectProgress();
   }
 
   function paused() {
+    if (webTransport && airPlayActive) clearAirPlayProgressWatch();
     if (customTransport) tvPaused = true;
     if (tv) setTvPlaybackActive(false);
     revealWebControls(false);
@@ -4873,6 +4976,8 @@
       airPlayTargetChanges = 0;
       airPlayStartedAt = undefined;
       airPlaySessionSecs = 0;
+      clearAirPlayProgressWatch();
+      airPlayFallbackSession = undefined;
       if (airPlayActive) {
         airPlayFunnel = 'started';
         airPlayStartedAt = performance.now();

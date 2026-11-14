@@ -104,6 +104,20 @@ async function iphone(browser, locale, { airPlay = false } = {}) {
       wireless.set(video, active);
       video.dispatchEvent(new Event('webkitcurrentplaybacktargetiswirelesschanged'));
     };
+    window.holdAirPlayMediaClock = () => {
+      const video = document.querySelector('.player video');
+      if (!video) return;
+      window.airPlayMediaTime = video.currentTime;
+      Object.defineProperty(video, 'currentTime', {
+        configurable: true,
+        get: () => window.airPlayMediaTime,
+        set(value) {
+          window.airPlayMediaTime = value;
+        },
+      });
+      Object.defineProperty(video, 'paused', { configurable: true, get: () => false });
+    };
+    window.advanceAirPlayMediaClock = (seconds) => (window.airPlayMediaTime += seconds);
   }, airPlay);
   return context;
 }
@@ -421,6 +435,74 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
       expect(Object.keys(airPlayReports[0])).toEqual(
         expect.not.arrayContaining(['receiver', 'receiverName', 'url', 'address']),
       );
+    } catch (error) {
+      await savePageTraces();
+      throw error;
+    } finally {
+      contexts.length = 0;
+      await browser.close();
+    }
+  });
+
+  test('a connected AirPlay target whose TorBox clock does not advance falls back to Den Remux', async () => {
+    const browser = await webkit.launch();
+    try {
+      const page = await (await iphone(browser, 'en-US', { airPlay: true })).newPage();
+      const airPlayReports = [];
+      const playback = await guestPlayer(page, {
+        originalLanguage: 'en',
+        hearth: (body) => ({ json: body.directFailed ? remuxAnswer : torboxAnswer }),
+        airPlayReports,
+      });
+      await page.clock.install();
+      await page.evaluate(() => {
+        window.holdAirPlayMediaClock();
+        window.setAirPlayAvailability('available');
+        window.setAirPlayTarget(true);
+      });
+
+      await page.clock.runFor(12_001);
+      await expect.poll(() => playback.length).toBe(2);
+      expect(playback[1]).toMatchObject({ directFailed: true, filename: 'fixture.mkv' });
+      await expect(page.locator('.player video')).toHaveAttribute('controls', '');
+      await expect(page.locator('.player nav.web-transport')).toHaveCount(0);
+
+      await page.evaluate(() => window.setAirPlayTarget(false));
+      await expect(page.getByTestId('playback-source')).toHaveText('Den Remux');
+      await page.getByRole('button', { name: 'Close player' }).tap();
+      await expect
+        .poll(() => airPlayReports.find((report) => report.kind === 'airplay'))
+        .toMatchObject({ kind: 'airplay', reached: 'started', delivery: 'remux' });
+    } catch (error) {
+      await savePageTraces();
+      throw error;
+    } finally {
+      contexts.length = 0;
+      await browser.close();
+    }
+  });
+
+  test('an advancing AirPlay target keeps its TorBox direct stream', async () => {
+    const browser = await webkit.launch();
+    try {
+      const page = await (await iphone(browser, 'en-US', { airPlay: true })).newPage();
+      const playback = await guestPlayer(page, {
+        originalLanguage: 'en',
+        hearth: () => ({ json: torboxAnswer }),
+      });
+      await page.clock.install();
+      await page.evaluate(() => {
+        window.holdAirPlayMediaClock();
+        window.setAirPlayAvailability('available');
+        window.setAirPlayTarget(true);
+      });
+      await page.clock.runFor(6_000);
+      await page.evaluate(() => window.advanceAirPlayMediaClock(1));
+      await page.clock.runFor(6_001);
+
+      expect(playback).toHaveLength(1);
+      await page.evaluate(() => window.setAirPlayTarget(false));
+      await expect(page.getByTestId('playback-source')).toHaveText('TorBox');
     } catch (error) {
       await savePageTraces();
       throw error;
