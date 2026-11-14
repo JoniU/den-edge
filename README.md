@@ -14,6 +14,13 @@ your personal TorBox-backed Den configuration, and centralized Remux subject to 
 limits. The grant must share the combined `den` addon; a legacy Scout-only share does not enable the full flow. No
 LAN or tailnet access is needed.
 
+Chromecast testing is supported from the default contributor URL in desktop Chrome: the centralized HTTPS Cast
+sender explicitly allows the exact `http://localhost:5173` parent origin, and playback remains on the
+guest-authorized centralized path. The browser and Chromecast still need to be on the same local network. For
+Android Chrome, connect the phone over ADB and run `adb reverse tcp:5173 tcp:5173` before opening that same URL;
+without the reverse, phone-localhost names the phone itself. A custom development port is intentionally not trusted
+by the production Cast sender.
+
 Guest credentials are browser-origin-local. For a new guest, paste the invite code or full production link into
 **Settings → Sharing → Enter invite code** on `localhost`; opening a `d.oxy.fi` invite normally redeems it only on
 the production origin. If the friend already redeemed it there, use production **Settings → Use Den on your phone**,
@@ -43,7 +50,10 @@ REMUX_EDGE_SECRET=local-development-secret \
 ```
 
 Start the combined Hearth process with the same `REMUX_EDGE_SECRET=local-development-secret`; a standalone Remux
-calls the corresponding setting `EDGE_SECRET`. Use a real random secret outside loopback-only development.
+calls the corresponding setting `EDGE_SECRET`. Hearth's `REMUX_SCOUT_ORIGINS` must also include the bare origin in
+the saved Den install URL (normally `http://localhost:5173` for this bare-host development flow), and Hearth must be
+able to reach that origin. The portable Hearth self-host setup fills its own public origin automatically. Use a real
+random secret outside loopback-only development.
 The contributor supplies their own TorBox account through Hearth's `/den/configure` UI. Centralized guest authority
 cannot be reused by local Edge; use a local Hearth or focused fixtures for backend integration work.
 
@@ -53,6 +63,7 @@ cannot be reused by local Edge; use a local Hearth or focused fixtures for backe
 | Atlas | Centralized public relay | Public relay unless overridden |
 | Hearth/Scout | Centralized, grant-authorized | Configure a local Hearth |
 | Reel/Remux | Centralized when the grant allows it | Self-host for service changes |
+| Chromecast | Centralized sender and playback from Chrome | Configure an HTTPS Cast sender and receiver-reachable media origin |
 
 Den's sync relay, on the homelab. It relays pairings between an Apple TV and another device, carries a paired
 device's sealed messages to the TV, keeps the library's current encrypted state and the TV's encrypted backup, and

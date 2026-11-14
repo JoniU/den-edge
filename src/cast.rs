@@ -78,7 +78,7 @@ impl Subtitles {
 /// messages.
 const PARENT_ORIGINS: &str = match option_env!("DEN_PARENT_ORIGINS") {
     Some(value) => value,
-    None => "https://d.oxy.fi",
+    None => "https://d.oxy.fi http://localhost:5173",
 };
 
 /// A Cast application id as Google's console issues one (eight hex digits), uppercased; None for anything else.
@@ -269,6 +269,11 @@ mod tests {
              img-src 'self' https: data:; media-src https: blob:; connect-src https:; object-src 'none'; \
              base-uri 'none'; form-action 'none'; frame-ancestors {PARENT_ORIGINS}"
         )
+    }
+
+    #[test]
+    fn the_default_contributor_origin_may_frame_the_cast_sender() {
+        assert!(PARENT_ORIGINS.split_ascii_whitespace().any(|origin| origin == "http://localhost:5173"));
     }
 
     /// A den-edge serving the web app on `d.oxy.fi` and the Cast page on `cast.example`.

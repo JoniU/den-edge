@@ -11,10 +11,13 @@
 - `./scripts/dev.mjs --local-edge` is for Rust/backend changes. It binds Edge to loopback, keeps persistent isolated
   state in `.dev/data`, and has no authority over centralized Hearth. Configure a local Hearth or fixtures when a
   backend test needs services. A local Hearth flow must bootstrap the library in the default `open` mode, restart
-  with `NEW_LIBRARIES=members`, and share `REMUX_EDGE_SECRET` with combined Hearth (or Remux's `EDGE_SECRET`). Never
-  restore private `192.168.*` defaults.
+  with `NEW_LIBRARIES=members`, share `REMUX_EDGE_SECRET` with combined Hearth (or Remux's `EDGE_SECRET`), and include
+  the saved Den install origin in Hearth's `REMUX_SCOUT_ORIGINS`. Never restore private `192.168.*` defaults.
 - Every Playwright/E2E server must retain `DEN_E2E=1`; real-service overrides are forbidden there. Explicit
   standalone addon proxies must strip Edge membership, grant, token, cookie, and authorization headers.
+- The centralized Cast sender deliberately trusts only the exact contributor origin `http://localhost:5173` in
+  addition to production/deployment origins. Keep its Rust CSP and bundled `VITE_DEN_PARENT_ORIGINS` allowlists in
+  sync; never widen this active controller to arbitrary localhost ports.
 
 ## Testing
 

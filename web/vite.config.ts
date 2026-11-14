@@ -312,7 +312,7 @@ export default defineConfig({
       : {}),
   },
   test: {
-    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'cast/src/**/*.test.ts', 'scripts/**/*.test.ts'],
     setupFiles: ['test/setup-sync.ts'],
   },
 });
