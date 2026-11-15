@@ -116,7 +116,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, mut req: Request) -> Res
     // let the generic preflight answer advertise its private candidate-token header.
     let route = if route_disabled { "other" } else { route_label(&path) };
     let origin = allowed_origin(&state, &req);
-    let bulk = !is_control(route);
+    let bulk = !is_control(route, &method);
     let admission = admit(&state, bulk)
         .await
         .map(|admission| AdmissionSlot { admission: Arc::new(std::sync::Mutex::new(Some(admission))), bulk });
@@ -129,6 +129,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, mut req: Request) -> Res
             Some(_)
                 if method == Method::OPTIONS
                     && !route_disabled
+                    && route != "/metrics"
                     && req.headers().contains_key(header::ACCESS_CONTROL_REQUEST_METHOD) =>
             {
                 preflight()
@@ -289,7 +290,10 @@ impl Drop for Admission {
 
 /// Control is deliberately an allowlist. An unknown path, a newly added route, or a typo must not inherit the
 /// reserved lane merely because it was not classified yet.
-fn is_control(route: &str) -> bool {
+fn is_control(route: &str, method: &Method) -> bool {
+    if route == "/metrics" {
+        return matches!(*method, Method::GET | Method::HEAD);
+    }
     matches!(
         route,
         "/health"
@@ -297,7 +301,6 @@ fn is_control(route: &str) -> bool {
             | "/config"
             | "/capabilities/profiles"
             | "/routes"
-            | "/metrics"
             | "/link"
             | "/inbox/append"
             | "/inbox/pending"
@@ -611,6 +614,9 @@ async fn dispatch(
     if !face.serves(&path) {
         return bare_json(StatusCode::NOT_FOUND, &error("not_found"));
     }
+    if route == "/metrics" {
+        return metrics_response(state, &req);
+    }
     // The hosted TV app calls its own origin, so this name answers every route a device or the web app may call,
     // as the LAN and tailnet names do, and serves the TV bundle's files where no route matches. Every request
     // the app made to another name was cross-origin and paid a CORS preflight per distinct URL — one per title on
@@ -782,17 +788,6 @@ async fn dispatch(
             };
             revalidated(crate::routes::to_json(table).to_string(), req.headers(), ENV_EDGE)
         }
-        "/metrics" if metrics_authorized(state, &req) => {
-            let mut resp =
-                Response::new(Body::from(state.metrics.render() + &crate::library::visitor_metrics(state)));
-            resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            resp.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
-            );
-            resp
-        }
-        "/metrics" => bare_json(StatusCode::NOT_FOUND, &error("not_found")),
         p => match if face == Face::Tv { &state.tv_web_dir } else { &state.web_dir } {
             Some(_) if matches!(*req.method(), Method::GET | Method::HEAD) => {
                 let query = req.uri().query().map(str::to_owned);
@@ -1249,6 +1244,28 @@ fn metrics_authorized(state: &AppState, req: &Request) -> bool {
     constant_time_eq(given.trim().as_bytes(), want.as_bytes())
 }
 
+fn metrics_response(state: &AppState, req: &Request) -> Response {
+    if !metrics_authorized(state, req) {
+        return bare_json(StatusCode::NOT_FOUND, &error("not_found"));
+    }
+    let mut response = match *req.method() {
+        Method::GET => {
+            Response::new(Body::from(state.metrics.render() + &crate::library::visitor_metrics(state)))
+        }
+        Method::HEAD => Response::new(Body::empty()),
+        _ => {
+            let mut response = bare_json(StatusCode::METHOD_NOT_ALLOWED, &error("method_not_allowed"));
+            response.headers_mut().insert(header::ALLOW, HeaderValue::from_static("GET, HEAD"));
+            return response;
+        }
+    };
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"));
+    response
+}
+
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
@@ -1488,14 +1505,14 @@ pub mod tests {
         assert_eq!(route_label("/reel/transport"), "/reel/transport");
         assert_eq!(allowed_methods("/reel/transport"), Some(&[Method::POST][..]));
         assert_eq!(body_cap("/reel/transport"), crate::relay::REEL_TRANSPORT_BYTES);
-        assert!(is_control("/reel/transport"));
+        assert!(is_control("/reel/transport", &Method::POST));
     }
 
     #[test]
     fn profiles_capability_is_a_get_only_control_route() {
         assert_eq!(route_label("/capabilities/profiles"), "/capabilities/profiles");
         assert_eq!(allowed_methods("/capabilities/profiles"), Some(&[Method::GET][..]));
-        assert!(is_control("/capabilities/profiles"));
+        assert!(is_control("/capabilities/profiles", &Method::GET));
         assert!(Face::Web.serves("/capabilities/profiles"));
         for face in [Face::Api, Face::Both, Face::Invalid] {
             assert!(!face.serves("/capabilities/profiles"), "{face:?}");
@@ -1538,7 +1555,7 @@ pub mod tests {
         assert_eq!(body_cap("/den/:config/playback"), 16 * 1024);
         assert_eq!(allowed_methods("/den/:config/cast-subtitle"), Some(&[Method::POST][..]));
         assert_eq!(body_cap("/den/:config/cast-subtitle"), crate::cast::MAX_SUBTITLE_BYTES);
-        assert!(!is_control("/den/:config/playback"));
+        assert!(!is_control("/den/:config/playback", &Method::POST));
         for (path, at) in [
             ("/den/configure", "configure"),
             ("/den/validate", "validate"),
@@ -2473,16 +2490,52 @@ pub mod tests {
         );
         assert!(text.contains(r#"den_edge_request_admission_active{class="control"}"#), "{text}");
         assert!(text.contains(r#"den_edge_request_admission_refused_total{class="bulk"}"#), "{text}");
+
+        let head = h.send("HEAD", "/metrics", None, &[("authorization", "Bearer s3cret")]).await;
+        assert_eq!(head.status(), StatusCode::OK);
+        assert!(body_text(head).await.is_empty(), "HEAD rendered or sent metrics");
+
+        for method in ["POST", "PUT", "DELETE", "OPTIONS"] {
+            assert_eq!(
+                h.send(method, "/metrics", None, &[]).await.status(),
+                StatusCode::NOT_FOUND,
+                "{method}"
+            );
+            let refused = h.send(method, "/metrics", None, &[("authorization", "Bearer s3cret")]).await;
+            assert_eq!(refused.status(), StatusCode::METHOD_NOT_ALLOWED, "{method}");
+            assert_eq!(refused.headers()[header::ALLOW], "GET, HEAD", "{method}");
+        }
     }
 
     #[test]
     fn only_known_small_routes_use_the_control_lane() {
         for route in ["/health", "/inbox/append", "/pair/:sid/:slot", "/lib/:id", "/oauth/token"] {
-            assert!(is_control(route), "{route}");
+            assert!(is_control(route, &Method::GET), "{route}");
         }
         for route in ["other", "/atlas", "/mcp", "/lib/:id/batch", "/lib/:id/changes", "/tmdb"] {
-            assert!(!is_control(route), "{route}");
+            assert!(!is_control(route, &Method::GET), "{route}");
         }
+        assert!(is_control("/metrics", &Method::GET));
+        assert!(is_control("/metrics", &Method::HEAD));
+        assert!(!is_control("/metrics", &Method::POST));
+        assert!(!is_control("/metrics", &Method::OPTIONS));
+    }
+
+    #[tokio::test]
+    async fn an_unsupported_metrics_method_releases_its_bulk_permit_with_the_body() {
+        let mut h = Harness::new();
+        let state = Arc::get_mut(&mut h.state).unwrap();
+        state.metrics_token = Some("s3cret".into());
+        state.request_slots = Arc::new(tokio::sync::Semaphore::new(2));
+        state.bulk_request_slots = Arc::new(tokio::sync::Semaphore::new(1));
+
+        let response = h.send("POST", "/metrics", None, &[("authorization", "Bearer s3cret")]).await;
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(h.state.bulk_request_slots.available_permits(), 0);
+        assert_eq!(h.send("GET", "/nope", None, &[]).await.status(), StatusCode::SERVICE_UNAVAILABLE);
+        drop(response);
+        assert_eq!(h.state.bulk_request_slots.available_permits(), 1);
+        assert_eq!(h.send("GET", "/nope", None, &[]).await.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
