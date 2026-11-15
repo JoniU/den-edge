@@ -323,5 +323,8 @@ if (process.argv.includes('--capture')) {
   // next 128-byte boundary would retain only 37: 165 retained.
   // Merging the Kid direct-read authority brings the combined graph to 101,667. Its measured consolidation and
   // rejected lazy alternatives are recorded in AGENTS.md; allow the next 128-byte boundary, retaining 93.
-  if (coreTotalDelta > 101760) throw new Error('Browser total JS/CSS budget exceeded');
+  // Watchlist desired-state Retry adds 442 gzip bytes to the complete graph while startup shrinks by seven bytes.
+  // It stays in the existing lazy Watchlist chunk; another split would add a request after failure without reducing
+  // the complete graph. Allow the next useful 128-byte boundary, retaining 146 bytes on the matched build.
+  if (coreTotalDelta > 102272) throw new Error('Browser total JS/CSS budget exceeded');
 }

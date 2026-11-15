@@ -72,6 +72,13 @@
     ).denTestReleaseLibrarySettings = releaseSettings;
   /** Every action refused, as a library that can't be reached refuses it. */
   const failing = params.has('failing');
+  let refusedWrites = params.has('fail-write-once') ? 1 : 0;
+  const refuseWrite = () => {
+    if (failing) return true;
+    if (!refusedWrites) return false;
+    refusedWrites -= 1;
+    return true;
+  };
   let releaseProgressReply = () => {};
   const progressReplyGate = params.has('hold-final-progress-reply')
     ? new Promise<void>((resolve) => (releaseProgressReply = resolve))
@@ -391,7 +398,7 @@
      */
     writeActions: async (journals: SettingsRow[]) => {
       await writeGate;
-      if (failing) return false;
+      if (refuseWrite()) return false;
       for (const journal of journals) {
         const event = trackerEvent(journal);
         put(event ? event.after : journal);
@@ -401,7 +408,7 @@
     /** One action, as `act` writes it (Remove, Mark watched on a movie): its journal's row, as `writeActions` keeps them. */
     writeAction: async (journal: SettingsRow) => {
       await writeGate;
-      if (failing) return null;
+      if (refuseWrite()) return null;
       const event = trackerEvent(journal);
       const row = event ? event.after : journal;
       put(row);

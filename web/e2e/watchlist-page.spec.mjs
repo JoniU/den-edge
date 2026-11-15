@@ -150,6 +150,34 @@ test('the actual Watchlist surface renders Visitor-local activity', async () => 
   }
 });
 
+test('a refused Watchlist action keeps its desired state and retries it once', async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  });
+  try {
+    const page = await openWatchlist(browser, 1280, '&fail-write-once');
+    const watchlist = page.getByRole('region', { name: 'Watchlist', exact: true });
+    const movie = watchlist.getByRole('link', { name: /Movie 1002/ });
+    await movie.hover();
+    await watchlist
+      .getByRole('button', { name: 'Remove from Watchlist Movie 1002', exact: true })
+      .click();
+
+    const failure = page.getByRole('alert');
+    await expect(failure).toContainText(
+      'Couldn’t save that. Check that this device is on your network.',
+    );
+    const retry = failure.getByRole('button', { name: 'Try again', exact: true });
+    await expect(retry).toBeFocused();
+    await retry.click();
+
+    await expect(watchlist.getByText('Movie 1002')).toHaveCount(0);
+    await expect(failure).toHaveCount(0);
+  } finally {
+    await browser.close();
+  }
+});
+
 for (const width of [393, 1280]) {
   test(`the Watchlist page lists continue watching, the watchlist by type and the watched history at ${width}px`, async () => {
     const browser = await chromium.launch({
