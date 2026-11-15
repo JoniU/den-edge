@@ -202,12 +202,52 @@ it('a compound reset keeps the pending marker through the install and drops it o
   expect(writePendingReset(marker)).toBe(true);
   expect(readPendingReset()).toEqual(marker);
 
-  await tab.rekey(KEYS.libraryKey, 'bmV3', true);
+  await expect(tab.rekey(KEYS.libraryKey, 'bmV3', true)).resolves.toBe(true);
   expect(readLinks().map((link) => link.libraryKey)).toEqual(['bmV3']);
   // Installed, but the reset is not over: the marker is what finds the worker's journal after a reload.
   expect(readPendingReset()).toEqual(marker);
 
-  await tab.releaseRekeyed(KEYS.libraryKey);
+  await expect(tab.releaseRekeyed(KEYS.libraryKey)).resolves.toBe(true);
+  expect(readPendingReset()).toBeNull();
+});
+
+it('does not acknowledge a compound install or release that storage refused to keep', async () => {
+  const tab = new Links();
+  tab.add('a'.repeat(16), { ...KEYS, name: 'Living room' });
+  const marker = { from: KEYS.libraryKey, to: 'bmV3', device: '0123456789abcdef', compound: true };
+  expect(writePendingReset(marker)).toBe(true);
+  const working = globalThis.localStorage;
+  vi.stubGlobal('localStorage', {
+    getItem: working.getItem,
+    setItem: (key: string, value: string) => {
+      if (key === 'den.links') throw new DOMException('full', 'QuotaExceededError');
+      working.setItem(key, value);
+    },
+    removeItem: working.removeItem,
+  });
+
+  await expect(tab.rekey(KEYS.libraryKey, 'bmV3', true)).resolves.toBe(false);
+  expect(tab.list[0]?.libraryKey, 'visit retains the attempted install').toBe('bmV3');
+  expect(readLinks()[0]?.libraryKey, 'reload still sees the old durable link').toBe(
+    KEYS.libraryKey,
+  );
+  expect(readPendingReset()).toEqual(marker);
+
+  vi.stubGlobal('localStorage', working);
+  await expect(tab.rekey(KEYS.libraryKey, 'bmV3', true)).resolves.toBe(true);
+  vi.stubGlobal('localStorage', {
+    getItem: working.getItem,
+    setItem: working.setItem,
+    removeItem: (key: string) => {
+      if (key === 'den.keyReset') throw new DOMException('blocked', 'SecurityError');
+      working.removeItem(key);
+    },
+  });
+  await expect(tab.releaseRekeyed(KEYS.libraryKey, marker)).resolves.toBe(false);
+  expect(readPendingReset()).toEqual(marker);
+
+  vi.stubGlobal('localStorage', working);
+  await expect(tab.releaseRekeyed(KEYS.libraryKey, marker)).resolves.toBe(true);
   expect(readPendingReset()).toBeNull();
 });
 

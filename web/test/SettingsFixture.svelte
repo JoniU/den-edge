@@ -21,6 +21,8 @@
   import { LibraryModel } from '../src/lib/libraryModel.svelte';
   import { links } from '../src/lib/links.svelte';
   import type { JoinLibrary } from '../src/lib/browserHousehold';
+  import profileFixture from '../src/vendor/den-core/profiles-v1.json';
+  import { validateStoredProfileDirectory } from '../src/lib/profileDirectory';
   import '../src/app.css';
 
   const at = [1, 0, 'test'] as unknown as Stamp;
@@ -28,7 +30,15 @@
   const fixtureLibraryId = '50724b489a92805f23be6bba897393c7';
   const fixtureMemberToken = 'a17b6bb5b7e47d81e1fc40e34fe289274301987448de937c7ad2f566094fdf50';
   const fixtureQuery = new URLSearchParams(location.search);
+  const profileResetFixture =
+    fixtureQuery.has('profiles') ||
+    fixtureQuery.has('wire5-missing') ||
+    fixtureQuery.has('profile-reset-pending');
   const joinPresentationFixture = fixtureQuery.has('join-presentation');
+  const profileDirectory =
+    profileResetFixture && !fixtureQuery.has('wire5-missing')
+      ? validateStoredProfileDirectory(structuredClone(profileFixture.migrationBase))
+      : null;
   const replacesAuthority =
     fixtureQuery.has('authority-replacement') ||
     fixtureQuery.has('recovery-authority-replacement') ||
@@ -96,7 +106,8 @@
   (globalThis as { fixtureRows?: () => Row[] }).fixtureRows = () => stored;
   const log = {
     readOnly: false,
-    wireMinimum: 4,
+    wireMinimum:
+      fixtureQuery.has('wire5-missing') || fixtureQuery.has('profile-reset-pending') ? 5 : 4,
     get profileTopologyPresent() {
       return new URLSearchParams(location.search).has('profiles');
     },
@@ -153,7 +164,7 @@
       for (const next of rows) put(next);
       return true;
     },
-    profileDirectory: () => null,
+    profileDirectory: () => profileDirectory,
     close() {},
   } as unknown as LibraryLog;
 
@@ -419,6 +430,12 @@
     linkKey: 'fixture',
   };
   const link = joinPresentationFixture ? null : linked;
+  const profileResetPins: string[] = [];
+  let compoundResetPending = $state(fixtureQuery.has('profile-reset-pending'));
+  let profileResetWaited = false;
+  (
+    globalThis as typeof globalThis & { fixtureProfileResetPins?: () => string[] }
+  ).fixtureProfileResetPins = () => [...profileResetPins];
 </script>
 
 <main style="padding:var(--bar-space) var(--gutter)">
@@ -431,5 +448,25 @@
       local={joinPresentationFixture}
       onjoin={joinPresentationFixture ? heldJoin : undefined}
       onresetkey={async () => null}
+      oncompoundreset={profileResetFixture
+        ? async (pin) => {
+            profileResetPins.push(pin);
+            const wait =
+              fixtureQuery.has('profile-reset-waiting') &&
+              pin === '1234' &&
+              !compoundResetPending &&
+              !profileResetWaited;
+            if (wait) profileResetWaited = true;
+            const outcome = wait
+              ? 'blocked'
+              : compoundResetPending || pin === '1234'
+                ? 'complete'
+                : 'unauthorized';
+            if (wait) compoundResetPending = true;
+            if (outcome === 'complete') compoundResetPending = false;
+            return outcome;
+          }
+        : undefined}
+      {compoundResetPending}
     />{/if}
 </main>

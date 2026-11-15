@@ -63,6 +63,7 @@ export default defineConfig({
     'big-library-edit.spec.mjs',
     'big-library-airing.spec.mjs',
     'big-library-shared-worker.spec.mjs',
+    'profile-key-reset-route.spec.mjs',
     ...PRODUCTION_BUILD_SPECS,
   ],
   timeout: 120_000,

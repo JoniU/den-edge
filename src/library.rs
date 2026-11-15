@@ -697,9 +697,6 @@ pub async fn handle(state: &Arc<AppState>, req: Request) -> Response {
         return with_wire_headers(state, json_reply(StatusCode::NOT_FOUND, &error("not_found")), None);
     }
     let exclusive_action = action == "exclusive-operation" || action.starts_with("exclusive-operation/");
-    if exclusive_action && !state.profile_reset_enabled {
-        return with_wire_headers(state, json_reply(StatusCode::NOT_FOUND, &error("not_found")), None);
-    }
     // Households that owe a sweep of declared successors (an aborted key reset) are swept on their next access.
     reset_lock::sweep_if_due(state, id).await;
     let protocol = match protocol_for(state, id).await {
@@ -801,8 +798,20 @@ pub async fn handle(state: &Arc<AppState>, req: Request) -> Response {
     //
     // A `DELETE` naming an owning attempt is a key reset retiring a library it locked: it is the one write a lock
     // lets through, and `reset_lock::retire` decides whether this attempt may.
+    let retirement_route = if action.is_empty() && req.method() == Method::DELETE {
+        if state.profile_reset_enabled {
+            true
+        } else {
+            match reset_lock::retirement_continuation(state, id).await {
+                Ok(found) => found,
+                Err(reason) => return with_wire_headers(state, read_error(reason), protocol.as_ref()),
+            }
+        }
+    } else {
+        false
+    };
     let exclusive_retire =
-        if state.profile_reset_enabled && action.is_empty() && req.method() == Method::DELETE {
+        if retirement_route {
             match reset_lock::retire_headers(req.headers()) {
                 Ok(headers) => headers,
                 Err(()) => {

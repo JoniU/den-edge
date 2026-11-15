@@ -1634,8 +1634,12 @@ function connectionsView(value: unknown): value is ConnectionsView {
     list(devices, libraryDevice, 512) &&
     unique(devices, (device) => device.id) &&
     record(diagnostics) &&
-    exact(diagnostics, ',libraryFormat,pendingChanges,selfDeviceId,profileTopology,') &&
+    exact(
+      diagnostics,
+      ',libraryFormat,pendingChanges,selfDeviceId,profileTopology,profileTopologyBlocked,',
+    ) &&
     optional(diagnostics.profileTopology, bool) &&
+    optional(diagnostics.profileTopologyBlocked, bool) &&
     integer(diagnostics.libraryFormat) &&
     integer(diagnostics.pendingChanges) &&
     boundedText(diagnostics.selfDeviceId, 128)

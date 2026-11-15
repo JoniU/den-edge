@@ -265,6 +265,13 @@ export function writePendingReset(
   }
 }
 
+const samePendingReset = (left: PendingReset | null, right: PendingReset): boolean =>
+  left?.from === right.from &&
+  left.to === right.to &&
+  left.device === right.device &&
+  left.held === right.held &&
+  left.compound === right.compound;
+
 /**
  * The links and shared devices, as every tab of this browser keeps them. Each change starts from what storage holds
  * now, and a change made in another tab is taken up as it lands (`storage`). Each tab used to write its own copy from
@@ -331,10 +338,15 @@ export class Links {
       this.opened = this.list[0]?.inboxKey;
   }
 
-  private saveLinks(): void {
-    const stored = writeLinks(this.list) ? this.list : readLinks();
-    this.unsavedLinks = unsavedOf(this.list, stored);
-    this.goneLinks = without(stored, this.list, sameLink);
+  private saveLinks(verify = false): boolean {
+    const written = writeLinks(this.list);
+    const stored = verify ? readList(STORAGE_KEY, isLink) : written ? this.list : readLinks();
+    const durable =
+      written && stored !== undefined && JSON.stringify(stored) === JSON.stringify(this.list);
+    const retained = stored ?? [];
+    this.unsavedLinks = unsavedOf(this.list, retained);
+    this.goneLinks = without(retained, this.list, sameLink);
+    return durable;
   }
 
   private saveShared(): void {
@@ -562,13 +574,13 @@ export class Links {
    * pending. What this browser kept of it under `from` goes, and so do its records of the devices it gave `from` to:
    * the reset cut them off. The app reopens the library under the new key.
    */
-  async rekey(from: string, to: string, keepOld = false): Promise<void> {
+  async rekey(from: string, to: string, keepOld = false): Promise<boolean> {
     const retirement = keepOld ? null : await this.retirements.prepare(from);
     this.reread();
     this.list = this.list.map((l) => (l.libraryKey === from ? { ...l, libraryKey: to } : l));
     this.shared = this.shared.filter((s) => s.libraryKey !== from);
     this.keyReset = true;
-    this.saveLinks();
+    const linksDurable = this.saveLinks(keepOld);
     this.saveShared();
     forgetHeroLeadPointers(from);
     // A compound reset keeps the old library's kept state and the pending marker until its journal is erased.
@@ -576,13 +588,17 @@ export class Links {
       writePendingReset(null);
       this.retirements.start(retirement);
     }
+    return linksDurable;
   }
 
-  /** Drop what a reset from `from` left behind: the pending marker and the old library's kept state. */
-  async releaseRekeyed(from: string): Promise<void> {
+  /** Drop what this exact reset left behind. A replacement marker is another tab's authority and is never cleared. */
+  async releaseRekeyed(from: string, expected?: PendingReset): Promise<boolean> {
+    if (expected && !samePendingReset(readPendingReset(), expected)) return false;
     const retirement = await this.retirements.prepare(from);
-    writePendingReset(null);
+    if (expected && !samePendingReset(readPendingReset(), expected)) return false;
+    if (!writePendingReset(null) || readPendingReset() !== null) return false;
     this.retirements.start(retirement);
+    return true;
   }
 }
 

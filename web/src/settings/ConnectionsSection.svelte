@@ -58,6 +58,7 @@
   import PinInput from '../components/PinInput.svelte';
   import { parseTVLink } from '../lib/tvLink';
   import type { LibraryJoinPresentationOwner } from '../lib/libraryJoinPresentation';
+  import type { CompoundResetStartResult } from '../lib/profileKeyResetPage';
 
   let {
     link,
@@ -82,6 +83,8 @@
     removeDevice,
     onjoin,
     onresetkey,
+    oncompoundreset,
+    compoundResetPending = false,
     profileResetBlocked = false,
     hasRecoveryCode = false,
     heldReset = false,
@@ -132,7 +135,11 @@
      * didn't. Absent where this browser can't: no linked library, or one not on v4 yet.
      */
     onresetkey?: () => Promise<KeyResetOutcome | null>;
-    /** The household has profiles, so the single-library reset is unavailable until the compound reset ships. */
+    /** Starts the journaled all-profile reset after a fresh Owner PIN. */
+    oncompoundreset?: (pin: string) => Promise<CompoundResetStartResult>;
+    /** A durable compound marker exists and must stay actionable even when new starts are unavailable. */
+    compoundResetPending?: boolean;
+    /** This profile-aware household cannot start a reset on this build. */
     profileResetBlocked?: boolean;
     /** The library has a recovery code, which a reset ends. */
     hasRecoveryCode?: boolean;
@@ -866,6 +873,10 @@
   // Resetting the library key: every other device is cut off and pairs again; this browser keeps the library.
   let resetting = $state(false);
   let resetProblem = $state<string | null>(null);
+  let compoundPin = $state('');
+  let compoundAsking = $state(false);
+  let compoundTrigger = $state<HTMLButtonElement>();
+  let compoundContinue = $state<HTMLButtonElement>();
   const resetFailures: Partial<Record<KeyResetOutcome, string>> = {
     'update-required':
       'Your library holds something only a newer version of Den can move. Update Den on your devices, then try again.',
@@ -888,6 +899,35 @@
     // A held reset has its own panel, with the way out.
     if (refused && refused !== 'held')
       resetProblem = resetFailures[refused] ?? 'Couldn’t reset the library key.';
+  }
+
+  async function resetProfileKeys() {
+    if (!oncompoundreset || resetting || (!compoundResetPending && !/^\d{4}$/.test(compoundPin)))
+      return;
+    resetting = true;
+    resetProblem = null;
+    const entered = compoundPin;
+    compoundPin = '';
+    const result = await oncompoundreset(entered);
+    resetting = false;
+    if (result === 'complete' || result === 'aborted') {
+      compoundAsking = false;
+      await tick();
+      compoundTrigger?.focus();
+      return;
+    }
+    resetProblem =
+      result === 'unauthorized'
+        ? 'That Owner PIN didn’t match.'
+        : result === 'unavailable'
+          ? 'Key reset isn’t available for this household right now. Nothing changed.'
+          : result === 'waiting' || result === 'blocked'
+            ? 'The key reset is still in progress. Keep this browser paired; Den will continue it here.'
+            : 'Couldn’t start the key reset. Nothing changed. Check your connection and try again.';
+    await tick();
+    if ((result === 'waiting' || result === 'blocked') && compoundResetPending)
+      compoundContinue?.focus();
+    else document.getElementById('profile-reset-pin')?.focus({ preventScroll: true });
   }
 
   /**
@@ -1473,7 +1513,95 @@
         <Button variant="primary" label="Use the new key" onclick={() => void onadoptheld?.()} />
       </div>
     {/if}
-    {#if onresetkey}
+    {#if oncompoundreset}
+      {#if compoundResetPending}
+        <div class="pair" role="status">
+          <p>
+            <b>Library key reset in progress.</b> Keep this browser paired. Den keeps the old and new
+            keys safely and can continue after a reload or interrupted connection.
+          </p>
+          <Button
+            variant="primary"
+            label={resetting ? 'Continuing…' : 'Continue key reset'}
+            disabled={disabled || resetting}
+            bind:element={compoundContinue}
+            onclick={() => void resetProfileKeys()}
+          />
+        </div>
+      {:else}
+        <div class="form profile-reset">
+          {#if compoundAsking}
+            <form
+              class="confirm-profile-reset"
+              aria-labelledby="profile-reset-title"
+              onsubmit={(event) => {
+                event.preventDefault();
+                void resetProfileKeys();
+              }}
+            >
+              <p id="profile-reset-title">
+                <b>{i18n.phrase('Reset every profile library key?')}</b>
+                {i18n.phrase(
+                  'Every profile and the household move to new keys together. Every other device must pair again; this browser keeps the household. Enter the Owner PIN to continue.',
+                )}
+              </p>
+              <PinInput
+                id="profile-reset-pin"
+                label="Owner PIN"
+                bind:value={compoundPin}
+                focusOnMount
+                invalid={resetProblem === 'That Owner PIN didn’t match.'}
+                engaged={!resetting}
+                disabled={resetting}
+                onvalue={() => (resetProblem = null)}
+              />
+              <span class="actions">
+                <Button
+                  variant="destructive"
+                  size="compact"
+                  label={resetting ? 'Resetting…' : 'Reset keys'}
+                  disabled={resetting || !/^\d{4}$/.test(compoundPin)}
+                  onclick={() => void resetProfileKeys()}
+                />
+                <Button
+                  variant="secondary"
+                  size="compact"
+                  label="Cancel"
+                  disabled={resetting}
+                  onclick={async () => {
+                    compoundAsking = false;
+                    compoundPin = '';
+                    resetProblem = null;
+                    await tick();
+                    compoundTrigger?.focus();
+                  }}
+                />
+              </span>
+            </form>
+          {:else}
+            <Button
+              variant="destructive"
+              size="compact"
+              label="Reset library keys…"
+              disabled={disabled || resetting}
+              bind:element={compoundTrigger}
+              onclick={() => {
+                compoundAsking = true;
+                resetProblem = null;
+              }}
+            />
+          {/if}
+        </div>
+      {/if}
+      {#if resetting}
+        <p class="status" role="status">Rotating every profile library key…</p>
+      {/if}
+      {#if resetProblem}<p class="status bad" role="alert">{i18n.phrase(resetProblem)}</p>{/if}
+      <p class="foot">
+        To cut a device off, reset every profile library key together. Removing it from the list
+        doesn’t: it still holds a key.
+      </p>
+    {:else if onresetkey}
       <div class="form">
         <Confirm
           label={resetting ? 'Resetting…' : 'Reset library key…'}
@@ -1503,10 +1631,14 @@
         holds the key.
       </p>
     {:else if profileResetBlocked}
-      <p class="foot">
-        Profile libraries need to rotate together. Key reset will be available after Den finishes
-        that update.
-      </p>
+      <div class="pair" role="status">
+        <p class="foot">
+          Den couldn’t verify this household’s profile directory, so no keys were changed. Reload
+          Settings to try again. If it persists, keep this browser paired and wait for the profile
+          directory to recover; do not use a single-library reset.
+        </p>
+        <Button variant="secondary" label="Try again" onclick={() => location.reload()} />
+      </div>
     {:else}
       <p class="foot">
         To cut a device off, reset the library key on your Apple TV under Settings › Linked devices.
@@ -1668,6 +1800,37 @@
 
   .pair.scanned {
     outline: 1px solid var(--accent-outline-60);
+  }
+
+  .confirm-profile-reset {
+    display: flex;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgb(255 255 255 / 0.03);
+  }
+
+  .confirm-profile-reset > p {
+    flex: 1 1 100%;
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .confirm-profile-reset > p b {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--fg);
+  }
+
+  .confirm-profile-reset .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .tv-code {

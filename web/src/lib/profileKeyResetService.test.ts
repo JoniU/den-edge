@@ -111,15 +111,15 @@ const start = { pin: '1234', destinationLibraryKey: SUCCESSORS.H2 };
 const confirm = { destinationLibraryKey: SUCCESSORS.H2 };
 
 describe('profile key reset service', () => {
-  it('reads and sends nothing while the profile gate is closed', async () => {
+  it('refuses a new start while the admission gate is closed but still permits authenticated recovery', async () => {
     const edge = await world();
     const { service: closed } = service(edge, { gate: false });
     await expect(closed.start(start)).resolves.toBe('unavailable');
     await expect(closed.resume()).resolves.toBe('unavailable');
     await expect(
       closed.recover({ pin: '1234', recoveryAttempt: RECOVERY, successorKey: null }),
-    ).resolves.toBe('unavailable');
-    expect(edge.log).toEqual([]);
+    ).resolves.toBe('blocked');
+    expect(edge.log).not.toEqual([]);
   });
 
   it('requires a fresh Owner PIN to start or recover, before any request', async () => {

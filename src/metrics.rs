@@ -30,6 +30,9 @@ pub struct Metrics {
     library_write_throttled: AtomicU64,
     /// Cold legacy replays answered `503 library_busy` because active replays held the bounded aggregate cache.
     library_replay_busy: AtomicU64,
+    /// Compound reset records currently requiring continuation, keyed internally by household only so metrics expose
+    /// bounded phase counts and never identifiers; terminal outcomes are monotonic counters.
+    profile_resets: Mutex<ProfileResetMetrics>,
     /// Libraries started under `NEW_LIBRARIES=visitors`, by the tier they got (`visitor`, `member`) and what came
     /// of it (`created`, or the limit that refused it: `rate_limited`, `address_day`, `day_cap`).
     library_creations: Mutex<BTreeMap<(&'static str, &'static str), u64>>,
@@ -58,6 +61,12 @@ struct MmapMetrics {
     resident_high_water_bytes: usize,
     cached_count: usize,
     cached_bytes: usize,
+}
+
+#[derive(Default)]
+struct ProfileResetMetrics {
+    live: BTreeMap<String, &'static str>,
+    outcomes: BTreeMap<&'static str, u64>,
 }
 
 pub(crate) const MMAP_OUTCOMES: [&str; 6] = ["hit", "built", "ineligible", "budget", "fault", "evicted"];
@@ -598,6 +607,21 @@ impl Metrics {
         self.library_replay_busy.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn profile_reset_phase(&self, household: &str, phase: Option<&'static str>) {
+        let mut resets = lock(&self.profile_resets);
+        if let Some(phase) = phase {
+            resets.live.insert(household.to_owned(), phase);
+        } else {
+            resets.live.remove(household);
+        }
+    }
+
+    pub fn profile_reset_outcome(&self, household: &str, outcome: &'static str) {
+        let mut resets = lock(&self.profile_resets);
+        resets.live.remove(household);
+        *resets.outcomes.entry(outcome).or_default() += 1;
+    }
+
     pub fn record_library_creation(&self, tier: &'static str, outcome: &'static str) {
         *lock(&self.library_creations).entry((tier, outcome)).or_default() += 1;
     }
@@ -873,6 +897,24 @@ impl Metrics {
              den_edge_library_replay_busy_total {}\n",
             self.library_replay_busy.load(Ordering::Relaxed)
         ));
+        let resets = lock(&self.profile_resets);
+        out.push_str(
+            "# HELP den_edge_profile_reset_live Durable compound reset households requiring continuation, by bounded phase.\n\
+             # TYPE den_edge_profile_reset_live gauge\n\
+             # HELP den_edge_profile_reset_outcomes_total Compound reset terminal outcomes observed by this process.\n\
+             # TYPE den_edge_profile_reset_outcomes_total counter\n",
+        );
+        for phase in ["open", "committed", "retiring", "recovery"] {
+            let count = resets.live.values().filter(|held| **held == phase).count();
+            out.push_str(&format!("den_edge_profile_reset_live{{phase=\"{phase}\"}} {count}\n"));
+        }
+        for outcome in ["aborted", "retired"] {
+            let count = resets.outcomes.get(outcome).copied().unwrap_or(0);
+            out.push_str(&format!(
+                "den_edge_profile_reset_outcomes_total{{outcome=\"{outcome}\"}} {count}\n"
+            ));
+        }
+        drop(resets);
         out.push_str(
             "# HELP den_edge_library_creations_total Libraries started under NEW_LIBRARIES=visitors, by tier and outcome.\n\
              # TYPE den_edge_library_creations_total counter\n",

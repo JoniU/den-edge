@@ -30,6 +30,7 @@
   import { SvelteMap } from 'svelte/reactivity';
   import type { LibraryModel } from './lib/libraryModel.svelte';
   import type { KeyResetOutcome } from './lib/libraryServiceProtocol';
+  import type { CompoundResetStartResult } from './lib/profileKeyResetPage';
   import type { JoinLibrary } from './lib/browserHousehold';
   import type { ProfilePreferences } from './lib/profilePreferences.svelte';
   import type { ContentServiceClientPort } from './lib/contentServiceClient';
@@ -53,6 +54,8 @@
     local = false,
     onjoin,
     onresetkey,
+    oncompoundreset,
+    compoundResetPending = false,
     heldReset = false,
     onadoptheld,
     oninterfacelanguage,
@@ -73,6 +76,8 @@
     /** Present where this browser's own library or household can be brought into another. */
     onjoin?: JoinLibrary;
     onresetkey?: () => Promise<KeyResetOutcome | null>;
+    oncompoundreset?: (pin: string) => Promise<CompoundResetStartResult>;
+    compoundResetPending?: boolean;
     heldReset?: boolean;
     onadoptheld?: () => Promise<void>;
     oninterfacelanguage?: (language: InterfaceLanguage) => void;
@@ -161,6 +166,12 @@
   const disabled = $derived(!ready || saving);
   const libraryFormat = $derived(connections?.diagnostics.libraryFormat ?? null);
   const profileTopology = $derived(connections?.diagnostics.profileTopology ?? false);
+  const profileTopologyBlocked = $derived(connections?.diagnostics.profileTopologyBlocked ?? false);
+  // Wire 5 is profile-aware even when its directory is missing or unreadable. Treating that recovery state as a
+  // legacy household would expose the one-library destructive reset that profiles-v1 explicitly forbids.
+  const profileAware = $derived(
+    profileTopology || profileTopologyBlocked || (connections?.diagnostics.libraryFormat ?? 0) >= 5,
+  );
   async function run(action: () => Promise<unknown>, quiet = false): Promise<boolean> {
     const restoreFocus =
       document.activeElement instanceof HTMLElement &&
@@ -418,17 +429,26 @@
           save={savePrefs}
           savePin={(pin) => run(() => authority.model.setParentalPin(pin))}
           verifyPin={(pin) => authority.model.verifyParentalPin(pin)}
-          pinRemovable={!profileTopology}
+          pinRemovable={!profileAware}
         />
       {/if}
       {#key authority.model}<ConnectionsSection
           {link}
           {content}
           {onjoin}
-          onresetkey={link && libraryFormat !== null && libraryFormat >= 4 && !profileTopology
+          onresetkey={link && libraryFormat !== null && libraryFormat === 4 && !profileAware
             ? onresetkey
             : undefined}
-          profileResetBlocked={!!link && profileTopology}
+          oncompoundreset={!__DEN_TV_LEGACY_JS_CORE__ &&
+          link &&
+          (profileTopology || compoundResetPending)
+            ? oncompoundreset
+            : undefined}
+          {compoundResetPending}
+          profileResetBlocked={!!link &&
+            profileAware &&
+            !compoundResetPending &&
+            (!profileTopology || !oncompoundreset)}
           {hasRecoveryCode}
           {heldReset}
           {onadoptheld}
@@ -495,6 +515,17 @@
             <p>
               {i18n.phrase(
                 'In Den on a browser linked to this household, open Settings › Sharing to invite, extend, limit, relink, or revoke a guest.',
+              )}
+            </p>
+          </SettingRow>
+          <SettingRow
+            id="profile-key-reset-handoff"
+            label={i18n.phrase('Reset profile keys in a supported browser')}
+            detail={i18n.phrase('Profile key reset is not available on this TV')}
+          >
+            <p>
+              {i18n.phrase(
+                'In Den on a browser linked to this household, open Settings › Connections › Linked devices to reset every profile library key together.',
               )}
             </p>
           </SettingRow>

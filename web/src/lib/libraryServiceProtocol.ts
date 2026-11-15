@@ -595,6 +595,8 @@ export interface ConnectionsView {
     selfDeviceId: string;
     /** A valid or invalid `set:profiles` row exists, so only the compound profile reset may rotate keys. */
     profileTopology?: boolean;
+    /** Wire 5 is committed but no valid directory is readable; destructive reset must remain recovery-blocked. */
+    profileTopologyBlocked?: boolean;
   };
 }
 

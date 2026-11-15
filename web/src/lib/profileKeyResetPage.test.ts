@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fixture from '../vendor/den-core/profiles-v1.json';
 import { validateStoredProfileDirectory, type ProfileDirectoryDocument } from './profileDirectory';
 import { FakeEdge, Killed } from './profileKeyResetFakeEdge';
@@ -7,7 +7,11 @@ import {
   type CompoundResetPageDeps,
   type ResetWorkerModel,
 } from './profileKeyResetPage';
-import { ProfileKeyResetService, VaultResetAdoption } from './profileKeyResetService';
+import {
+  ProfileKeyResetService,
+  ProfileResetUnauthorizedError,
+  VaultResetAdoption,
+} from './profileKeyResetService';
 import type { LibraryLog } from './log';
 import type { PendingReset } from './links.svelte';
 import type { ProfileKidCreateVault } from './profileKidCreateWorker';
@@ -51,6 +55,7 @@ class World {
   pending: PendingReset | null = null;
   readonly markers: PendingReset[] = [];
   link: string | null = HOUSEHOLD_KEY;
+  current: string | null = HOUSEHOLD_KEY;
   live: string | null = null;
   released = false;
   /** Called with an event name; throw to kill the page at that point. */
@@ -59,6 +64,10 @@ class World {
   destinationUnreadable = false;
   /** What the legacy standing check answers when no journal is left. */
   settled = 'undone';
+  onDefinitiveRefusal: (() => void) | undefined;
+  onPrepare: (() => void) | undefined;
+  onResume: (() => void) | undefined;
+  releaseGate: Promise<void> | undefined;
   constructor(
     readonly edge: FakeEdge,
     readonly gate = true,
@@ -99,20 +108,35 @@ class World {
       result: { kind, outcome: await outcome },
     });
     return {
-      prepareKeyReset: async () => ({
-        result: {
-          kind: 'key-reset.prepare',
-          destinationLibraryKey: SUCCESSORS.H2,
-          device: DEVICE,
-        },
-      }),
+      prepareKeyReset: async () => {
+        this.onPrepare?.();
+        return {
+          result: {
+            kind: 'key-reset.prepare',
+            destinationLibraryKey: SUCCESSORS.H2,
+            device: DEVICE,
+          },
+        };
+      },
       startProfileKeyReset: (pin, to) => {
         this.events.push('worker:start');
-        return wrap('profile-key-reset.start', service.start({ pin, destinationLibraryKey: to }));
+        return wrap(
+          'profile-key-reset.start',
+          service.start({ pin, destinationLibraryKey: to }).then((outcome) => {
+            this.die('after-start-lands');
+            return outcome;
+          }),
+        );
       },
       resumeProfileKeyReset: () => {
         this.events.push('worker:resume');
-        return wrap('profile-key-reset.resume', service.resume());
+        return wrap(
+          'profile-key-reset.resume',
+          service.resume().then((outcome) => {
+            this.onResume?.();
+            return outcome;
+          }),
+        );
       },
       confirmProfileKeyReset: (to) => {
         this.events.push('worker:confirm');
@@ -153,16 +177,29 @@ class World {
         this.events.push('install');
         this.link = to;
         this.die('after-install');
+        return true;
       },
-      release: () => {
+      release: async (pending) => {
         this.events.push('release');
         this.die('before-release');
+        await this.releaseGate;
+        if (JSON.stringify(this.pending) !== JSON.stringify(pending)) return false;
         this.released = true;
         this.pending = null;
+        return true;
       },
       adopt: (destination) => {
         this.events.push('adopt');
         this.live = destination.session;
+        this.current = destination.session;
+        return true;
+      },
+      current: () => this.current,
+      active: (from) => this.current === from,
+      definitiveStartRefusal: (error) => {
+        const definitive = error instanceof ProfileResetUnauthorizedError;
+        if (definitive) this.onDefinitiveRefusal?.();
+        return definitive;
       },
     };
     return new CompoundResetPage<Destination>(deps);
@@ -223,6 +260,97 @@ describe('the page half of a compound key reset', () => {
       device: DEVICE,
       compound: true,
     });
+  });
+
+  it('clears only its exact marker after a definitive wrong PIN', async () => {
+    const world = new World(await edgeWorld());
+    await expect(world.page().start(HOUSEHOLD_KEY, '0000')).rejects.toBeInstanceOf(
+      ProfileResetUnauthorizedError,
+    );
+    expect(world.pending).toBeNull();
+
+    const replacement = { from: HOUSEHOLD_KEY, to: keyOf(99), device: 'other', compound: true };
+    world.onDefinitiveRefusal = () => (world.pending = replacement);
+    await expect(world.page().start(HOUSEHOLD_KEY, '0000')).rejects.toBeInstanceOf(
+      ProfileResetUnauthorizedError,
+    );
+    expect(world.pending).toEqual(replacement);
+  });
+
+  it('keeps an ambiguous landed start actionable for reload recovery', async () => {
+    const world = new World(await edgeWorld());
+    killAt(world, 'after-start-lands');
+    await expect(world.page().start(HOUSEHOLD_KEY, '1234')).rejects.toBeInstanceOf(Killed);
+    expect(world.pending).toMatchObject({ from: HOUSEHOLD_KEY, compound: true });
+    await expect(world.page().run(world.pending!)).resolves.toBe('complete');
+  });
+
+  it('continues one existing marker instead of preparing a superseding start', async () => {
+    const world = new World(await edgeWorld());
+    world.destinationUnreadable = true;
+    await expect(world.page().start(HOUSEHOLD_KEY, '1234')).resolves.toBe('waiting');
+    expect(world.markers).toHaveLength(1);
+    world.destinationUnreadable = false;
+    await expect(world.page().start(HOUSEHOLD_KEY, '1234')).resolves.toBe('complete');
+    expect(world.markers).toHaveLength(1);
+  });
+
+  it('never installs or adopts across a replacement household', async () => {
+    const world = new World(await edgeWorld());
+    world.destinationUnreadable = true;
+    await expect(world.page().start(HOUSEHOLD_KEY, '1234')).resolves.toBe('waiting');
+    world.destinationUnreadable = false;
+    world.current = keyOf(22);
+    const before = world.events.length;
+    await expect(world.page().run(world.pending!)).resolves.toBe('waiting');
+    expect(world.events.slice(before)).not.toContain('install');
+    expect(world.events.slice(before)).not.toContain('adopt');
+    world.current = HOUSEHOLD_KEY;
+    await expect(world.page().run(world.pending!)).resolves.toBe('complete');
+  });
+
+  it('does not publish a marker or start after household replacement during preparation', async () => {
+    const world = new World(await edgeWorld());
+    world.onPrepare = () => {
+      world.current = keyOf(22);
+    };
+    await expect(world.page().start(HOUSEHOLD_KEY, '1234')).resolves.toBe('unavailable');
+    expect(world.pending).toBeNull();
+    expect(world.events).not.toContain('worker:start');
+  });
+
+  it('does not adopt over a household replacement while exact-marker release is pending', async () => {
+    const world = new World(await edgeWorld());
+    world.destinationUnreadable = true;
+    await expect(world.page().start(HOUSEHOLD_KEY, '1234')).resolves.toBe('waiting');
+    world.destinationUnreadable = false;
+    let release = () => {};
+    world.releaseGate = new Promise<void>((resolve) => (release = resolve));
+    const settling = world.page().run(world.pending!);
+    await vi.waitFor(() => expect(world.events.at(-1)).toBe('release'));
+    world.current = keyOf(22);
+    release();
+    await expect(settling).resolves.toBe('waiting');
+    expect(world.live).toBeNull();
+    expect(world.events.at(-1)).toBe('destination:close');
+  });
+
+  it('never installs or clears a different marker published while resume is pending', async () => {
+    const world = new World(await edgeWorld());
+    world.destinationUnreadable = true;
+    await expect(world.page().start(HOUSEHOLD_KEY, '1234')).resolves.toBe('waiting');
+    world.destinationUnreadable = false;
+    const replacement = { from: HOUSEHOLD_KEY, to: keyOf(99), device: 'other', compound: true };
+    world.onResume = () => {
+      world.pending = replacement;
+      world.onResume = undefined;
+    };
+    const before = world.events.length;
+    await expect(world.page().run(world.markers[0]!)).resolves.toBe('waiting');
+    expect(world.events.slice(before)).not.toContain('install');
+    expect(world.events.slice(before)).not.toContain('release');
+    expect(world.events.slice(before)).not.toContain('adopt');
+    expect(world.pending).toEqual(replacement);
   });
 
   it('closed gate: nothing starts and no marker is left', async () => {
@@ -289,8 +417,9 @@ describe('the page half of a compound key reset', () => {
   it('never erases the journal when the install does not read back', async () => {
     const world = new World(await edgeWorld());
     const page = world.page();
-    // The link refuses to move (storage blocked): the install is not read back as the new key.
+    // The tab's in-memory overlay moves, but storage refused it. That must not be mistaken for a durable readback.
     const original = world.link;
+    let visible = original;
     const failing = new CompoundResetPage<Destination>({
       pending: {
         read: () => world.pending,
@@ -301,12 +430,18 @@ describe('the page half of a compound key reset', () => {
       },
       worker: async () => ({ model: world.model(), close: () => {} }),
       openDestination: async (key) => ({ session: key, close: () => {} }),
-      link: () => ({ libraryKey: original! }),
-      install: () => {},
+      link: () => ({ libraryKey: visible! }),
+      current: () => HOUSEHOLD_KEY,
+      active: () => true,
+      install: (_from, to) => {
+        visible = to;
+        return false;
+      },
       release: () => {
         world.events.push('release');
+        return true;
       },
-      adopt: () => {},
+      adopt: () => true,
     });
     void page;
     await expect(failing.start(HOUSEHOLD_KEY, '1234')).resolves.toBe('waiting');

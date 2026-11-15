@@ -579,6 +579,13 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'Make a recovery code': 'Skapa en återställningskod',
   'Den holds too many codes for this library just now. Try again in a minute.':
     'Den lagrar för många koder för det här biblioteket just nu. Försök igen om en minut.',
+  'Den couldn’t verify this household’s profile directory, so no keys were changed. Reload Settings to try again. If it persists, keep this browser paired and wait for the profile directory to recover; do not use a single-library reset.':
+    'Den kunde inte verifiera hushållets profilkatalog, så inga nycklar ändrades. Läs in Inställningar igen för att försöka på nytt. Om problemet kvarstår ska du behålla webbläsaren parkopplad och vänta tills profilkatalogen har återställts. Använd inte en återställning av ett enda bibliotek.',
+  'In Den on a browser linked to this household, open Settings › Connections › Linked devices to reset every profile library key together.':
+    'Öppna Den i en webbläsare som är kopplad till hushållet och gå till Inställningar › Anslutningar › Länkade enheter för att återställa alla profilbiblioteksnycklar tillsammans.',
+  'Reset profile keys in a supported browser': 'Återställ profilnycklar i en webbläsare som stöds',
+  'Profile key reset is not available on this TV':
+    'Återställning av profilnycklar är inte tillgänglig på den här TV:n',
   'Make one, or open a library with one': 'Gör en eller öppna ett bibliotek med en',
   'Making a secure link…': 'Gör en säker länk...',
   Malayalam: 'Malayalam',
@@ -833,8 +840,28 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   Rename: 'Byt namn',
   Reset: 'Återställ',
   'Reset key': 'Återställ nyckel',
+  'Reset keys': 'Återställ nycklar',
+  'Reset library keys…': 'Återställ biblioteksnycklar…',
   'Reset outcome unknown.': 'Återställningsresultat okänt.',
+  'Reset every profile library key?': 'Återställa alla profilbiblioteksnycklar?',
   'Reset your library key?': 'Återställa din biblioteksnyckel?',
+  'Rotating every profile library key…': 'Roterar alla profilbiblioteksnycklar…',
+  'That Owner PIN didn’t match.': 'Ägarens PIN-kod stämde inte.',
+  'Every profile and the household move to new keys together. Every other device must pair again; this browser keeps the household. Enter the Owner PIN to continue.':
+    'Alla profiler och hushållet flyttas tillsammans till nya nycklar. Alla andra enheter måste parkopplas igen; den här webbläsaren behåller hushållet. Ange ägarens PIN-kod för att fortsätta.',
+  'Key reset isn’t available for this household right now. Nothing changed.':
+    'Nyckelåterställning är inte tillgänglig för det här hushållet just nu. Ingenting ändrades.',
+  'Library key reset in progress.': 'Återställning av biblioteksnycklar pågår.',
+  'Keep this browser paired. Den keeps the old and new keys safely and can continue after a reload or interrupted connection.':
+    'Håll den här webbläsaren parkopplad. Den förvarar de gamla och nya nycklarna säkert och kan fortsätta efter en omladdning eller avbruten anslutning.',
+  'Continue key reset': 'Fortsätt nyckelåterställningen',
+  'Continuing…': 'Fortsätter…',
+  'The key reset is still in progress. Keep this browser paired; Den will continue it here.':
+    'Nyckelåterställningen pågår fortfarande. Håll webbläsaren parkopplad; Den fortsätter här.',
+  'Couldn’t start the key reset. Nothing changed. Check your connection and try again.':
+    'Det gick inte att starta nyckelåterställningen. Ingenting ändrades. Kontrollera anslutningen och försök igen.',
+  'To cut a device off, reset every profile library key together. Removing it from the list doesn’t: it still holds a key.':
+    'För att koppla bort en enhet återställer du alla profilbiblioteksnycklar tillsammans. Att ta bort den från listan räcker inte: den har fortfarande en nyckel.',
   'Review what was found': 'Granska vad som hittades',
   Revoke: 'Återkalla',
   'Revoke access…': 'Återkalla åtkomst...',

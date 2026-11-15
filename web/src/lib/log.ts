@@ -1962,6 +1962,10 @@ export class LibraryLog {
     if (this.offline || this.moved || this.wireMin < WIRE) return { refused: 'unavailable' };
     if (this.wireMin > Math.max(WIRE, this.instanceWire) || this.preV4Backup)
       return { refused: 'update_required' };
+    // Minimum wire 5 commits this household to profile topology even when the directory row is missing, unreadable
+    // or temporarily unattributable. Only the compound executor may move it; legacy move must fail closed before it
+    // creates or writes a destination that would leave the profile libraries on their old credentials.
+    if (!options.replaceProfileDirectory && this.wireMin >= 5) return { refused: 'profiles' };
     await ensureDeferredSyncPolicy();
     // Writes queued before the move land in the log it reads.
     await this.writes;
