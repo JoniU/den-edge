@@ -111,7 +111,11 @@
     waitAt,
     type Delivery,
   } from '../lib/switchPolicy';
-  import { ScopedReleaseMemory, type ReleaseAuthority } from '../lib/releaseMemory';
+  import {
+    currentReleaseRecall,
+    ScopedReleaseMemory,
+    type ReleaseAuthority,
+  } from '../lib/releaseMemory';
   import type { Addon } from '../lib/scout';
   import type { ContentServiceClientPort } from '../lib/contentServiceClient';
   import type { SamsungAvplayAdapter } from '../tv/player/avplay';
@@ -537,11 +541,20 @@
   let manualChoiceGeneration = 0;
   /** The deliberate season-pack choice, never a raw filename outside this mounted player's memory. */
   let continuityGroup: string | undefined;
+  const authorityGeneration = () =>
+    JSON.stringify([
+      releaseAuthority.profile,
+      releaseAuthority.library,
+      releaseAuthority.household,
+      releaseAuthority.addon,
+      releaseAuthority.source,
+    ]);
   const initialSeason = untrack(() => season);
-  let memoryReady = releaseMemory.then((memory) => {
-    if (ended || episodeGeneration !== 0) return;
-    continuityGroup = memory.recall(releaseTitle, initialSeason)?.group;
-  });
+  // Keep the asynchronous read inert until a session without an explicit filename consumes it. Publication is
+  // fenced there; an explicit choice can therefore clear/replace continuity while this authority digest is pending.
+  let memoryReady = releaseMemory.then(
+    (memory) => memory.recall(releaseTitle, initialSeason)?.group,
+  );
   /**
    * The release the viewer chose — from the title's sources, or the picker here — rather than den-remux's own pick.
    * Nothing moves playback off it on its own: where it can't keep up, the viewer is told and offered another.
@@ -757,7 +770,23 @@
     generation: number,
     signal: AbortSignal,
   ): Promise<string | undefined> {
-    await memoryReady;
+    const recallGeneration = {
+      authority: authorityGeneration(),
+      episode: episodeGeneration,
+      session: generation,
+      choice: manualChoiceGeneration,
+    };
+    const recalled = await currentReleaseRecall(memoryReady, recallGeneration, () =>
+      ended
+        ? undefined
+        : {
+            authority: authorityGeneration(),
+            episode: episodeGeneration,
+            session: sessionStartGeneration,
+            choice: manualChoiceGeneration,
+          },
+    );
+    if (!continuityGroup && recalled) continuityGroup = recalled;
     const group = continuityGroup;
     if (!group || at.season === undefined || signal.aborted) return undefined;
     const choice = manualChoiceGeneration;
@@ -5038,7 +5067,7 @@
    */
   function playEpisode(at: Episode) {
     const previous = playingEpisode;
-    const generation = ++episodeGeneration;
+    episodeGeneration += 1;
     manualChoiceGeneration += 1;
     sessionStartGeneration += 1;
     startingSession?.abort(new DOMException('episode replaced', 'AbortError'));
@@ -5056,10 +5085,9 @@
     // exact season has its own retained deliberate choice.
     const carriedGroup = at.season === previous.season ? continuityGroup : undefined;
     continuityGroup = carriedGroup;
-    memoryReady = releaseMemory.then((memory) => {
-      if (ended || generation !== episodeGeneration) return;
-      continuityGroup = carriedGroup ?? memory.recall(releaseTitle, at.season)?.group;
-    });
+    memoryReady = releaseMemory.then(
+      (memory) => carriedGroup ?? memory.recall(releaseTitle, at.season)?.group,
+    );
     chosenRelease = filename;
     excluded = [];
     releases = [];

@@ -15,6 +15,31 @@ export interface SeriesReleaseMemory {
   group: string;
 }
 
+/** Every mutable player coordinate which owns publication of an asynchronous retained-memory answer. */
+export interface ReleaseRecallGeneration {
+  authority: string;
+  episode: number;
+  session: number;
+  choice: number;
+}
+
+/** Return a retained answer only while the exact player operation which asked for it still owns the coordinate. */
+export async function currentReleaseRecall<T>(
+  pending: Promise<T>,
+  expected: ReleaseRecallGeneration,
+  current: () => ReleaseRecallGeneration | undefined,
+): Promise<T | undefined> {
+  const answer = await pending;
+  const generation = current();
+  return generation &&
+    generation.authority === expected.authority &&
+    generation.episode === expected.episode &&
+    generation.session === expected.session &&
+    generation.choice === expected.choice
+    ? answer
+    : undefined;
+}
+
 interface StoredSeriesReleaseMemory extends SeriesReleaseMemory {
   version: 1;
 }

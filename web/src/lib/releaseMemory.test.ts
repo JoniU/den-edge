@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ScopedReleaseMemory, type ReleaseAuthority } from './releaseMemory';
+import {
+  currentReleaseRecall,
+  ScopedReleaseMemory,
+  type ReleaseAuthority,
+  type ReleaseRecallGeneration,
+} from './releaseMemory';
 
 function memoryStore(initial: Record<string, string> = {}): Storage {
   const items = new Map(Object.entries(initial));
@@ -23,6 +28,12 @@ const authority = (replace: Partial<ReleaseAuthority> = {}): ReleaseAuthority =>
   source: '/scout/config-a',
   ...replace,
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => (resolve = accept));
+  return { promise, resolve };
+}
 
 describe('ScopedReleaseMemory', () => {
   it('reads a deliberate group after reload only in its season and exact authority', async () => {
@@ -86,5 +97,49 @@ describe('ScopedReleaseMemory', () => {
     expect(() => memory.forget('tv:1')).not.toThrow();
     expect(warn).toHaveBeenCalledOnce();
     warn.mockRestore();
+  });
+});
+
+describe('currentReleaseRecall', () => {
+  const initial: ReleaseRecallGeneration = {
+    authority: 'profile/library/household/addon/source-a',
+    episode: 0,
+    session: 1,
+    choice: 0,
+  };
+
+  it('does not let delayed recall overwrite a newer explicit filename choice', async () => {
+    const recalled = deferred<string | undefined>();
+    let generation = initial;
+    const answer = currentReleaseRecall(recalled.promise, initial, () => generation);
+    let continuityGroup: string | undefined = 'new-manual-pack';
+    generation = { ...generation, choice: 1 };
+    recalled.resolve('old-retained-pack');
+    continuityGroup = (await answer) ?? continuityGroup;
+    expect(continuityGroup).toBe('new-manual-pack');
+  });
+
+  it('does not restore stale continuity after the newer choice has no group', async () => {
+    const recalled = deferred<string | undefined>();
+    let generation = initial;
+    const answer = currentReleaseRecall(recalled.promise, initial, () => generation);
+    generation = { ...generation, choice: 1 };
+    recalled.resolve('old-retained-pack');
+    expect(await answer).toBeUndefined();
+  });
+
+  it('publishes valid initial recall only to its exact session and episode', async () => {
+    await expect(
+      currentReleaseRecall(Promise.resolve('retained-pack'), initial, () => initial),
+    ).resolves.toBe('retained-pack');
+    for (const generation of [
+      { ...initial, authority: 'profile/library/household/addon/source-b' },
+      { ...initial, session: 2 },
+      { ...initial, episode: 1 },
+      undefined,
+    ])
+      await expect(
+        currentReleaseRecall(Promise.resolve('stale-pack'), initial, () => generation),
+      ).resolves.toBeUndefined();
   });
 });
