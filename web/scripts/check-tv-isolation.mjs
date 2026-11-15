@@ -151,7 +151,10 @@ if (process.argv.includes('--capture')) {
   // (`sheetQuery`), in the `actions` chunk the poster menus load at startup (3,658 -> 3,723); the rest is the startup
   // phrase map. The player's pages, sections, current values and header are drawn in its lazy chunk instead. That left
   // no margin: raise the absolute/proportional startup caps to the next 128-byte boundary, retaining 108.
-  if (initialDelta > Math.min(7424, Math.floor(baseline.initialGzip * 0.0378)))
+  // Holding a start for den-remux's media lead adds no startup code, but the lazy Player chunk's new name moves
+  // startup 9 gzip bytes (7,421 -> 7,430 on matched main/head builds) against a main 2 bytes under the proportional
+  // cap. Raise both caps to the next 128-byte boundary, retaining 122.
+  if (initialDelta > Math.min(7552, Math.floor(baseline.initialGzip * 0.0385)))
     throw new Error('Browser initial JS/CSS budget exceeded');
   // Complete UI translations are opt-in chunks: neither is fetched on the higher-priority English path. Budget
   // their compressed size separately so adding copy can never disguise growth in application code, while the
@@ -326,5 +329,8 @@ if (process.argv.includes('--capture')) {
   // Watchlist desired-state Retry adds 643 gzip bytes to the complete graph while startup shrinks by two bytes.
   // It stays in the existing lazy Watchlist chunk; another split would add a request after failure without reducing
   // the complete graph. Allow the next 128-byte boundary, retaining 73 bytes on the matched build.
-  if (coreTotalDelta > 102400) throw new Error('Browser total JS/CSS budget exceeded');
+  // Holding a start for den-remux's media lead (`prebufferLead`), with a bit-rate countdown and a still-buffer rule
+  // that waits for an overdue segment, adds 247 gzip bytes on a local build, all in the lazy Player chunk; it adds no
+  // request, timer or storage. On top of the Retry above that is about 102,574; allow the next 128-byte boundary.
+  if (coreTotalDelta > 102656) throw new Error('Browser total JS/CSS budget exceeded');
 }
