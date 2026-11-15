@@ -151,7 +151,10 @@ if (process.argv.includes('--capture')) {
   // (`sheetQuery`), in the `actions` chunk the poster menus load at startup (3,658 -> 3,723); the rest is the startup
   // phrase map. The player's pages, sections, current values and header are drawn in its lazy chunk instead. That left
   // no margin: raise the absolute/proportional startup caps to the next 128-byte boundary, retaining 108.
-  if (initialDelta > Math.min(7424, Math.floor(baseline.initialGzip * 0.0378)))
+  // Holding a start for den-remux's media lead adds no startup code, but the lazy Player chunk's new name moves
+  // startup 9 gzip bytes (7,421 -> 7,430 on matched main/head builds) against a main 2 bytes under the proportional
+  // cap. Raise both caps to the next 128-byte boundary, retaining 122.
+  if (initialDelta > Math.min(7552, Math.floor(baseline.initialGzip * 0.0385)))
     throw new Error('Browser initial JS/CSS budget exceeded');
   // Complete UI translations are opt-in chunks: neither is fetched on the higher-priority English path. Budget
   // their compressed size separately so adding copy can never disguise growth in application code, while the
@@ -323,5 +326,9 @@ if (process.argv.includes('--capture')) {
   // next 128-byte boundary would retain only 37: 165 retained.
   // Merging the Kid direct-read authority brings the combined graph to 101,667. Its measured consolidation and
   // rejected lazy alternatives are recorded in AGENTS.md; allow the next 128-byte boundary, retaining 93.
-  if (coreTotalDelta > 101760) throw new Error('Browser total JS/CSS budget exceeded');
+  // Holding a start for den-remux's media lead (`prebufferLead`), with a bit-rate countdown and a still-buffer rule
+  // that waits for an overdue segment, adds 247 gzip bytes on a local build (101,467 -> 101,714), all in the lazy
+  // Player chunk, bringing the combined graph to about 101,914; it adds no request, timer or storage. Allow the next
+  // 128-byte boundary past it.
+  if (coreTotalDelta > 102016) throw new Error('Browser total JS/CSS budget exceeded');
 }
