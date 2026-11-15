@@ -67,8 +67,47 @@ export function shouldWarmNext(
 
 /** The source fields needed to decide whether a binge prefetch is continuity rather than a new release choice. */
 export interface BingeSource {
+  filename?: string;
   bingeGroup?: string;
   cached?: boolean;
+}
+
+/** The only bridge from an episode-local manual filename to series continuity. */
+export function bingeGroupFor(
+  sources: readonly BingeSource[],
+  filename: string,
+): string | undefined {
+  return sources.find((source) => source.filename === filename)?.bingeGroup || undefined;
+}
+
+/** A tiny in-flight/result cache for the playing and next episode. It coalesces the warm and foreground consumer,
+ * while `retain` can evict an outage so the foreground operation gets normal recovery instead of a poisoned warm. */
+export class BoundedLookup<T> {
+  readonly #answers = new Map<string, Promise<T>>();
+
+  constructor(
+    readonly limit: number,
+    readonly retain: (answer: T) => boolean,
+  ) {}
+
+  get(key: string, load: () => Promise<T>): Promise<T> {
+    const found = this.#answers.get(key);
+    if (found) return found;
+    const pending = load().then(
+      (answer) => {
+        if (!this.retain(answer) && this.#answers.get(key) === pending) this.#answers.delete(key);
+        return answer;
+      },
+      (error: unknown) => {
+        if (this.#answers.get(key) === pending) this.#answers.delete(key);
+        throw error;
+      },
+    );
+    this.#answers.set(key, pending);
+    while (this.#answers.size > this.limit)
+      this.#answers.delete(this.#answers.keys().next().value!);
+    return pending;
+  }
 }
 
 /**

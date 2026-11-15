@@ -108,6 +108,13 @@
     {title}
     {content}
     scout={{ install: scoutInstall, base: '/scout/config' }}
+    releaseAuthority={[
+      'fixture:owner',
+      'fixture-library',
+      'fixture-household',
+      scoutInstall,
+      '/scout/config',
+    ]}
     {remux}
     {playback}
     {interfaceLanguage}

@@ -161,6 +161,9 @@ if (process.argv.includes('--capture')) {
   // Owner-only Kid creation (#940) adds 2,128 gzip bytes to startup on matched base/head builds after placing the
   // complete form in a new lazy chunk. Admission, durable recovery and the shared Worker task contract stay eager so
   // every browser/TV host observes one authority before the form loads. AGENTS.md records the full consolidation.
+  // Authority-scoped series-release recall then adds 52 gzip bytes at startup on matched current-main/head builds
+  // (206,135 -> 206,187): the compact authority tuple and Player remount key which prevent replaced authority from
+  // publishing delayed recall. The digest, codec and source lookup remain lazy. The existing cap retains 65 bytes.
   // Exact-current Owner PIN replacement/removal (#1145) adds 88 gzip bytes at startup on matched base/head builds.
   // The UI stays in lazy Settings and Tizen 3 compiles it out; only the versioned command and write authority remain
   // with the Worker that must reject old clients and stale rows before Settings can recover. Allow the smallest
@@ -364,6 +367,10 @@ if (process.argv.includes('--capture')) {
   // Owner-only Kid creation (#940) adds 4,433 gzip bytes to the complete non-translation graph; 2,059 bytes are the
   // separately lazy form, while the remaining admission/recovery authority is shared by the startup page and Worker.
   // The final matched current-main/head measurement and smallest combined boundary are recorded in AGENTS.md.
+  // Authority-scoped series-release recall then adds 1,160 gzip bytes to the complete non-translation graph on
+  // matched current-main/head builds (116,438 -> 117,598), 1,141 in the existing lazy Player chunk and 58 in the
+  // eager app chunk, partly offset by 39 bytes elsewhere. Another boundary cannot reduce this complete-graph total
+  // and would add a request before the first session lookup. Allow the next 128-byte boundary, retaining 34 bytes.
   // Compound profile-key reset (#941) adds 2,423 gzip bytes to the complete non-translation graph while startup
   // shrinks by 73 bytes. Its 1,121-byte page coordinator is separately lazy; the remaining Settings presentation,
   // link handoff and Worker protocol must bracket that coordinator so reload can recover before the form opens.
@@ -375,5 +382,5 @@ if (process.argv.includes('--capture')) {
   // remains in lazy Settings; command admission, exact-row CAS and durable replay prevention remain in the Worker.
   // Another split would add an authority request and duplicate the row guard. Allow the smallest 128-byte boundary,
   // retaining 7 bytes on the matched build.
-  if (coreTotalDelta > 116480) throw new Error('Browser total JS/CSS budget exceeded');
+  if (coreTotalDelta > 117632) throw new Error('Browser total JS/CSS budget exceeded');
 }
