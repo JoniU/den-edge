@@ -150,6 +150,135 @@ test('the actual Watchlist surface renders Visitor-local activity', async () => 
   }
 });
 
+test('a refused Watchlist action keeps its desired state and retries it once', async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  });
+  try {
+    const page = await openWatchlist(browser, 1280, '&fail-write-once');
+    const watchlist = page.getByRole('region', { name: 'Watchlist', exact: true });
+    const movie = watchlist.getByRole('link', { name: /Movie 1002/ });
+    await movie.hover();
+    await watchlist
+      .getByRole('button', { name: 'Remove from Watchlist Movie 1002', exact: true })
+      .click();
+
+    const failure = page.getByRole('alert');
+    await expect(failure).toContainText(
+      'Couldn’t save that. Check that this device is on your network.',
+    );
+    const retry = failure.getByRole('button', { name: 'Try again', exact: true });
+    await expect(retry).toBeFocused();
+    await retry.click();
+
+    await expect(watchlist.getByText('Movie 1002')).toHaveCount(0);
+    await expect(failure).toHaveCount(0);
+    await expect(page.locator('[data-watchlist-card] a[href]:focus')).toHaveCount(1);
+  } finally {
+    await browser.close();
+  }
+});
+
+for (const language of [
+  {
+    code: 'es',
+    failure: 'No se pudo guardar. Comprueba que este dispositivo esté conectado a tu red.',
+    retry: 'Inténtalo de nuevo',
+  },
+  {
+    code: 'sv',
+    failure:
+      'Det gick inte att spara. Kontrollera att den här enheten är ansluten till ditt nätverk.',
+    retry: 'Försök igen',
+  },
+]) {
+  test(`Watchlist recovery renders in ${language.code}`, async () => {
+    const browser = await chromium.launch({
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+    });
+    try {
+      const page = await openWatchlist(browser, 1280, `&fail-write-once&language=${language.code}`);
+      await expect(page.locator('html')).toHaveAttribute('lang', language.code);
+      const movie = page.getByRole('link', { name: /Movie 1002/ });
+      await movie.hover();
+      await page
+        .getByRole('button', { name: 'Remove from Watchlist Movie 1002', exact: true })
+        .click();
+      const failure = page.getByRole('alert');
+      await expect(failure).toContainText(language.failure);
+      await expect(
+        failure.getByRole('button', { name: language.retry, exact: true }),
+      ).toBeFocused();
+    } finally {
+      await browser.close();
+    }
+  });
+}
+
+test('a newer Watchlist action suppresses an older late failure', async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  });
+  try {
+    const page = await openWatchlist(browser, 1280, '&hold-failing-first-write');
+    const watchlist = page.getByRole('region', { name: 'Watchlist', exact: true });
+    await watchlist.getByRole('link', { name: /Movie 1002/ }).hover();
+    await watchlist
+      .getByRole('button', { name: 'Remove from Watchlist Movie 1002', exact: true })
+      .click();
+    await watchlist.getByRole('link', { name: /Series 2001/ }).hover();
+    await watchlist
+      .getByRole('button', { name: 'Remove from Watchlist Series 2001', exact: true })
+      .click();
+    await expect(watchlist.getByText('Series 2001')).toHaveCount(0);
+
+    await page.evaluate(() => window.denTestReleaseFirstWrite());
+    await expect(watchlist.getByText('Movie 1002')).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('Watchlist retires failed intent when its card or keyed session is replaced', async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  });
+  try {
+    const filtered = await openWatchlist(browser, 1280, '&fail-write-once');
+    const watchlist = filtered.getByRole('region', { name: 'Watchlist', exact: true });
+    await watchlist.getByRole('link', { name: /Movie 1002/ }).hover();
+    await watchlist
+      .getByRole('button', { name: 'Remove from Watchlist Movie 1002', exact: true })
+      .click();
+    await expect(filtered.getByRole('alert')).toBeVisible();
+    await watchlist
+      .getByRole('group', { name: 'Show in Watchlist' })
+      .getByRole('button', { name: 'Series' })
+      .click();
+    await expect(filtered.getByRole('alert')).toHaveCount(0);
+
+    const replaced = await openWatchlist(
+      browser,
+      1280,
+      '&hold-failing-first-write&watchlist-replacement',
+    );
+    const replacedWatchlist = replaced.getByRole('region', { name: 'Watchlist', exact: true });
+    await replacedWatchlist.getByRole('link', { name: /Movie 1002/ }).hover();
+    await replacedWatchlist
+      .getByRole('button', { name: 'Remove from Watchlist Movie 1002', exact: true })
+      .click();
+    await replaced.evaluate(() => {
+      window.denTestReplaceWatchlistSession();
+      window.denTestReleaseFirstWrite();
+    });
+    await expect(replaced.getByRole('heading', { name: 'Watchlist', level: 1 })).toBeVisible();
+    await expect(replaced.getByRole('alert')).toHaveCount(0);
+  } finally {
+    await browser.close();
+  }
+});
+
 for (const width of [393, 1280]) {
   test(`the Watchlist page lists continue watching, the watchlist by type and the watched history at ${width}px`, async () => {
     const browser = await chromium.launch({

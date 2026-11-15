@@ -22,6 +22,7 @@
     type VisitorProfileSession,
   } from '../src/lib/visitorProfileSession.svelte';
   import { trackerEvent } from '../src/lib/trackerEvents';
+  import { setInterfaceLanguage } from '../src/lib/i18n.svelte';
   import type { LibraryLog } from '../src/lib/log';
   import { documentsOf, fixtureLog } from './fixtureLog';
   import { fixtureLibraryService } from './libraryService';
@@ -72,6 +73,27 @@
     ).denTestReleaseLibrarySettings = releaseSettings;
   /** Every action refused, as a library that can't be reached refuses it. */
   const failing = params.has('failing');
+  let refusedWrites = params.has('fail-write-once') ? 1 : 0;
+  const refuseWrite = () => {
+    if (failing) return true;
+    if (!refusedWrites) return false;
+    refusedWrites -= 1;
+    return true;
+  };
+  let releaseFirstWrite = () => {};
+  const firstWriteGate = params.has('hold-failing-first-write')
+    ? new Promise<void>((resolve) => (releaseFirstWrite = resolve))
+    : undefined;
+  if (firstWriteGate)
+    (window as unknown as { denTestReleaseFirstWrite: () => void }).denTestReleaseFirstWrite =
+      releaseFirstWrite;
+  let writeSequence = 0;
+  const shouldRefuseWrite = async () => {
+    const sequence = ++writeSequence;
+    if (sequence === 1) await firstWriteGate;
+    if (params.has('hold-failing-first-write') && sequence === 1) return true;
+    return refuseWrite();
+  };
   let releaseProgressReply = () => {};
   const progressReplyGate = params.has('hold-final-progress-reply')
     ? new Promise<void>((resolve) => (releaseProgressReply = resolve))
@@ -391,7 +413,7 @@
      */
     writeActions: async (journals: SettingsRow[]) => {
       await writeGate;
-      if (failing) return false;
+      if (await shouldRefuseWrite()) return false;
       for (const journal of journals) {
         const event = trackerEvent(journal);
         put(event ? event.after : journal);
@@ -401,7 +423,7 @@
     /** One action, as `act` writes it (Remove, Mark watched on a movie): its journal's row, as `writeActions` keeps them. */
     writeAction: async (journal: SettingsRow) => {
       await writeGate;
-      if (failing) return null;
+      if (await shouldRefuseWrite()) return null;
       const event = trackerEvent(journal);
       const row = event ? event.after : journal;
       put(row);
@@ -530,6 +552,7 @@
   }
   const visitor = params.has('visitor');
   const kid = params.has('kid');
+  const watchlistReplacement = params.has('watchlist-replacement');
   let session = $state<ProfileSession>(
     visitor
       ? visitorProfileSession(
@@ -537,30 +560,57 @@
           localStorage,
           visitorVisitId('11111111111111111111111111111111'),
         )
-      : kid
+      : watchlistReplacement
         ? activeProfileSession(
-            persistentProfileIdentity('22222222222222222222222222222222', 'fixture-kid'),
+            persistentProfileIdentity('22222222222222222222222222222222', 'fixture-owner-a'),
             library.session.household,
             library.session.model!,
             null,
-            { maximumAge: 12, unknownRatings: 'block' },
-            false,
+            null,
             true,
-            receiptUnsupported ? [{ type: 'tv', id: 2002 }] : [],
           )
-        : playBoundary
+        : kid
           ? activeProfileSession(
-              persistentProfileIdentity('22222222222222222222222222222222', 'fixture-kid-a'),
+              persistentProfileIdentity('22222222222222222222222222222222', 'fixture-kid'),
               library.session.household,
               library.session.model!,
               null,
               { maximumAge: 12, unknownRatings: 'block' },
               false,
               true,
-              [{ type: 'movie', id: 1001 }],
+              receiptUnsupported ? [{ type: 'tv', id: 2002 }] : [],
             )
-          : library.session,
+          : playBoundary
+            ? activeProfileSession(
+                persistentProfileIdentity('22222222222222222222222222222222', 'fixture-kid-a'),
+                library.session.household,
+                library.session.model!,
+                null,
+                { maximumAge: 12, unknownRatings: 'block' },
+                false,
+                true,
+                [{ type: 'movie', id: 1001 }],
+              )
+            : library.session,
   );
+  if (watchlistReplacement)
+    (
+      window as unknown as { denTestReplaceWatchlistSession: () => void }
+    ).denTestReplaceWatchlistSession = () => {
+      const old = session;
+      session = activeProfileSession(
+        persistentProfileIdentity('33333333333333333333333333333333', 'fixture-owner-b'),
+        library.session.household,
+        library.session.model!,
+        null,
+        null,
+        true,
+      );
+      old.close();
+    };
+  const requestedLanguage = params.get('language');
+  if (requestedLanguage === 'es' || requestedLanguage === 'sv')
+    void setInterfaceLanguage(requestedLanguage);
   if (playBoundary || receiptUnsupported) {
     session.services.scout = {
       install: 'https://hearth.test/fixture',
@@ -662,6 +712,9 @@
       delete (window as { denTestReleaseProgressReply?: unknown }).denTestReleaseProgressReply;
       delete (window as { denTestProgressOperationIds?: unknown }).denTestProgressOperationIds;
       delete (window as { denTestPlayBoundary?: unknown }).denTestPlayBoundary;
+      delete (window as { denTestReleaseFirstWrite?: unknown }).denTestReleaseFirstWrite;
+      delete (window as { denTestReplaceWatchlistSession?: unknown })
+        .denTestReplaceWatchlistSession;
     };
   });
 </script>

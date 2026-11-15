@@ -273,6 +273,8 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
     'No se pudo guardar el código. Comprueba que este dispositivo esté conectado a tu red.',
   'Couldn’t save that. Check that this device is on your network, then confirm again.':
     'No se pudo guardar. Comprueba que este dispositivo esté conectado a tu red y vuelve a confirmar.',
+  'Couldn’t save that. Check that this device is on your network.':
+    'No se pudo guardar. Comprueba que este dispositivo esté conectado a tu red.',
   'Couldn’t save that. Check your connection and try again.':
     'No se pudo guardar. Comprueba la conexión e inténtalo de nuevo.',
   'Couldn’t start that download. Try again.':
