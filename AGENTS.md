@@ -114,7 +114,12 @@ everything the committed code imports is committed too.
   above remain the smallest safe implementation, while the isolation gate's complete-graph accounting means moving
   either the Worker admission or the existing Remux/playback code across a lazy boundary cannot reduce this total
   and would add an authorization- or playback-critical request. The ceiling therefore advances one 128-byte step
-  from current main's 101,632 to 101,760, retaining 93 bytes on the combined build.
+  from current main's 101,632 to 101,760, retaining 93 bytes on the combined build. Bounding the shared binge
+  console records then moves the matched production build's startup 203,797 → 203,812 gzip bytes and complete
+  non-translation graph 101,667 → 101,700, retaining 7 and 60 bytes respectively without another budget change;
+  the existing lazy Player JS/CSS pair itself shrinks by 16 bytes. The helper remains in the Player-only binge
+  module and adds no import, request, timer or listener; another lazy boundary would add a request without reducing
+  the complete graph.
 
 ## Testing
 

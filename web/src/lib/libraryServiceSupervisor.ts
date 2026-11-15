@@ -232,12 +232,7 @@ export class LibraryServiceSupervisor implements LibraryServiceClientPort {
         this.#connecting.catch(() => undefined),
         signal,
       );
-    if (signal?.aborted)
-      throw new LibraryServiceError({
-        code: 'cancelled',
-        message: 'library service request was cancelled',
-        retryable: false,
-      });
+    if (signal?.aborted) throw this.#cancelled();
     return await this.#readyClient().query(query, signal);
   }
 
@@ -390,25 +385,11 @@ export class LibraryServiceSupervisor implements LibraryServiceClientPort {
     let version = await client.open(this.#openOptions!);
     startupMark('worker ready', `hello answered in ${Math.round(performance.now() - helloAt)}ms`);
     active.version = version;
-    if (this.#active !== active || active.failure)
-      throw new LibraryServiceError(
-        active.failure ?? {
-          code: 'cancelled',
-          message: 'library service connection was replaced',
-          retryable: false,
-        },
-      );
+    this.#assertCurrent(active);
     for (const observation of this.#observations.values()) {
       version = await client.observe(observation);
       active.version = newerVersion(active.version, version);
-      if (this.#active !== active || active.failure)
-        throw new LibraryServiceError(
-          active.failure ?? {
-            code: 'cancelled',
-            message: 'library service connection was replaced',
-            retryable: false,
-          },
-        );
+      this.#assertCurrent(active);
     }
 
     // Start every current selection together, but let only correctness roots hold the connection open. Home roots can
@@ -435,14 +416,7 @@ export class LibraryServiceSupervisor implements LibraryServiceClientPort {
         });
     }
     await Promise.all(required);
-    if (this.#active !== active || active.failure)
-      throw new LibraryServiceError(
-        active.failure ?? {
-          code: 'cancelled',
-          message: 'library service connection was replaced',
-          retryable: false,
-        },
-      );
+    this.#assertCurrent(active);
 
     this.#phase = 'ready';
     const readyVersion = active.version ?? version;
@@ -655,7 +629,6 @@ export class LibraryServiceSupervisor implements LibraryServiceClientPort {
   }
 
   #selectionConnection(): LibrarySelectionConnection {
-    if (this.#phase === 'ready') return 'connecting';
     if (this.#phase === 'reconnecting') return 'reconnecting';
     if (this.#phase === 'failed') return 'failed';
     return 'connecting';
@@ -725,6 +698,17 @@ export class LibraryServiceSupervisor implements LibraryServiceClientPort {
       message: 'library service request was cancelled',
       retryable: false,
     });
+  }
+
+  #assertCurrent(active: ActiveClient): void {
+    if (this.#active !== active || active.failure)
+      throw new LibraryServiceError(
+        active.failure ?? {
+          code: 'cancelled',
+          message: 'library service connection was replaced',
+          retryable: false,
+        },
+      );
   }
 
   #assertNotClosed(): void {

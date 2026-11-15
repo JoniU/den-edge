@@ -47,6 +47,7 @@
   import { LinkScreen, ProfileSettingsScreen, SettingsScreen } from './lib/screens.svelte';
   import type { ApplyResult } from './lib/assistant';
   import { assistantLibrary } from './lib/assistantLibrary.svelte';
+  import { abortableDelay } from './lib/abortableDelay';
   import { householdAssistantFetch } from './lib/relayFetch';
   import { persistentProfileIdentity, profileSessionKey } from './lib/profileIdentity';
   import { resetProfileNavigation } from './lib/profileNavigation';
@@ -1608,12 +1609,11 @@
     return whileNeeded(drainNeeded, ({ drainWhileOpen }, work, signal) => {
       void (async () => {
         const plays = await import('./lib/householdPlays');
-        let playKey = plays.currentPlayKey();
-        while (!playKey && !signal.aborted) {
-          await new Promise((resolve) => setTimeout(resolve, 10_000));
-          playKey = plays.currentPlayKey();
+        let playKey: string | undefined;
+        while (!signal.aborted && !(playKey = plays.currentPlayKey())) {
+          await abortableDelay(10_000, signal);
         }
-        if (!playKey || signal.aborted) return;
+        if (!playKey) return;
         await drainWhileOpen(
           {
             libraryId: work.libraryId,
