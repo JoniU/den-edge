@@ -3,8 +3,7 @@
  * that it could not ask every source (`unknown`), whether a list may be short (`partial`), and whether it is a
  * held list served because no source answered (`outage`, with the time it was built). Absent from an older scout.
  *
- * Its own module, apart from `titleSources`, so the poster fade (`availability.svelte.ts`) reads it without the
- * source list's playback dependencies.
+ * Its own module, apart from `titleSources`, so callers can read it without the source list's playback dependencies.
  */
 export interface SourceAnswer {
   kind: 'live' | 'partial' | 'empty' | 'unknown' | 'stale';

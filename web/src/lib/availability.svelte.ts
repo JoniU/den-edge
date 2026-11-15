@@ -1,13 +1,12 @@
 // Stream availability from den-scout (EPIC-den-web §F2): whether a title has anything to play, for the fade the TV
 // gives a poster with nothing behind it.
 //
-// A movie is asked a page of posters at a time (scout's `/availability`). Scout answers from its verdicts at once and
-// checks the rest behind the reply, so an unknown is asked again a little later — and never fades. Scout wants IMDb
-// ids, so each title's is resolved through the content Worker first.
-//
-// A series is asked at one episode (`seriesAvailabilityEpisode`, the rule Apple TV and iOS take from DenKit's
-// `SeriesAvailability`): one search of scout's stream list for that episode, never a play link. The web fades but
-// never hides; hiding on scout's word is for a TV whose only stream addon is scout.
+// A page of movie and series posters is asked together through scout's `/availability`. Scout answers from its
+// verdicts at once and checks the rest behind the reply, so an unknown is asked again a little later — and never
+// fades. Scout wants IMDb ids (and `tt:S:E` for a series), so each title's is resolved through the content Worker
+// first. A series asks one episode (`seriesAvailabilityEpisode`, the rule Apple TV and iOS take from DenKit's
+// `SeriesAvailability`). The web fades but never hides; hiding on scout's word is for a TV whose only stream addon
+// is scout.
 
 import { SvelteMap } from 'svelte/reactivity';
 import { untrack } from 'svelte';
@@ -18,7 +17,6 @@ import type { ContentServiceClientPort } from './contentServiceClient';
 import type { Addon } from './scout';
 import { relayFetch } from './relayFetch';
 import { retryAfterMs } from './retryAfter';
-import { parseAnswer } from './sourceAnswer';
 
 type Verdict = 'available' | 'unavailable' | 'unknown';
 interface Episode {
@@ -33,8 +31,6 @@ const GATHER_MS = 50;
 const MAX_IDS = 100;
 /** Identifier lookups at once. */
 const LOOKUPS = 6;
-/** Series stream lists asked at once: each may take scout's whole scrape timeout. */
-const EPISODE_ASKS = 4;
 /** How long before asking again about a movie scout was still checking, and how many times. */
 export const RETRY_MS = 10_000;
 const RETRIES = 3;
@@ -70,25 +66,14 @@ export function seriesAvailabilityEpisode(
   return airWindow(firstAired, now) === 'aired' ? { season: 1, episode: 1 } : undefined;
 }
 
-/**
- * A stream list's verdict, as Apple TV reads its addons: any stream is "available"; none is "unavailable" only when
- * scout says every source answered (or is an older scout that says nothing). A list it could not complete, or held
- * through an outage, says nothing either way.
- */
-export function listVerdict(body: unknown): Verdict {
-  const streams = (body as { streams?: unknown } | null)?.streams;
-  if (!Array.isArray(streams)) return 'unknown';
-  if (streams.length > 0) return 'available';
-  const answer = parseAnswer(body);
-  if (!answer) return 'unavailable';
-  return (answer.kind === 'empty' || answer.kind === 'live') &&
-    answer.missing === 0 &&
-    !answer.outage
-    ? 'unavailable'
-    : 'unknown';
-}
-
 const episodeKey = (id: number, { season, episode }: Episode) => `${id}:${season}:${episode}`;
+const verdictOf = (answer: Record<string, unknown>, id: string): Verdict => {
+  const verdict = answer[id];
+  return verdict === 'available' || verdict === 'unavailable' ? verdict : 'unknown';
+};
+type EpisodeProbe = Episode & { id: number };
+type BatchTarget =
+  { kind: 'movie'; id: number } | { kind: 'episode'; key: string; probe: EpisodeProbe };
 
 export class Availability {
   /** By TMDB movie id. `unknown` here is final: no IMDb id, or scout never could tell. */
@@ -116,13 +101,11 @@ export class Availability {
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Bookkeeping; only verdicts are UI state.
   private readonly episodeAnswers = new Map<string, { at: number; settled: boolean }>();
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Request scheduling, as `wanted`.
-  private readonly episodeWanted = new Map<string, Episode & { id: number }>();
+  private readonly episodeWanted = new Map<string, EpisodeProbe>();
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Request bookkeeping, as `pending`.
   private readonly episodePending = new Set<string>();
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Retry bookkeeping, as `tries`.
   private readonly episodeTries = new Map<string, number>();
-  private episodeAsks = 0;
-  private episodeTimer: ReturnType<typeof setTimeout> | undefined;
   /** Each series' Continue Watching entry (`out` false while it waits for the episode), and its new episode. */
   private readonly continuing = new SvelteMap<number, Episode & { out: boolean }>();
   private readonly newEpisodes = new SvelteMap<number, Episode>();
@@ -130,6 +113,8 @@ export class Availability {
   /** Only one availability batch asks upstream at once; new mounts gather behind it. */
   private asking: number | undefined;
   private askSerial = 0;
+  /** The active batch request, cancelled when another configured scout supersedes it. */
+  private request: AbortController | undefined;
   /** Invalidates old-service responses and retry timers when the configured scout changes. */
   private generation = 0;
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Timer cleanup bookkeeping, not UI state.
@@ -195,8 +180,8 @@ export class Availability {
       this.generation++;
       clearTimeout(this.timer);
       this.timer = undefined;
-      clearTimeout(this.episodeTimer);
-      this.episodeTimer = undefined;
+      this.request?.abort();
+      this.request = undefined;
       for (const timer of this.retryTimers) clearTimeout(timer);
       this.retryTimers.clear();
       for (const id of this.pending) this.wanted.add(id);
@@ -216,7 +201,6 @@ export class Availability {
       this.episodeTries.clear();
     }
     this.gather();
-    this.pumpEpisodes();
   }
 
   /**
@@ -302,7 +286,7 @@ export class Availability {
       return;
     if (title.imdbId) this.imdbIds.set(`tv:${title.id}`, title.imdbId);
     this.episodeWanted.set(key, { id: title.id, ...episode });
-    this.pumpEpisodes();
+    this.gather();
   }
 
   /** Scout answered this visit, and the answer still stands (`UNAVAILABLE_MS`). */
@@ -347,7 +331,13 @@ export class Availability {
   }
 
   private gather(): void {
-    if (!this.scout || this.asking !== undefined || this.timer || this.wanted.size === 0) return;
+    if (
+      !this.scout ||
+      this.asking !== undefined ||
+      this.timer ||
+      (this.wanted.size === 0 && this.episodeWanted.size === 0)
+    )
+      return;
     this.timer = setTimeout(
       () => {
         this.timer = undefined;
@@ -363,131 +353,122 @@ export class Availability {
     const run = ++this.askSerial;
     const generation = this.generation;
     this.asking = run;
-    const ids = [...this.wanted].slice(0, MAX_IDS);
+    // When both kinds have a backlog, each gets half the batch: neither can sit behind several full pages of the
+    // other. Spare capacity goes to movies, so one episode beside a large shelf still yields one full request.
+    const episodeCapacity = this.wanted.size > 0 ? Math.floor(MAX_IDS / 2) : MAX_IDS;
+    const episodes = [...this.episodeWanted].slice(0, episodeCapacity);
+    const ids = [...this.wanted].slice(0, MAX_IDS - episodes.length);
     for (const id of ids) {
       this.wanted.delete(id);
       this.pending.add(id);
     }
+    for (const [key] of episodes) {
+      this.episodeWanted.delete(key);
+      this.episodePending.add(key);
+    }
 
     try {
       // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Local request accumulator, published through verdicts after the response.
-      const byImdb = new Map<string, number>();
+      const byRequest = new Map<string, BatchTarget[]>();
       const again: number[] = [];
+      const episodeAgain: [string, EpisodeProbe][] = [];
       const noImdb: number[] = [];
-      await each(ids, LOOKUPS, async (id) => {
-        const imdb = await this.imdbId('movie', id, scout.content);
-        if (imdb === undefined) again.push(id);
-        else if (imdb === null) noImdb.push(id);
-        else byImdb.set(imdb, id);
+      const noEpisodeImdb: string[] = [];
+      const targets: BatchTarget[] = [
+        ...ids.map((id): BatchTarget => ({ kind: 'movie', id })),
+        ...episodes.map(([key, probe]): BatchTarget => ({ kind: 'episode', key, probe })),
+      ];
+      await each(targets, LOOKUPS, async (target) => {
+        const imdb = await this.imdbId(
+          target.kind === 'movie' ? 'movie' : 'tv',
+          target.kind === 'movie' ? target.id : target.probe.id,
+          scout.content,
+        );
+        if (imdb === undefined) {
+          if (target.kind === 'movie') again.push(target.id);
+          else episodeAgain.push([target.key, target.probe]);
+        } else if (imdb === null) {
+          if (target.kind === 'movie') noImdb.push(target.id);
+          else noEpisodeImdb.push(target.key);
+        } else {
+          const requestId =
+            target.kind === 'movie'
+              ? imdb
+              : `${imdb}:${target.probe.season}:${target.probe.episode}`;
+          const held = byRequest.get(requestId);
+          if (held) held.push(target);
+          else byRequest.set(requestId, [target]);
+        }
       });
       if (generation !== this.generation) return;
       for (const id of noImdb) this.settle(id, 'unknown');
+      for (const key of noEpisodeImdb) this.settleEpisode(key, 'unknown');
 
-      let answer: Record<string, Verdict> = {};
+      let answer: Record<string, unknown> = {};
       let refused = false;
-      if (byImdb.size > 0) {
+      if (byRequest.size > 0) {
+        const controller = new AbortController();
+        this.request = controller;
+        const timeout = setTimeout(() => controller.abort(), ANSWER_MS);
         try {
           const res = await scout.fetch(`${scout.base}/availability`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ ids: [...byImdb.keys()] }),
-            signal: AbortSignal.timeout(ANSWER_MS),
+            body: JSON.stringify({ ids: [...byRequest.keys()] }),
+            signal: controller.signal,
           });
           if (res.status === 429) {
             refused = true;
             this.pausedUntil = this.now() + retryAfterMs(res, RETRY_MS, this.now);
           } else if (res.ok)
             answer =
-              ((await res.json()) as { availability?: Record<string, Verdict> }).availability ?? {};
+              ((await res.json()) as { availability?: Record<string, unknown> }).availability ?? {};
         } catch {
-          // Out of reach: every movie stays unknown, and is asked again.
+          // Out of reach: every title stays unknown, and is asked again.
+        } finally {
+          clearTimeout(timeout);
+          if (this.request === controller) this.request = undefined;
         }
       }
       if (generation !== this.generation) return;
       // Not an answer about any of them, and no try spent: asked again once the wait is over.
       if (refused)
-        for (const id of byImdb.values()) {
-          this.pending.delete(id);
-          this.wanted.add(id);
+        for (const targets of byRequest.values()) {
+          for (const target of targets) {
+            if (target.kind === 'movie') {
+              this.pending.delete(target.id);
+              this.wanted.add(target.id);
+            } else {
+              this.episodePending.delete(target.key);
+              this.episodeWanted.set(target.key, target.probe);
+            }
+          }
         }
       else
-        for (const [imdb, id] of byImdb) {
-          const verdict = answer[imdb] ?? 'unknown';
-          if (verdict === 'unknown') again.push(id);
-          else this.settle(id, verdict);
+        for (const [requestId, targets] of byRequest) {
+          const verdict = verdictOf(answer, requestId);
+          for (const target of targets) {
+            if (target.kind === 'movie') {
+              if (verdict === 'unknown') again.push(target.id);
+              else this.settle(target.id, verdict);
+            } else if (verdict === 'unknown') episodeAgain.push([target.key, target.probe]);
+            else this.settleEpisode(target.key, verdict);
+          }
         }
       this.keep();
       this.later(again);
+      for (const [key, probe] of episodeAgain) this.episodeLater(key, probe);
     } catch {
       // A lookup implementation that unexpectedly rejects must not leave the IDs permanently pending.
-      if (generation === this.generation) this.later(ids.filter((id) => this.pending.has(id)));
+      if (generation === this.generation) {
+        this.later(ids.filter((id) => this.pending.has(id)));
+        for (const [key, probe] of episodes)
+          if (this.episodePending.has(key)) this.episodeLater(key, probe);
+      }
     } finally {
       if (this.asking === run) this.asking = undefined;
       this.gather();
     }
-  }
-
-  /** Start the series asks waiting, a few at a time, once scout's last "not now" is over. */
-  private pumpEpisodes(): void {
-    const scout = this.scout;
-    if (!scout || this.episodeTimer) return;
-    const wait = this.pausedUntil - this.now();
-    if (wait > 0) {
-      if (this.episodeWanted.size)
-        this.episodeTimer = setTimeout(() => {
-          this.episodeTimer = undefined;
-          this.pumpEpisodes();
-        }, wait);
-      return;
-    }
-    for (const [key, probe] of this.episodeWanted) {
-      if (this.episodeAsks >= EPISODE_ASKS) return;
-      this.episodeWanted.delete(key);
-      this.episodePending.add(key);
-      this.episodeAsks++;
-      void this.askEpisode(key, probe, scout).finally(() => {
-        this.episodeAsks--;
-        this.pumpEpisodes();
-      });
-    }
-  }
-
-  /** One search of scout's stream list for the episode — the list only: no release is fetched or played. */
-  private async askEpisode(
-    key: string,
-    probe: Episode & { id: number },
-    scout: Scout,
-  ): Promise<void> {
-    const generation = this.generation;
-    let verdict: Verdict = 'unknown';
-    try {
-      const imdb = await this.imdbId('tv', probe.id, scout.content);
-      if (generation !== this.generation) return;
-      if (imdb === null) {
-        this.settleEpisode(key, 'unknown');
-        return;
-      }
-      if (imdb !== undefined) {
-        const id = encodeURIComponent(`${imdb}:${probe.season}:${probe.episode}`);
-        const res = await scout.fetch(`${scout.base}/stream/series/${id}.json`, {
-          signal: AbortSignal.timeout(ANSWER_MS),
-        });
-        if (generation !== this.generation) return;
-        if (res.status === 429) {
-          this.pausedUntil = this.now() + retryAfterMs(res, RETRY_MS, this.now);
-          this.episodePending.delete(key);
-          this.episodeWanted.set(key, probe);
-          return;
-        }
-        if (res.ok) verdict = listVerdict(await res.json());
-      }
-    } catch {
-      // Out of reach: unknown, and asked again.
-    }
-    if (generation !== this.generation) return;
-    if (verdict === 'unknown') this.episodeLater(key, probe);
-    else this.settleEpisode(key, verdict);
-    this.keep();
   }
 
   private settle(id: number, verdict: Verdict): void {
@@ -539,7 +520,7 @@ export class Availability {
     });
   }
 
-  private episodeLater(key: string, probe: Episode & { id: number }): void {
+  private episodeLater(key: string, probe: EpisodeProbe): void {
     const tries = (this.episodeTries.get(key) ?? 0) + 1;
     this.episodeTries.set(key, tries);
     if (tries > RETRIES) {
@@ -549,7 +530,7 @@ export class Availability {
     this.after(() => {
       this.episodePending.delete(key);
       this.episodeWanted.set(key, probe);
-      this.pumpEpisodes();
+      this.gather();
     });
   }
 

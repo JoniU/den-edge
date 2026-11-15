@@ -4,7 +4,6 @@ import {
   KEPT_MS,
   RETRY_MS,
   UNAVAILABLE_MS,
-  listVerdict,
   seriesAvailabilityEpisode,
 } from './availability.svelte';
 import type { ContentServiceClientPort } from './contentServiceClient';
@@ -41,12 +40,13 @@ describe('Availability', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('fades what scout says has nothing, asks again about what it was still checking, and keeps series out of the batch', async () => {
+  it('batches movie and resolved episode IDs, fades only unavailable, and retries unknown', async () => {
     let second = 'unknown';
     const { calls, fetchImpl } = fake(() => ({
       tt0000001: 'unavailable',
       tt0000002: second,
       tt0000003: 'available',
+      'tt0000005:1:1': 'available',
     }));
     const availability = new Availability();
     availability.connect(SCOUT, content, fetchImpl);
@@ -56,7 +56,7 @@ describe('Availability', () => {
 
     const asked = () =>
       calls.filter((c) => c.url.endsWith('/availability')).map((c) => JSON.parse(c.body!).ids);
-    expect(asked()).toEqual([['tt0000001', 'tt0000002', 'tt0000003']]);
+    expect(asked()).toEqual([['tt0000001', 'tt0000002', 'tt0000003', 'tt0000005:1:1']]);
     expect([1, 2, 3, 404].map((id) => availability.unavailable({ type: 'movie', id }))).toEqual([
       true,
       false,
@@ -66,8 +66,37 @@ describe('Availability', () => {
 
     second = 'unavailable';
     await vi.advanceTimersByTimeAsync(RETRY_MS + 100);
-    expect(asked()).toEqual([['tt0000001', 'tt0000002', 'tt0000003'], ['tt0000002']]);
+    expect(asked()).toEqual([
+      ['tt0000001', 'tt0000002', 'tt0000003', 'tt0000005:1:1'],
+      ['tt0000002'],
+    ]);
     expect(availability.unavailable({ type: 'movie', id: 2 })).toBe(true);
+  });
+
+  it('caps a mixed request at 100 without starving an episode behind a movie backlog', async () => {
+    const calls: string[][] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const ids = JSON.parse(String(init?.body)).ids as string[];
+      calls.push(ids);
+      return Response.json({
+        availability: Object.fromEntries(ids.map((id) => [id, 'available'])),
+      });
+    };
+    const availability = new Availability();
+    availability.connect(SCOUT, content, fetchImpl);
+    for (let id = 1; id <= 101; id++)
+      availability.want({ type: 'movie', id, imdbId: `tt${String(id).padStart(7, '0')}` });
+    availability.want({
+      type: 'tv',
+      id: 200,
+      imdbId: 'tt9999999',
+      releaseDate: '2024-01-01',
+    });
+    await vi.advanceTimersByTimeAsync(51);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(100);
+    expect(calls[0]).toContain('tt9999999:1:1');
   });
 
   it('waits as long as scout says when it refuses, and spends no try on the refusal', async () => {
@@ -232,8 +261,10 @@ describe('Availability', () => {
     let releaseOld!: (response: Response) => void;
     const oldAnswer = new Promise<Response>((resolve) => (releaseOld = resolve));
     const calls: string[] = [];
-    const oldFetch: typeof fetch = async (input) => {
+    let oldSignal: AbortSignal | null | undefined;
+    const oldFetch: typeof fetch = async (input, init) => {
       calls.push(`old ${String(input)}`);
+      oldSignal = init?.signal;
       return oldAnswer;
     };
     const newFetch: typeof fetch = async (input) => {
@@ -250,6 +281,7 @@ describe('Availability', () => {
     await vi.advanceTimersByTimeAsync(100);
     availability.connect({ ...SCOUT, base: '/scout/new' }, content, newFetch);
     await vi.advanceTimersByTimeAsync(100);
+    expect(oldSignal?.aborted, 'the superseded request is cancelled').toBe(true);
     releaseOld(Response.json({ availability: { tt7654321: 'unavailable' } }));
     await vi.runAllTimersAsync();
 
@@ -360,31 +392,13 @@ describe('seriesAvailabilityEpisode', () => {
   });
 });
 
-describe('listVerdict', () => {
-  it('reads a stream list as the TV reads its addons', () => {
-    expect(listVerdict({ streams: [{ url: 'x' }] })).toBe('available');
-    expect(listVerdict({ streams: [] })).toBe('unavailable');
-    expect(listVerdict({ streams: [], den: { answerKind: 'empty' } })).toBe('unavailable');
-    expect(listVerdict({ streams: [], den: { answerKind: 'unknown' } })).toBe('unknown');
-    expect(listVerdict({ streams: [], den: { answerKind: 'partial' } })).toBe('unknown');
-    expect(
-      listVerdict({
-        streams: [],
-        den: { answerKind: 'live', coverage: { sources: [{ outcome: 'timeout' }] } },
-      }),
-    ).toBe('unknown');
-    expect(listVerdict({ error: 'nope' })).toBe('unknown');
-  });
-});
-
 describe('Availability — series', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  /** Familjen Andersson (TMDB tv 233351, IMDb tt28784095): every stream list it gets is empty. */
+  /** Familjen Andersson (TMDB tv 233351, IMDb tt28784095): scout says its resolved episode is unavailable. */
   const andersson = { type: 'tv' as const, id: 233351, releaseDate: '2024-01-05' };
-  const LIST = (season: number, episode: number) =>
-    `/scout/sealed-cfg/stream/series/${encodeURIComponent(`tt28784095:${season}:${episode}`)}.json`;
+  const ID = (season: number, episode: number) => `tt28784095:${season}:${episode}`;
   const seriesContent = {
     query: async () => ({
       kind: 'title.external-id' as const,
@@ -392,24 +406,25 @@ describe('Availability — series', () => {
     }),
     onStatus: () => () => {},
   } as unknown as ContentServiceClientPort;
-  function scout(answer: (url: string) => Response) {
-    const calls: string[] = [];
-    const fetchImpl: typeof fetch = async (input) => {
-      calls.push(String(input));
-      return answer(String(input));
+  function scout(answer: (ids: string[]) => Record<string, string> | Response) {
+    const calls: string[][] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const ids = JSON.parse(String(init?.body)).ids as string[];
+      calls.push(ids);
+      const result = answer(ids);
+      return result instanceof Response ? result : Response.json({ availability: result });
     };
     return { calls, fetchImpl };
   }
-  const empty = () =>
-    Response.json({ streams: [], den: { answerKind: 'empty', coverage: { sources: [] } } });
+  const unavailable = (ids: string[]) => Object.fromEntries(ids.map((id) => [id, 'unavailable']));
 
-  it('fades Familjen Andersson — every stream list empty — after one list search at S1E1', async () => {
-    const { calls, fetchImpl } = scout(empty);
+  it('fades Familjen Andersson after one batched S1E1 verdict', async () => {
+    const { calls, fetchImpl } = scout(unavailable);
     const availability = new Availability();
     availability.connect(SCOUT, seriesContent, fetchImpl);
     availability.want(andersson);
     await vi.advanceTimersByTimeAsync(100);
-    expect(calls).toEqual([LIST(1, 1)]);
+    expect(calls).toEqual([[ID(1, 1)]]);
     expect(availability.unavailable(andersson)).toBe(true);
     availability.want(andersson);
     await vi.advanceTimersByTimeAsync(100);
@@ -417,8 +432,8 @@ describe('Availability — series', () => {
   });
 
   it('asks about the Continue Watching entry, and nothing while it waits for an episode', async () => {
-    const { calls, fetchImpl } = scout((url) =>
-      url === LIST(1, 3) ? Response.json({ streams: [{ url: '/scout/p/x' }] }) : empty(),
+    const { calls, fetchImpl } = scout((ids) =>
+      Object.fromEntries(ids.map((id) => [id, id === ID(1, 3) ? 'available' : 'unavailable'])),
     );
     const availability = new Availability();
     availability.connect(SCOUT, seriesContent, fetchImpl);
@@ -430,7 +445,7 @@ describe('Availability — series', () => {
     availability.follow([entry(3)], []);
     availability.want(andersson);
     await vi.advanceTimersByTimeAsync(100);
-    expect(calls).toEqual([LIST(1, 3)]);
+    expect(calls).toEqual([[ID(1, 3)]]);
     expect(availability.unavailable(andersson)).toBe(false);
 
     availability.follow([entry(4, '2026-12-01')], []);
@@ -441,7 +456,7 @@ describe('Availability — series', () => {
   });
 
   it('a new episode found with sources clears the fade', async () => {
-    const { fetchImpl } = scout(empty);
+    const { fetchImpl } = scout(unavailable);
     const availability = new Availability();
     availability.connect(SCOUT, seriesContent, fetchImpl);
     availability.want(andersson);
@@ -454,20 +469,52 @@ describe('Availability — series', () => {
     expect(availability.unavailable(andersson)).toBe(false);
   });
 
-  it('a failed search is unknown, never fades, and is asked again', async () => {
-    let down = true;
-    const { calls, fetchImpl } = scout(() =>
-      down ? new Response('{}', { status: 502 }) : empty(),
-    );
+  it('failure, malformed and unknown verdicts never fade, and are asked again', async () => {
+    let attempt = 0;
+    const { calls, fetchImpl } = scout((ids) => {
+      attempt++;
+      if (attempt === 1) return new Response('{}', { status: 502 });
+      const verdict = attempt === 2 ? 'not-a-verdict' : attempt === 3 ? 'unknown' : 'unavailable';
+      return Object.fromEntries(ids.map((id) => [id, verdict]));
+    });
     const availability = new Availability();
     availability.connect(SCOUT, seriesContent, fetchImpl);
     availability.want(andersson);
     await vi.advanceTimersByTimeAsync(100);
     expect(availability.unavailable(andersson)).toBe(false);
-    down = false;
     await vi.advanceTimersByTimeAsync(RETRY_MS + 100);
-    expect(calls).toEqual([LIST(1, 1), LIST(1, 1)]);
+    expect(availability.unavailable(andersson)).toBe(false);
+    await vi.advanceTimersByTimeAsync(RETRY_MS + 100);
+    expect(availability.unavailable(andersson)).toBe(false);
+    await vi.advanceTimersByTimeAsync(RETRY_MS + 100);
+    expect(calls).toEqual([[ID(1, 1)], [ID(1, 1)], [ID(1, 1)], [ID(1, 1)]]);
     expect(availability.unavailable(andersson)).toBe(true);
+  });
+
+  it('cancels and fences a superseded profile service batch', async () => {
+    let release!: (response: Response) => void;
+    const held = new Promise<Response>((resolve) => (release = resolve));
+    let oldSignal: AbortSignal | null | undefined;
+    const oldFetch: typeof fetch = async (_input, init) => {
+      oldSignal = init?.signal;
+      return held;
+    };
+    const availability = new Availability();
+    availability.connect(SCOUT, seriesContent, oldFetch);
+    availability.want(andersson);
+    await vi.advanceTimersByTimeAsync(100);
+
+    const { calls, fetchImpl } = scout((ids) =>
+      Object.fromEntries(ids.map((id) => [id, 'available'])),
+    );
+    availability.connect({ ...SCOUT, base: '/scout/replaced' }, seriesContent, fetchImpl);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(oldSignal?.aborted).toBe(true);
+    release(Response.json({ availability: { [ID(1, 1)]: 'unavailable' } }));
+    await vi.runAllTimersAsync();
+
+    expect(calls).toEqual([[ID(1, 1)]]);
+    expect(availability.unavailable(andersson), 'the superseded answer is ignored').toBe(false);
   });
 
   it('opening the Sources heals a stale fade, and verdicts are kept for the next visit', async () => {
@@ -476,7 +523,7 @@ describe('Availability — series', () => {
       getItem: (k: string) => data.get(k) ?? null,
       setItem: (k: string, v: string) => void data.set(k, v),
     } as Storage;
-    const { fetchImpl } = scout(empty);
+    const { fetchImpl } = scout(unavailable);
     const availability = new Availability(storage);
     availability.connect(SCOUT, seriesContent, fetchImpl);
     availability.want(andersson);
