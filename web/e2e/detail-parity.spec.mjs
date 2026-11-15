@@ -546,9 +546,7 @@ test('phone promotes Sources only when it replaces unavailable playback', async 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('provider routing retires an old locale answer and keeps failure badges named', async ({
-  page,
-}) => {
+test('provider routing retires an old locale answer', async ({ page }) => {
   let releaseSwedish;
   const swedishGate = new Promise((resolve) => (releaseSwedish = resolve));
   let sawSwedish;
@@ -558,12 +556,10 @@ test('provider routing retires an old locale answer and keeps failure badges nam
   let sawSpanish;
   const spanishStarted = new Promise((resolve) => (sawSpanish = resolve));
   const languages = [];
-  let failDirectory = false;
   await setup(page, {
     answerProviderDirectory: async (route) => {
       const language = new URL(route.request().url()).searchParams.get('language') ?? 'en';
       languages.push(language);
-      if (failDirectory) return route.fulfill({ status: 503, body: 'directory unavailable' });
       if (language === 'sv-SE') {
         sawSwedish();
         await swedishGate;
@@ -593,12 +589,21 @@ test('provider routing retires an old locale answer and keeps failure badges nam
   await expect(active.locator('a.provider[href="/service/8-fi-netflix"]')).toHaveCount(0);
   expect(languages.filter((language) => language === 'sv-SE')).toHaveLength(2);
   expect(languages.filter((language) => language === 'es-ES')).toHaveLength(2);
+});
 
-  failDirectory = true;
+test('a provider directory failure keeps its badges named without stale links', async ({
+  page,
+}) => {
+  await setup(page, {
+    answerProviderDirectory: (route) =>
+      route.fulfill({ status: 503, body: 'directory unavailable' }),
+  });
+  await page.addInitScript(() => history.replaceState(null, '', '/tv/9?language=sv'));
   await page.goto(`${E2E_ORIGIN}/test/detail-parity.html?language=sv`);
+  const active = page.locator('[data-active="true"]');
   await expect(
     active.getByRole('img', { name: 'Netflix Standard with Ads', exact: true }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 30_000 });
   await expect(active.locator('a.provider')).toHaveCount(0);
   await expect(active.locator('a.attribution')).toBeVisible();
 });

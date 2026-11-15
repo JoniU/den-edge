@@ -194,7 +194,7 @@
     shownSubtitleLanguages,
     maxSubtitlesPerLanguage = 3,
     autoSkip = false,
-    playbackSourcePolicy = 'best',
+    playbackSourcePolicy = 'remember',
     preferredPlaybackSource,
     resume,
     next,
