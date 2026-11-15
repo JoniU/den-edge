@@ -415,6 +415,42 @@ test('retained Settings replaces every household view and sends its next mutatio
   expect(subscriptions.replacement.recovery ?? 0).toBe(0);
 });
 
+test('profile Owner tracker state and mutations use activity authority, never the household log', async ({
+  page,
+}) => {
+  await guardNetwork(page);
+  await page.route('**/lib/*/grants', (route) => route.fulfill({ json: { grants: [] } }));
+  await page.route('**/routes', (route) => route.fulfill({ json: {} }));
+  await page.route('**/version', (route) => route.fulfill({ json: { version: 'test' } }));
+  await page.route('**/config', (route) => route.fulfill({ json: {} }));
+  await routeTmdb(page, (route) => route.fulfill({ json: { images: {}, results: [] } }));
+  await page.goto(`${E2E_ORIGIN}/test/settings.html?profile-tracker-authority`);
+
+  // The household has no tracker row. The connected presentation comes only from Owner's activity library.
+  const simkl = page.getByRole('button', { name: /SIMKL Connected/ });
+  await expect(simkl).toBeVisible();
+  await simkl.click();
+  const section = page.getByRole('region', { name: 'SIMKL' });
+  await section.getByRole('button', { name: 'Disconnect' }).click();
+  await section.getByRole('button', { name: 'Disconnect', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => globalThis.fixtureTrackerAuthority.commands()))
+    .toEqual({ owner: ['disconnect'], replacement: [] });
+
+  // Replace only the active Owner activity library while that old mutation is held. Its tracker lease and open
+  // surface retire synchronously; releasing the old answer cannot republish its state or touch the household log.
+  await page.evaluate(() => globalThis.fixtureTrackerAuthority.replace());
+  await expect(page.getByRole('button', { name: /SIMKL Not connected/ })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => globalThis.fixtureTrackerAuthority.subscriptions()))
+    .toEqual({ owner: 0, replacement: 1 });
+  await page.evaluate(() => globalThis.fixtureTrackerAuthority.release());
+  await expect(page.getByRole('button', { name: /SIMKL Not connected/ })).toBeVisible();
+  expect(await page.evaluate(() => globalThis.fixtureTrackerAuthority.householdCommands())).toEqual(
+    [],
+  );
+});
+
 test('saving a provider key validates it in the content Worker before storing it', async ({
   page,
 }) => {
