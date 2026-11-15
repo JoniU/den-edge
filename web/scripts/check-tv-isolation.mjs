@@ -151,7 +151,12 @@ if (process.argv.includes('--capture')) {
   // (`sheetQuery`), in the `actions` chunk the poster menus load at startup (3,658 -> 3,723); the rest is the startup
   // phrase map. The player's pages, sections, current values and header are drawn in its lazy chunk instead. That left
   // no margin: raise the absolute/proportional startup caps to the next 128-byte boundary, retaining 108.
-  if (initialDelta > Math.min(7424, Math.floor(baseline.initialGzip * 0.0378)))
+  // Authority-scoped series-release recall adds 68 gzip bytes to startup on matched current-main/head builds
+  // (203,797 -> 203,865): a compact five-value authority tuple and the Player remount key which prevent an old
+  // profile/library/household/add-on source from publishing delayed recall. The digest, retained-memory codec and
+  // source lookup remain in the existing lazy Player chunk. Raise both caps to the next 128-byte boundary, retaining
+  // 83 bytes on this build.
+  if (initialDelta > Math.min(7552, Math.floor(baseline.initialGzip * 0.0385)))
     throw new Error('Browser initial JS/CSS budget exceeded');
   // Complete UI translations are opt-in chunks: neither is fetched on the higher-priority English path. Budget
   // their compressed size separately so adding copy can never disguise growth in application code, while the
@@ -323,5 +328,10 @@ if (process.argv.includes('--capture')) {
   // next 128-byte boundary would retain only 37: 165 retained.
   // Merging the Kid direct-read authority brings the combined graph to 101,667. Its measured consolidation and
   // rejected lazy alternatives are recorded in AGENTS.md; allow the next 128-byte boundary, retaining 93.
-  if (coreTotalDelta > 101760) throw new Error('Browser total JS/CSS budget exceeded');
+  // Authority-scoped series-release recall adds 1,204 gzip bytes to the complete non-translation graph on matched
+  // current-main/head builds (101,667 -> 102,871), 1,108 in the existing lazy Player chunk and 60 at startup. A new
+  // boundary cannot reduce the gate's complete-graph total and would add a request before the first session lookup;
+  // keep the synchronous authority/remount fence at startup and the implementation with Player. Allow the next
+  // useful 128-byte boundary, retaining 169 bytes for gzip variance.
+  if (coreTotalDelta > 103040) throw new Error('Browser total JS/CSS budget exceeded');
 }

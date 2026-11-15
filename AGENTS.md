@@ -115,6 +115,17 @@ everything the committed code imports is committed too.
   either the Worker admission or the existing Remux/playback code across a lazy boundary cannot reduce this total
   and would add an authorization- or playback-critical request. The ceiling therefore advances one 128-byte step
   from current main's 101,632 to 101,760, retaining 93 bytes on the combined build.
+  Authority-scoped series-release recall was then measured on that same current-main merge and the corrected head:
+  startup moves 203,797 → 203,865 gzip bytes, the complete graph 873,854 → 875,058, translations stay 46,397,
+  and the complete non-translation graph moves 101,667 → 102,871. Of the 1,204-byte complete-graph increase,
+  1,108 is in the existing lazy Player chunk (48,118 → 49,226) and 60 is in the always-loaded app chunk
+  (108,550 → 108,610); the remaining 36 bytes are shared-chunk compression movement. Consolidating the five
+  authority fields into a tuple removes their repeated eager property names. The authority/remount coordinate must
+  remain in always-loaded Library so a replaced profile, library, household or source cannot publish delayed recall;
+  the digest, retained-memory codec and bounded source lookup already live with lazy Player. A further split cannot
+  reduce the isolation gate's complete-graph accounting and would add a request before the first session lookup. The
+  startup ceiling therefore advances to 7,552 bytes above baseline (83 retained), and the complete non-translation
+  ceiling to the next useful 128-byte boundary, 103,040 (169 retained); the translation ceiling is unchanged.
 
 ## Testing
 
