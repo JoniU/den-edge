@@ -277,12 +277,19 @@ async function guestPlayer(
   return playback;
 }
 
-/** The options' Source page, in Swedish, opened by taps as a finger does; the sheet it is on. */
+/**
+ * The options' Source page, in Swedish, opened by taps as a finger does; the sheet it is on. The page's clock must be
+ * installed before it loads. The controls hide 3 s after their last reveal and then pass taps to the picture; held
+ * from the reveal to the tap on ⋯ they cannot hide in between, however slow the steps are (the open menu holds them
+ * after that).
+ */
 async function swedishSourceSheet(page) {
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1_000);
   await revealControls(page, { tap: true });
   const more = page.getByRole('button', { name: 'Fler uppspelningsalternativ' });
   expect(await tapLandsOnStamp(more)).toBe(true);
   await more.tap();
+  await page.clock.resume();
   const sheet = page.getByRole('menu', { name: 'Fler uppspelningsalternativ' });
   await sheet.getByRole('menuitem', { name: /^Källa, / }).tap();
   return sheet;
@@ -303,6 +310,7 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
     const browser = await webkit.launch();
     try {
       const page = await (await iphone(browser, 'sv-SE')).newPage();
+      await page.clock.install();
       // Hearth with TorBox: TorBox unless the request rules it out, TorBox alone when asked for it alone.
       const playback = await guestPlayer(page, {
         originalLanguage: 'he',
@@ -673,6 +681,8 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
     const browser = await webkit.launch();
     try {
       const page = await (await iphone(browser, 'sv-SE')).newPage();
+      // Before the page loads, so the controls' hide timer is on the clock `swedishSourceSheet` holds.
+      await page.clock.install();
       // Hearth with Den Remux only: TorBox alone is refused bare, with no TorBox failure behind it.
       const playback = await guestPlayer(page, {
         originalLanguage: 'he',
