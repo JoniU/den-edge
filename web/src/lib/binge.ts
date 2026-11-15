@@ -12,6 +12,41 @@
 /** Seconds before the end at which the next episode is warmed — the TV's `BingeCoordinator.warmLead`. */
 export const WARM_LEAD_SECS = 180;
 
+/** The complete outcomes the next-episode prefetch can report without naming what was watched. */
+export type NextPrefetchOutcome =
+  | 'no_continuity'
+  | 'list_unavailable'
+  | 'ready'
+  | 'preparing'
+  | 'not-queued'
+  | 'failed'
+  | 'expired'
+  | 'refused'
+  | 'paused'
+  | 'unknown';
+
+/** Emit only the bounded result of a next-episode prefetch, never its episode or release identity. */
+export function reportNextPrefetch(outcome: NextPrefetchOutcome): void {
+  console.info(`[Den binge] ${JSON.stringify({ event: 'next-prefetch', outcome })}`);
+}
+
+type BingeErrorClass = 'dom_exception' | 'error' | 'response' | 'other';
+
+/** A closed description of the thrown value's JavaScript class, without its free-form contents. */
+function errorClass(error: unknown): BingeErrorClass {
+  if (error instanceof DOMException) return 'dom_exception';
+  if (error instanceof Error) return 'error';
+  if (error instanceof Response) return 'response';
+  return 'other';
+}
+
+/** Report a next-detail failure without forwarding provider, transport, or thrown-value text. */
+export function reportNextDetailFailure(error: unknown): void {
+  console.warn(
+    `[Den binge] ${JSON.stringify({ event: 'next-detail', outcome: 'failed', errorClass: errorClass(error) })}`,
+  );
+}
+
 /**
  * Whether the next episode should be warmed now.
  *
