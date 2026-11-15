@@ -76,6 +76,21 @@ if (tizen3) {
   verifyTizen3Core();
   if (assets.some((file) => file.includes('AddKidProfileForm')))
     throw new Error('Owner-only Add Kid form leaked into the reduced Tizen 3 package');
+  const pageScripts = (
+    await Promise.all(
+      assets
+        .filter((file) => file.endsWith('.js') && !/(?:Worker|worker)-/.test(file))
+        .map((file) => readFile(resolve(directory, 'assets', file), 'utf8')),
+    )
+  ).join('\n');
+  if (!pageScripts.includes('owner-pin-management-handoff'))
+    throw new Error('Tizen 3 is missing the supported-browser Owner PIN handoff');
+  if (!pageScripts.includes('profile-content-management-handoff'))
+    throw new Error('Tizen 3 is missing the supported-browser profile Content handoff');
+  if (!pageScripts.includes('visitor-content-unavailable'))
+    throw new Error('Tizen 3 is missing the local Visitor Content unsupported state');
+  if (pageScripts.includes('new-parental-pin'))
+    throw new Error('Owner PIN editor leaked into the reduced Tizen 3 package');
   if (/type=["']module["']|rel=["']modulepreload["']/.test(entryHtml))
     throw new Error('Native module loading remains in the Tizen 3 build');
   if (

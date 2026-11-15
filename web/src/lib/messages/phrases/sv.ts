@@ -1364,4 +1364,32 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
     'Assistentanslutningar är inte tillgängliga på den här TV:n',
   'On a phone or computer linked to this household, open Den › Settings › Assistants.':
     'Öppna Den › Inställningar › Assistenter på en telefon eller dator som är länkad till hushållet.',
+  'Owner PIN couldn’t be checked. Try again.':
+    'Ägarens PIN-kod kunde inte kontrolleras. Försök igen.',
+  'Enter your current Owner PIN and try again.': 'Ange din nuvarande ägar-PIN och försök igen.',
+  'The Owner PIN or profile state changed. Enter the current PIN and try again.':
+    'Ägarens PIN-kod eller profilläget ändrades. Ange den aktuella PIN-koden och försök igen.',
+  'Saved on this device. Reconnect, then try again to confirm every device has it.':
+    'Sparat på den här enheten. Anslut igen och försök sedan på nytt för att bekräfta att alla enheter har det.',
+  'Manage the Owner PIN in a supported browser':
+    'Hantera ägarens PIN-kod i en webbläsare som stöds',
+  'Manage profile content in a supported browser':
+    'Hantera profilinnehåll i en webbläsare som stöds',
+  'Owner PIN administration is not available on this TV':
+    'Hantering av ägarens PIN-kod är inte tillgänglig på den här TV:n',
+  'Profile content administration is not available on this TV':
+    'Hantering av profilinnehåll är inte tillgänglig på den här TV:n',
+  'Visitor content preferences are unavailable on this TV':
+    'Besökarens innehållsinställningar är inte tillgängliga på den här TV:n',
+  'Visitor preferences stay on the device where that visit was created':
+    'Besökarens inställningar stannar på enheten där besöket skapades',
+  'Remove the Owner PIN?': 'Ta bort ägarens PIN-kod?',
+  'This household will no longer require a PIN to open Owner settings.':
+    'Det här hushållet kräver inte längre en PIN-kod för att öppna ägarinställningarna.',
+  'On a phone or computer linked to this household, open Den › Settings › Content to set, change, or remove the Owner PIN.':
+    'Öppna Den › Inställningar › Innehåll på en telefon eller dator som är länkad till hushållet för att ställa in, ändra eller ta bort ägarens PIN-kod.',
+  'On a phone or computer linked to this household, switch to this profile and open Den › Settings › Content.':
+    'Byt till den här profilen och öppna Den › Inställningar › Innehåll på en telefon eller dator som är länkad till hushållet.',
+  'Use this TV for playback, or end the Visitor visit and choose a household profile. Nothing is changed.':
+    'Använd TV:n för uppspelning, eller avsluta besöket och välj en hushållsprofil. Ingenting ändras.',
 };
