@@ -3,7 +3,7 @@
      grouped by month and drawn a screenful at a time as you scroll, or one year of it. -->
 <script lang="ts">
   import { i18n } from '../lib/i18n.svelte';
-  import { tick, untrack, type Snippet } from 'svelte';
+  import { onDestroy, tick, untrack, type Snippet } from 'svelte';
   import {
     UNKNOWN_YEAR,
     compareHistoryTitleKeys,
@@ -111,6 +111,12 @@
   let actionGeneration = 0;
   let retrying = $state(false);
   let retryButton = $state<HTMLButtonElement | null>(null);
+  let pageHeading = $state<HTMLHeadingElement | null>(null);
+  let alive = true;
+  onDestroy(() => {
+    alive = false;
+    actionGeneration += 1;
+  });
 
   const key = (title: Title) => `${title.type}:${title.id}`;
   // A series with an episode seen is under way: it's in Continue Watching or Watched, so the watchlist doesn't also
@@ -368,12 +374,23 @@
       return;
     }
     const generation = ++actionGeneration;
+    const restoreFocus = retry && document.activeElement === retryButton;
+    const focusIndex = restoreFocus
+      ? Array.from(
+          document.querySelectorAll<HTMLElement>('[data-watchlist-card] a[href]'),
+        ).findIndex(
+          (link) =>
+            link.closest<HTMLElement>('[data-watchlist-card]')?.dataset.watchlistCard ===
+            key(title),
+        )
+      : -1;
     if (!retry) failedAction = null;
     retrying = retry;
     const saved = await control.run(title);
+    if (!alive || generation !== actionGeneration) return;
     // Let the parent publish its exact failure copy before retaining it beside this desired action.
     await tick();
-    if (generation !== actionGeneration) return;
+    if (!alive || generation !== actionGeneration) return;
     retrying = false;
     if (saved === false && presented(title)) {
       failedAction = {
@@ -381,7 +398,16 @@
         control,
         message: failure ?? 'Couldn’t save that. Check that this device is on your network.',
       };
-    } else if (saved === true) failedAction = null;
+    } else if (saved === true) {
+      failedAction = null;
+      if (restoreFocus) {
+        await tick();
+        const links = Array.from(
+          document.querySelectorAll<HTMLElement>('[data-watchlist-card] a[href]'),
+        );
+        (links[Math.min(Math.max(focusIndex, 0), links.length - 1)] ?? pageHeading)?.focus();
+      }
+    }
   }
 
   function retryFailedAction() {
@@ -428,7 +454,7 @@
 <svelte:window onpointerdown={dismissQuestion} onkeydown={dismissQuestion} />
 
 {#snippet framed(title: Title, controls: Control[], card: Snippet)}
-  <div class="framed" data-spatial-overlay>
+  <div class="framed" data-watchlist-card={key(title)} data-spatial-overlay>
     {@render card()}
     {#if controls.length}
       <div class="controls" data-spatial-overlay-actions>
@@ -478,7 +504,7 @@
 {/snippet}
 
 <div class="title">
-  <h1>{i18n.phrase('Watchlist')}</h1>
+  <h1 bind:this={pageHeading} tabindex="-1">{i18n.phrase('Watchlist')}</h1>
   <!-- The library's other list: what the debrid is fetching for it, from any device. -->
   <a class="aside" href="/downloads">{i18n.phrase('Downloads')} ›</a>
 </div>
