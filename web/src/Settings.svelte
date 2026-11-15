@@ -93,7 +93,10 @@
     simkl?: ReturnType<LibraryModel['simkl']>;
     recovery?: ReturnType<LibraryModel['recovery']>;
   };
-  const acquireAuthority = (household: LibraryModel, activity: LibraryModel): SettingsAuthority => ({
+  const acquireAuthority = (
+    household: LibraryModel,
+    activity: LibraryModel,
+  ): SettingsAuthority => ({
     model: household,
     activityModel: activity,
     connections: household.connections(),
@@ -118,10 +121,7 @@
     const replacementHousehold = model;
     const replacementActivity = activityModel;
     joinPresentation.replace(replacementHousehold);
-    if (
-      authority.model === replacementHousehold &&
-      authority.activityModel === replacementActivity
-    )
+    if (authority.model === replacementHousehold && authority.activityModel === replacementActivity)
       return;
     const previous = authority;
     authority = untrack(() => acquireAuthority(replacementHousehold, replacementActivity));

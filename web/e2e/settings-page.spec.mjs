@@ -442,33 +442,41 @@ test('profile Owner tracker state and mutations use activity authority, never th
     .poll(() => page.evaluate(() => globalThis.fixtureTrackerAuthority.commands()))
     .toEqual({ owner: ['disconnect'], replacement: [] });
 
-  // Replace only the active Owner activity library while that old mutation is held. Its tracker lease and open
-  // surface retire synchronously; releasing the old answer cannot republish its state or touch the household log.
+  // Replace only the active Owner activity library while that old mutation is held. Its tracker lease retires and
+  // the preserved disclosure immediately presents the replacement authority; releasing the old answer cannot
+  // republish its state or touch the household log.
   await page.evaluate(() => globalThis.fixtureTrackerAuthority.replace());
   const replacementSimkl = page.getByRole('button', { name: /SIMKL 1 removal held/ });
   await expect(replacementSimkl).toBeEnabled();
+  const replacementSection = page.getByRole('region', { name: 'SIMKL' });
+  await expect(replacementSection).toContainText('Movie 550');
+  await expect(replacementSection).toContainText('Remove 1 title from SIMKL');
   await expect
     .poll(() => page.evaluate(() => globalThis.fixtureTrackerAuthority.subscriptions()))
     .toEqual({ owner: 0, replacement: 1 });
   await page.evaluate(() => globalThis.fixtureTrackerAuthority.release());
   await expect(replacementSimkl).toBeVisible();
+  await replacementSection.getByRole('button', { name: 'Disconnect' }).click();
+  await replacementSection.getByRole('button', { name: 'Disconnect', exact: true }).click();
+  await expect(replacementSection).toContainText(
+    'SIMKL connection is unavailable in this deployment.',
+  );
+  await expect
+    .poll(() => page.evaluate(() => globalThis.fixtureTrackerAuthority.commands()))
+    .toEqual({ owner: ['disconnect'], replacement: ['disconnect'] });
   expect(await page.evaluate(() => globalThis.fixtureTrackerAuthority.householdCommands())).toEqual(
     [],
   );
 
   // This profile has no Web SIMKL client id and its Apple TV route is deliberately unavailable: never loop the
   // viewer back to TV. Household and activity selector failures are retried independently by the one visible action.
-  await replacementSimkl.click();
-  await expect(page.getByRole('region', { name: 'SIMKL' })).toContainText(
-    'SIMKL connection is unavailable in this deployment.',
-  );
   await page.evaluate(() => {
     globalThis.fixtureSettingsAuthority.failConnections();
     globalThis.fixtureTrackerAuthority.fail();
   });
   await expect(page.getByText('Couldn’t load your settings.')).toBeVisible();
   await page.getByRole('button', { name: 'Try again' }).click();
-  await expect(replacementSimkl).toBeVisible();
+  await expect(page.getByRole('button', { name: /SIMKL Not connected/ })).toBeVisible();
   expect(await page.evaluate(() => globalThis.fixtureTrackerAuthority.retries())).toEqual({
     owner: 0,
     replacement: 1,
