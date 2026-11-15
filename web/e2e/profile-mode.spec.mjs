@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { devices, expect, test, webkit } from '@playwright/test';
+import { chromium, devices, expect, test, webkit } from '@playwright/test';
 import { E2E_ORIGIN } from './base-url.mjs';
 import { routeLibraryEdge } from './library-edge.mjs';
 import { guardNetwork } from './network.mjs';
@@ -1028,6 +1028,89 @@ test('Owner creates a selectable Kid after wrong-PIN and transient recovery', as
 
   await sam.click();
   await expect(page.locator('[data-mode]')).toHaveText('Kids active');
+});
+
+test('Owner title access distinguishes wrong PIN from retryable save failure and reads back the durable choice', async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  });
+  try {
+    const page = await browser.newPage();
+    await openRealOwner(page, '&titleApproval&titleApprovalFailure=once');
+
+    const allow = page.getByRole('button', { name: 'Allow Fight Club for Kids' });
+    await allow.click();
+    const dialog = page.getByRole('dialog', { name: 'Allow for Kids?' });
+    const pin = dialog.getByLabel('Owner PIN');
+
+    await pin.fill('0000');
+    await expect(dialog.getByRole('alert')).toHaveText('That PIN didn’t match.');
+    await expect(pin).toHaveValue('');
+    await expect(pin).toBeFocused();
+
+    await pin.fill('1234');
+    await expect(dialog.getByRole('alert')).toHaveText('Couldn’t save Kid access. Try again.');
+    await expect(pin).toHaveValue('1234');
+    await expect(pin).toBeFocused();
+
+    await dialog.getByRole('button', { name: 'Allow', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const remove = page.getByRole('button', { name: 'Remove Fight Club for Kids' });
+    await expect(remove).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => window.denProfileModeFixture.snapshot()))
+      .toMatchObject({
+        titleApprovalRequests: 3,
+        titleApprovalFailures: 1,
+        titleApprovals: ['movie:550'],
+      });
+
+    await remove.click();
+    await page
+      .getByRole('dialog', { name: 'Remove for Kids?' })
+      .getByLabel('Owner PIN')
+      .fill('1234');
+    await expect(allow).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => window.denProfileModeFixture.snapshot().titleApprovals))
+      .toEqual([]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a held title approval cannot close or show an error in its replacement dialog', async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  });
+  try {
+    const page = await browser.newPage();
+    await openRealOwner(page, '&titleApproval&holdTitleApproval');
+    await page.getByRole('button', { name: 'Allow Fight Club for Kids' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Allow for Kids?' });
+    await dialog.getByLabel('Owner PIN').fill('1234');
+    await expect(dialog.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+
+    await page.evaluate(() => window.denProfileModeFixture.replaceTitleApprovalRequest());
+    await expect(dialog).toContainText('Game of Thrones');
+    await expect(dialog.getByLabel('Owner PIN')).toHaveValue('');
+    await expect(dialog.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+
+    await page.evaluate(() => window.denProfileModeFixture.resolveHeldTitleApproval());
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Allow', exact: true })).toBeDisabled();
+    await dialog.getByLabel('Owner PIN').fill('1234');
+    await expect(dialog).toBeHidden();
+    await expect
+      .poll(() => page.evaluate(() => window.denProfileModeFixture.snapshot()))
+      .toMatchObject({
+        titleApprovalRequests: 2,
+        titleApprovals: ['movie:550', 'tv:1399'],
+      });
+  } finally {
+    await browser.close();
+  }
 });
 
 test('leaving Add Kid restores remote focus to its entry point', async ({ page }) => {

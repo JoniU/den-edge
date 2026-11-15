@@ -28,6 +28,9 @@ const legacyCompat = fileURLToPath(new URL('./src/tv/compat-legacy.ts', import.m
 const tizen3ContentSection = fileURLToPath(
   new URL('./src/settings/ContentSection-tizen3.svelte', import.meta.url),
 );
+const tvKidTitleAccessDialog = fileURLToPath(
+  new URL('./src/components/KidTitleAccessDialog-tv.svelte', import.meta.url),
+);
 const tizen3WorkerCompat = fileURLToPath(
   new URL('./src/tv/compat-tizen3-worker.ts', import.meta.url),
 );
@@ -120,8 +123,17 @@ if (serviceOriginText) {
 let webOrigin = serviceOrigin;
 if (process.env.DEN_TV_WEB_ORIGIN) {
   const parsed = new URL(process.env.DEN_TV_WEB_ORIGIN);
-  if (parsed.protocol !== 'https:' || parsed.pathname !== '/' || parsed.search || parsed.hash)
-    throw new Error('DEN_TV_WEB_ORIGIN must be an exact HTTPS origin');
+  if (
+    parsed.protocol !== 'https:' ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== '/' ||
+    parsed.search ||
+    parsed.hash
+  )
+    throw new Error(
+      'DEN_TV_WEB_ORIGIN must be an exact HTTPS origin without credentials, path, query, or fragment',
+    );
   webOrigin = parsed.origin;
 }
 if (packaged && platform !== 'tizen')
@@ -418,6 +430,12 @@ export default mergeConfig(
     // to wrappers with byte-identical APIs beside the compatible generated modules.
     resolve: {
       alias: [
+        {
+          // Every TV tier hands persistent title administration to the supported Browser. Replace the static
+          // Library import at resolution time so bundler/chunking changes cannot retain the unreachable writer.
+          find: /^(?:.*\/)?components\/KidTitleAccessDialog\.svelte$/,
+          replacement: tvKidTitleAccessDialog,
+        },
         ...(tizen3
           ? [
               {
@@ -501,6 +519,7 @@ export default mergeConfig(
                 'test/player.html',
                 'test/detail-parity.html',
                 'test/profile-mode.html',
+                'test/detail-a11y.html',
               ],
             },
           }

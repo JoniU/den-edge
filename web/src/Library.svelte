@@ -117,6 +117,7 @@
   } from './lib/libraryServiceProtocol';
   import { OverviewTitleIndex, titleViewRows } from './lib/libraryViewPresentation';
   import type { ProfileModeCoordinator } from './lib/profileModeCoordinator.svelte';
+  import { finishKidTitleApprovalPresentation } from './lib/kidTitleApprovalPresentation';
   import KidTitleAccessDialog from './components/KidTitleAccessDialog.svelte';
   import {
     airedThrough,
@@ -318,7 +319,16 @@
     kid: { id: string; name: string };
     title: Title;
     allow: boolean;
+    authority: object;
   } | null>(null);
+  $effect(() => {
+    const request = kidAccessRequest;
+    if (
+      request &&
+      (!profiles || profiles.kidTitleApprovalAuthority(request.kid.id) !== request.authority)
+    )
+      kidAccessRequest = null;
+  });
   let retryingLibrary = $state(false);
   let failure = $state<string | null>(null);
   let notice = $state<string | null>(null);
@@ -1656,7 +1666,8 @@
       );
     },
     get kids() {
-      if (profiles?.mode !== 'owner' || profiles.parentalPinConfigured !== true) return [];
+      if (__DEN_TV__ || profiles?.mode !== 'owner' || profiles.parentalPinConfigured !== true)
+        return [];
       return profiles.choices.flatMap((choice) =>
         choice.role === 'kid' && choice.id
           ? [
@@ -1670,7 +1681,9 @@
       );
     },
     changeKidAccess: (kid, title, allow) => {
-      kidAccessRequest = { kid, title, allow };
+      const authority = profiles?.kidTitleApprovalAuthority(kid.id);
+      if (!authority) return;
+      kidAccessRequest = { kid, title, allow, authority };
     },
     get play() {
       const send = play;
@@ -2938,33 +2951,40 @@
   }
 </script>
 
-<KidTitleAccessDialog
-  request={kidAccessRequest}
-  onclose={() => (kidAccessRequest = null)}
-  onconfirm={async (pin) => {
-    const request = kidAccessRequest;
-    if (!request || !profiles) return false;
-    const saved = await profiles.setKidTitleApproval(
-      request.kid.id,
-      { type: request.title.type, id: request.title.id },
-      request.allow,
-      pin,
-    );
-    if (saved)
-      session.notify(
-        request.allow
-          ? i18n.format('notice.allowedForChild', 'Allowed “{title}” for {name}', {
-              title: request.title.title,
-              name: request.kid.name,
-            })
-          : i18n.format('notice.removedFromChild', 'Removed “{title}” from {name}', {
-              title: request.title.title,
-              name: request.kid.name,
-            }),
+{#if !__DEN_TV__}
+  <KidTitleAccessDialog
+    request={kidAccessRequest}
+    onclose={() => (kidAccessRequest = null)}
+    onconfirm={async (pin) => {
+      const request = kidAccessRequest;
+      if (
+        !request ||
+        !profiles ||
+        profiles.kidTitleApprovalAuthority(request.kid.id) !== request.authority
+      )
+        return { outcome: 'superseded' };
+      const result = await profiles.setKidTitleApproval(
+        request.kid.id,
+        { type: request.title.type, id: request.title.id },
+        request.allow,
+        pin,
       );
-    return saved;
-  }}
-/>
+      return finishKidTitleApprovalPresentation(request, kidAccessRequest, result, () =>
+        session.notify(
+          request.allow
+            ? i18n.format('notice.allowedForChild', 'Allowed “{title}” for {name}', {
+                title: request.title.title,
+                name: request.kid.name,
+              })
+            : i18n.format('notice.removedFromChild', 'Removed “{title}” from {name}', {
+                title: request.title.title,
+                name: request.kid.name,
+              }),
+        ),
+      );
+    }}
+  />
+{/if}
 
 {#if keptNotice || tmdbLimited}
   <p class="tmdb-limit" role="alert">
@@ -3041,6 +3061,11 @@
     ceiling={detailPrefs.ceiling}
     onepisode={markEpisodeSeen}
     shown={relatedShown}
+    kidTitleAccessHandoff={__DEN_TV__ &&
+    profiles?.mode === 'owner' &&
+    profiles.choices.some((choice) => choice.role === 'kid' && choice.id)
+      ? `${__DEN_TV_WEB_ORIGIN__ || location.origin}${titleHref(page)}`
+      : undefined}
   />
 {:else if route.page === 'person' && !PersonScreen.current}
   <ScreenLoading screen={PersonScreen} />
