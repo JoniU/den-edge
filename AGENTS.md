@@ -241,6 +241,22 @@ everything the committed code imports is committed too.
   startup margin absorbs 182 bytes, so its ceiling advances to the next 128-byte boundary, 9,728 over baseline,
   retaining 10 bytes. The complete-graph margin absorbs 33 bytes and its ceiling advances to 111,232 over baseline,
   retaining 31. The fixed 51,200-byte translation ceiling remains unchanged with 3,178 bytes of margin.
+- Compound profile-key reset for Browser, LG/webOS and supported Samsung/Tizen (#941) was measured on matched
+  production builds at current-main `a6b5765a` and head `5a0fba4d`: startup moves 206,114 → 206,041 gzip bytes
+  (-73), the complete non-translation graph moves 836,991 → 839,414 (+2,423), and the independently lazy
+  Spanish/Swedish catalogs move 48,022 → 49,007 (+985). The reset coordinator is already a separate 1,121-byte
+  gzip chunk fetched only when an Owner starts or resumes the destructive operation. The remaining growth is the
+  existing lazy Settings surface's PIN/failure/recovery/focus presentation (+1,165 JS/CSS), exact link persistence
+  and durable-marker handoff (+121), the shared Worker protocol/journal path (+90), and the browser-wide lock helper
+  (+195), partly offset by 261 bytes of startup/assistant consolidation. Test fixtures do not ship. The reset adds
+  no polling, timer, background task or healthy-path request; exact storage readback runs only during this explicit
+  reset, and retries reuse one durable attempt. Moving Settings presentation behind another import would add a
+  request while showing the only recovery action; moving link/marker authority or Worker protocol behind the page
+  chunk would make startup recovery depend on UI code that is intentionally absent until needed. No further split
+  can reduce the complete graph without duplicating authority or weakening reload recovery. Startup remains within
+  its existing ceiling, and translations remain under their fixed 51,200-byte ceiling by 2,193 bytes. The complete
+  graph ceiling advances from 111,232 to 113,664, the smallest 128-byte boundary containing the matched build,
+  retaining 40 bytes.
 
 ## Testing
 

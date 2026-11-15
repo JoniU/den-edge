@@ -368,5 +368,9 @@ if (process.argv.includes('--capture')) {
   // matched current-main/head builds (111,201 -> 112,419), 1,133 in the existing lazy Player chunk and 52 in the
   // eager app chunk. Another boundary cannot reduce this complete-graph total and would add a request before the
   // first session lookup. Allow the next 128-byte boundary, retaining 93 bytes.
-  if (coreTotalDelta > 112512) throw new Error('Browser total JS/CSS budget exceeded');
+  // Compound profile-key reset (#941) adds 2,423 gzip bytes to the complete non-translation graph while startup
+  // shrinks by 73 bytes. Its 1,121-byte page coordinator is separately lazy; the remaining Settings presentation,
+  // link handoff and Worker protocol must bracket that coordinator so reload can recover before the form opens.
+  // Allow the smallest 128-byte boundary containing the reviewed graph, retaining 40 bytes on the matched build.
+  if (coreTotalDelta > 113664) throw new Error('Browser total JS/CSS budget exceeded');
 }

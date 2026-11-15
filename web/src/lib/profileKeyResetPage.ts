@@ -1,5 +1,6 @@
 import type { KeyResetOutcome, ProfileKeyResetOutcome } from './libraryServiceProtocol';
 import type { PendingReset } from './links.svelte';
+import { exclusive } from './exclusive';
 
 /*
  * The page's half of a compound key reset (profiles-v1 §9). The library worker drives den-edge and keeps the journal
@@ -47,11 +48,17 @@ export interface CompoundResetPageDeps<Destination> {
   /** The link this browser holds for the library, if any. */
   link(): { libraryKey: string } | null;
   /** Persist `to` as the link in place of `from`, keeping the old state and the marker. */
-  install(from: string, to: string): void;
-  /** Drop the old library's kept state and the marker; the reset is over. */
-  release(from: string): void | Promise<void>;
-  /** Make the destination the live session. */
-  adopt(destination: Destination, to: string): void;
+  install(from: string, to: string): boolean | Promise<boolean>;
+  /** Drop the old library's kept state and this exact marker; false if another reset replaced it meanwhile. */
+  release(pending: PendingReset): boolean | Promise<boolean>;
+  /** Make the destination live only while `from` still owns this route; false means the caller closes it. */
+  adopt(destination: Destination, to: string, from: string): boolean;
+  /** Exact library currently presented by this route; replacement must never be overwritten by a late reset. */
+  current(): string | null;
+  /** True only while `from` is still this browser's current household authority. */
+  active(from: string): boolean;
+  /** A definitive pre-lock refusal (currently a wrong Owner PIN), safe to retire only its exact marker. */
+  definitiveStartRefusal?(error: unknown): boolean;
 }
 
 export type CompoundResetResult =
@@ -66,6 +73,9 @@ export type CompoundResetResult =
   /** The worker could not be asked. The marker stays. */
   | 'blocked';
 
+/** What the Settings initiation surface can present in addition to the durable reset outcomes. */
+export type CompoundResetStartResult = CompoundResetResult | 'unauthorized' | 'failed';
+
 export class CompoundResetPage<Destination> {
   #running: Promise<CompoundResetResult> | undefined;
 
@@ -76,21 +86,42 @@ export class CompoundResetPage<Destination> {
    * dies after retiring the old library still finds its way to the new key.
    */
   async start(from: string, pin: string): Promise<CompoundResetResult> {
-    if (this.#running) return 'waiting';
+    return this.#guard(() =>
+      exclusive(`den.profileKeyReset.page.${from}`, () => this.#start(from, pin)),
+    );
+  }
+
+  async #start(from: string, pin: string): Promise<CompoundResetResult> {
+    const existing = this.deps.pending.read();
+    if (existing) {
+      if (!existing.compound || existing.from !== from) return 'blocked';
+      return this.#withWorker(existing);
+    }
+    if (!this.deps.active(from)) return 'unavailable';
     const worker = await this.deps.worker(from);
     try {
+      if (!this.deps.active(from)) return 'unavailable';
       const prepared = await worker.model.prepareKeyReset();
       const { destinationLibraryKey: to, device } = prepared.result;
       if (prepared.result.kind !== 'key-reset.prepare' || !to || !device) return 'unavailable';
+      if (!this.deps.active(from)) return 'unavailable';
       const pending: PendingReset = { from, to, device, compound: true };
       if (!this.deps.pending.write(pending)) return 'unavailable';
-      const started = (await worker.model.startProfileKeyReset(pin, to)).result;
+      let started;
+      try {
+        started = (await worker.model.startProfileKeyReset(pin, to)).result;
+      } catch (error) {
+        // A wrong PIN is known to precede server lock acquisition. Every other exception is ambiguous: the request
+        // may have landed, so its exact marker stays as the recovery authority.
+        if (this.deps.definitiveStartRefusal?.(error)) this.#clearExact(pending);
+        throw error;
+      }
       const outcome = outcomeOf(started, 'profile-key-reset.start');
       if (outcome === 'unavailable' || outcome === 'aborted') {
-        this.deps.pending.write(null);
+        this.#clearExact(pending);
         return outcome;
       }
-      return await this.#guard(() => this.#settle(pending, worker.model));
+      return await this.#settle(pending, worker.model);
     } finally {
       worker.close();
     }
@@ -98,20 +129,24 @@ export class CompoundResetPage<Destination> {
 
   /** Continue whatever the marker says is under way. Single-flight; safe to call whenever the page loads. */
   run(pending: PendingReset): Promise<CompoundResetResult> {
-    return this.#guard(async () => {
-      let worker;
-      try {
-        worker = await this.deps.worker(pending.from);
-      } catch (error) {
-        console.warn('den: the profile key reset could not reach its library service', error);
-        return 'blocked';
-      }
-      try {
-        return await this.#settle(pending, worker.model);
-      } finally {
-        worker.close();
-      }
-    });
+    return this.#guard(() =>
+      exclusive(`den.profileKeyReset.page.${pending.from}`, () => this.#withWorker(pending)),
+    );
+  }
+
+  async #withWorker(pending: PendingReset): Promise<CompoundResetResult> {
+    let worker;
+    try {
+      worker = await this.deps.worker(pending.from);
+    } catch (error) {
+      console.warn('den: the profile key reset could not reach its library service', error);
+      return 'blocked';
+    }
+    try {
+      return await this.#settle(pending, worker.model);
+    } finally {
+      worker.close();
+    }
   }
 
   #guard(work: () => Promise<CompoundResetResult>): Promise<CompoundResetResult> {
@@ -134,7 +169,7 @@ export class CompoundResetPage<Destination> {
       case 'complete':
         return this.#install(pending, model, false);
       case 'aborted':
-        this.deps.pending.write(null);
+        this.#clearExact(pending);
         return 'aborted';
       case 'none':
         return this.#withoutJournal(pending, model);
@@ -161,7 +196,7 @@ export class CompoundResetPage<Destination> {
     if (outcome === 'moved' || outcome === 'adopted' || outcome === 'held')
       return this.#install(pending, model, false);
     if (outcome === 'undone' || outcome === 'foreign') {
-      this.deps.pending.write(null);
+      this.#clearExact(pending);
       return 'aborted';
     }
     return 'waiting';
@@ -172,6 +207,7 @@ export class CompoundResetPage<Destination> {
     model: ResetWorkerModel,
     confirm: boolean,
   ): Promise<CompoundResetResult> {
+    if (!this.#ownsPresentation(pending)) return 'waiting';
     let destination;
     try {
       // The readback: the destination reads under the new key before anything points at it.
@@ -180,7 +216,17 @@ export class CompoundResetPage<Destination> {
       console.warn('den: the successor household could not be opened yet', error);
       return 'waiting';
     }
-    if (this.deps.link()?.libraryKey !== pending.to) this.deps.install(pending.from, pending.to);
+    if (!this.#ownsPresentation(pending)) {
+      destination.close();
+      return 'waiting';
+    }
+    if (
+      this.deps.link()?.libraryKey !== pending.to &&
+      !(await this.deps.install(pending.from, pending.to))
+    ) {
+      destination.close();
+      return 'waiting';
+    }
     // Read the install back; the journal is erased only once the link names the new key.
     if (this.deps.link()?.libraryKey !== pending.to) {
       destination.close();
@@ -196,10 +242,47 @@ export class CompoundResetPage<Destination> {
         return 'waiting';
       }
     }
-    await this.deps.release(pending.from);
-    this.deps.adopt(destination, pending.to);
+    if (!this.#ownsPresentation(pending)) {
+      destination.close();
+      return 'waiting';
+    }
+    if (!(await this.deps.release(pending))) {
+      destination.close();
+      return 'waiting';
+    }
+    const current = this.deps.current();
+    if (current !== pending.from && current !== pending.to) {
+      destination.close();
+      return 'waiting';
+    }
+    if (!this.deps.adopt(destination, pending.to, pending.from)) {
+      destination.close();
+      return 'waiting';
+    }
     return 'complete';
   }
+
+  #ownsPresentation(pending: PendingReset): boolean {
+    const current = this.deps.current();
+    return (
+      samePending(this.deps.pending.read(), pending) &&
+      (current === pending.from || current === pending.to)
+    );
+  }
+
+  #clearExact(pending: PendingReset): void {
+    if (samePending(this.deps.pending.read(), pending)) this.deps.pending.write(null);
+  }
+}
+
+function samePending(left: PendingReset | null, right: PendingReset): boolean {
+  return (
+    left?.from === right.from &&
+    left.to === right.to &&
+    left.device === right.device &&
+    left.compound === right.compound &&
+    left.held === right.held
+  );
 }
 
 function outcomeOf(

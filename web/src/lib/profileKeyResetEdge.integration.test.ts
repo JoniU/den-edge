@@ -18,7 +18,13 @@ import {
   type ProfileResetJournal,
 } from './profileKeyResetExecutor';
 import { ProfileKeyResetRecovery } from './profileKeyResetRecovery';
-import { ProfileKeyResetService, VaultResetAdoption } from './profileKeyResetService';
+import {
+  ProfileKeyResetService,
+  ProfileResetUnauthorizedError,
+  VaultResetAdoption,
+} from './profileKeyResetService';
+import { CompoundResetPage, type ResetWorkerModel } from './profileKeyResetPage';
+import type { PendingReset } from './links.svelte';
 import { profilesMaterialize } from './profilesCore';
 import type { ProfileKidCreateVault } from './profileKidCreateWorker';
 import { deriveKeys, fromBase64url, seal, sealPlaintext, type Row } from './wire';
@@ -172,7 +178,11 @@ const status = async (edge: Edge, key: string, wire: 4 | 5) => {
   return response.status;
 };
 
-function serviceFor(w: Awaited<ReturnType<typeof world>>, vault = new MemoryVault()) {
+function serviceFor(
+  w: Awaited<ReturnType<typeof world>>,
+  vault = new MemoryVault(),
+  ownerPin: (pin: string) => boolean | Promise<boolean> = () => true,
+) {
   return {
     vault,
     service: new ProfileKeyResetService({
@@ -190,7 +200,7 @@ function serviceFor(w: Awaited<ReturnType<typeof world>>, vault = new MemoryVaul
         async () => ({}) as LibraryLog,
       ),
       gate: async () => true,
-      ownerPin: async () => true,
+      ownerPin: async (pin) => await ownerPin(pin),
     }),
   };
 }
@@ -264,6 +274,104 @@ describe.skipIf(!available)(
       expect(vault.values.has('profile-reset/v1/journal')).toBe(true);
       await expect(service.confirm({ destinationLibraryKey: successor })).resolves.toBe('complete');
       expect(vault.values.has('profile-reset/v1/journal')).toBe(false);
+    });
+
+    it('the production page route recovers an ambiguous start against real authority and storage', async () => {
+      const w = await world(keyOf(12));
+      const vault = new MemoryVault();
+      const { service } = serviceFor(w, vault, (pin) => pin === '1234');
+      const destination = keyOf(61);
+      let pending: PendingReset | null = null;
+      let linked = w.householdKey;
+      let current = w.householdKey;
+      let adopted = false;
+      let loseStartReply = false;
+      const wrap = async (kind: string, outcome: Promise<string>) => ({
+        result: { kind, outcome: await outcome },
+      });
+      const model: ResetWorkerModel = {
+        prepareKeyReset: async () => ({
+          result: {
+            kind: 'key-reset.prepare',
+            destinationLibraryKey: destination,
+            device: '0123456789abcdef',
+          },
+        }),
+        startProfileKeyReset: async (pin, to) => {
+          const answer = await wrap(
+            'profile-key-reset.start',
+            service.start({ pin, destinationLibraryKey: to }),
+          );
+          if (loseStartReply) {
+            loseStartReply = false;
+            throw new Error('the successful start reply was lost');
+          }
+          return answer;
+        },
+        resumeProfileKeyReset: () => wrap('profile-key-reset.resume', service.resume()),
+        confirmProfileKeyReset: (to) =>
+          wrap('profile-key-reset.confirm', service.confirm({ destinationLibraryKey: to })),
+        settleLibraryKey: async () => ({
+          result: { kind: 'key-reset.settle', outcome: 'unknown' },
+        }),
+      };
+      const page = () =>
+        new CompoundResetPage<{ session: string }>({
+          pending: {
+            read: () => pending,
+            write: (next) => {
+              pending = next ? structuredClone(next) : null;
+              return true;
+            },
+          },
+          worker: async () => ({ model, close: () => {} }),
+          openDestination: async (key) => {
+            const log = await w.open(key, 5);
+            return { session: key, close: () => log.close() };
+          },
+          link: () => ({ libraryKey: linked }),
+          install: (_from, to) => {
+            linked = to;
+            return true;
+          },
+          release: () => {
+            pending = null;
+            return true;
+          },
+          adopt: (_opened, to) => {
+            adopted = true;
+            current = to;
+            return true;
+          },
+          current: () => current,
+          active: (from) => current === from,
+          definitiveStartRefusal: (error) => error instanceof ProfileResetUnauthorizedError,
+        });
+
+      await expect(page().start(w.householdKey, '0000')).rejects.toMatchObject({
+        name: 'ProfileResetUnauthorizedError',
+      });
+      expect(pending).toBeNull();
+      expect(await status(w.edge, w.householdKey, 5)).toBe(200);
+
+      loseStartReply = true;
+      await expect(page().start(w.householdKey, '1234')).rejects.toThrow(
+        'the successful start reply was lost',
+      );
+      expect(pending).toMatchObject({ from: w.householdKey, to: destination, compound: true });
+      expect(vault.values.has('profile-reset/v1/journal')).toBe(true);
+
+      await expect(page().run(pending!)).resolves.toBe('complete');
+      expect({ linked, current, adopted, pending }).toEqual({
+        linked: destination,
+        current: destination,
+        adopted: true,
+        pending: null,
+      });
+      expect(vault.values.has('profile-reset/v1/journal')).toBe(false);
+      expect(await status(w.edge, w.householdKey, 5)).toBe(410);
+      for (const id of [OWNER, MINA, LEO])
+        expect(await status(w.edge, w.dir.profiles[id]!.library.value.key, 4)).toBe(410);
     });
 
     it('stays throttled for every other new library from the same address', async () => {

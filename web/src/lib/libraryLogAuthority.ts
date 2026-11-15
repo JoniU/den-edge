@@ -953,7 +953,11 @@ export class LibraryLogAuthority {
             method: 'GET',
             path: `/lib/${this.#log.libraryId}/exclusive-operation/source`,
           });
-          return answer.status === 200;
+          if (answer.status !== 200 || !answer.body || typeof answer.body !== 'object')
+            return false;
+          const admission = (answer.body as Record<string, unknown>).newAttempt;
+          // A server before the split-admission contract has no field: its 200 source still means enabled.
+          return admission === undefined || admission === true;
         } catch (error) {
           // A refused or unreachable source read keeps the reset closed; it is not an answer to guess past.
           console.warn('den: the profile reset gate could not be read', error);
@@ -1629,6 +1633,7 @@ export class LibraryLogAuthority {
 
   #connections(): Extract<LibrarySelectionValue, { kind: 'connections' }> {
     const keys = this.#log.settings('keys');
+    const profileDirectory = this.#log.profileDirectory();
     const devices = readDevices(this.#log.settings('devices'))
       .filter(({ id }) => id.length > 0 && id.length <= 128)
       .slice(0, 512);
@@ -1693,7 +1698,11 @@ export class LibraryLogAuthority {
         libraryFormat: this.#log.wireMinimum,
         pendingChanges: this.#log.pendingActions,
         selfDeviceId: this.#clock.device,
-        ...(this.#log.profileTopologyPresent ? { profileTopology: true } : {}),
+        ...(profileDirectory !== null ? { profileTopology: true } : {}),
+        ...(profileDirectory === null &&
+        (this.#log.profileTopologyPresent || this.#log.wireMinimum >= 5)
+          ? { profileTopologyBlocked: true }
+          : {}),
       },
     };
   }

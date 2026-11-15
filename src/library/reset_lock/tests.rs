@@ -418,13 +418,15 @@ async fn assert_all_refuse_writes(h: &Harness) {
 // Dormancy, gates and the generic primitive
 
 #[tokio::test]
-async fn the_reset_surface_does_not_exist_while_its_gate_is_off() {
+async fn the_reset_source_reports_closed_admission_while_old_delete_semantics_remain() {
     let h = Harness::new();
     build_old_set(&h).await;
     let (status, body) =
         call(&h, "GET", &format!("/lib/{HOUSEHOLD}/exclusive-operation/source"), HOUSEHOLD, "5", None, &[])
             .await;
-    assert_eq!((status, body), (StatusCode::NOT_FOUND, json!({ "error": "not_found" })));
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["newAttempt"], false);
+    assert!(body["source"].is_object());
     // The headers of a retirement mean nothing: the library is simply deleted, as before the feature existed.
     let (status, body) = retire(&h, OWNER, ATTEMPT, NEW_OWNER).await;
     assert_eq!((status, body), (StatusCode::OK, json!({ "deleted": true })));
@@ -1697,26 +1699,248 @@ async fn the_retired_migration_surface_stays_absent_while_the_reset_keeps_its_ow
     for (method, path) in &retired {
         assert_eq!(call(&h, method, path, HOUSEHOLD, "5", None, &[]).await, absent);
     }
+    let fresh_source = source_of(&h, HOUSEHOLD).await;
     acquire_all(&h, ATTEMPT).await;
+    assert!(h.state.metrics.render().contains("den_edge_profile_reset_live{phase=\"open\"} 1"));
 
-    // Reset off: both the retired migration surface and reset routes are absent, including the retirement a
-    // `DELETE` with the exclusive headers would otherwise be.
+    // Reset off: the retired migration surface stays absent and the reset source reports closed admission.
+    // Authenticated continuation of the attempt already on disk remains available, so changing an operator flag
+    // cannot strand its durable lock.
     let m = Harness::in_dir_with(h.dir.clone(), |_| {});
+    sweep_startup(Arc::clone(&m.state)).await;
+    assert!(m.state.metrics.render().contains("den_edge_profile_reset_live{phase=\"open\"} 1"));
     for (method, path) in &retired {
         assert_eq!(call(&m, method, path, HOUSEHOLD, "5", None, &[]).await, absent);
     }
     let reset_source = format!("/lib/{HOUSEHOLD}/exclusive-operation/source");
-    assert_eq!(call(&m, "GET", &reset_source, HOUSEHOLD, "5", None, &[]).await, absent);
-    assert_eq!(lookup(&m, HOUSEHOLD, ATTEMPT).await, absent);
+    let (status, source) = call(&m, "GET", &reset_source, HOUSEHOLD, "5", None, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(source["newAttempt"], false);
+    assert_eq!(lookup(&m, HOUSEHOLD, ATTEMPT).await.1["state"], "open");
+    assert_eq!(
+        post_lock(&m, HOUSEHOLD, household_request(ATTEMPT, fresh_source.clone())).await.1["state"],
+        "open",
+        "an exact lost-response replay remains available"
+    );
+    assert_eq!(
+        post_lock(&m, HOUSEHOLD, household_request(OTHER, fresh_source)).await,
+        absent,
+        "a genuinely new reset remains refused"
+    );
     // Switching the routes off never unlocks a library: the lock is in the store, not in the switch.
     assert_in_progress(&write(&m, KID1, "during").await);
-    assert_in_progress(&retire(&m, KID1, ATTEMPT, NEW_KID1).await);
+    assert_eq!(
+        retire(&m, KID1, ATTEMPT, NEW_KID1).await,
+        (StatusCode::CONFLICT, json!({ "error": "successor_not_committed" }))
+    );
+    assert_eq!(abort(&m, ATTEMPT).await.0, StatusCode::OK);
+    assert_all_writable(&m).await;
+    let metrics = m.state.metrics.render();
+    assert!(metrics.contains("den_edge_profile_reset_live{phase=\"open\"} 0"), "{metrics}");
+    assert!(metrics.contains("den_edge_profile_reset_outcomes_total{outcome=\"aborted\"} 1"), "{metrics}");
 
-    // And the reset resumes once its switch is back.
-    let back = restart(&h);
-    assert_eq!(lookup(&back, HOUSEHOLD, ATTEMPT).await.1["state"], "open");
-    assert_eq!(abort(&back, ATTEMPT).await.0, StatusCode::OK);
-    assert_all_writable(&back).await;
+    // The switch may turn off after only part of the declared set was acquired. Exact member replay and the rest of
+    // that already-admitted attempt remain available after restart; an unrelated attempt still cannot enter.
+    let partial = new_harness();
+    build_old_set(&partial).await;
+    let partial_source = source_of(&partial, HOUSEHOLD).await;
+    assert_eq!(
+        post_lock(&partial, HOUSEHOLD, household_request(ATTEMPT, partial_source.clone())).await.0,
+        StatusCode::OK
+    );
+    let (_, owner_acquired) = acquire_member(&partial, ATTEMPT, OWNER, NEW_OWNER).await;
+    let partial_off = Harness::in_dir_with(partial.dir.clone(), |_| {});
+    assert_eq!(
+        post_lock(&partial_off, OWNER, profile_request(ATTEMPT, source_of(&partial_off, OWNER).await, NEW_OWNER))
+            .await,
+        (StatusCode::OK, owner_acquired),
+        "a lost partial-member response replays while admission is off"
+    );
+    for (old, successor) in [(KID1, NEW_KID1), (KID2, NEW_KID2)] {
+        assert_eq!(acquire_member(&partial_off, ATTEMPT, old, successor).await.0, StatusCode::OK);
+    }
+    assert_eq!(
+        post_lock(&partial_off, HOUSEHOLD, household_request(OTHER, partial_source)).await,
+        absent
+    );
+    assert_eq!(abort(&partial_off, ATTEMPT).await.0, StatusCode::OK);
+    assert_all_writable(&partial_off).await;
+
+    // Off -> on -> off changes only admission. A request refused while off may start after enablement, and its exact
+    // lost response remains replayable after the operator closes admission again.
+    let toggled = new_harness();
+    build_old_set(&toggled).await;
+    let toggled_off = Harness::in_dir_with(toggled.dir.clone(), |_| {});
+    let toggled_source = source_of(&toggled_off, HOUSEHOLD).await;
+    assert_eq!(
+        post_lock(&toggled_off, HOUSEHOLD, household_request(ATTEMPT, toggled_source.clone())).await,
+        absent
+    );
+    let toggled_on = enabled(toggled_off.dir.clone());
+    let admitted = post_lock(&toggled_on, HOUSEHOLD, household_request(ATTEMPT, toggled_source.clone())).await;
+    assert_eq!(admitted.0, StatusCode::OK);
+    let toggled_off_again = Harness::in_dir_with(toggled_on.dir.clone(), |_| {});
+    assert_eq!(
+        post_lock(&toggled_off_again, HOUSEHOLD, household_request(ATTEMPT, toggled_source)).await,
+        admitted
+    );
+    assert_eq!(abort(&toggled_off_again, ATTEMPT).await.0, StatusCode::OK);
+
+    // A page that lost its journal can still observe the source and take an open attempt over prooflessly.
+    let recovering = new_harness();
+    build_old_set(&recovering).await;
+    acquire_all(&recovering, ATTEMPT).await;
+    let recovery_off = Harness::in_dir_with(recovering.dir.clone(), |_| {});
+    let (status, recovered) = recover(&recovery_off, RECOVERY, None).await;
+    assert_eq!(status, StatusCode::OK, "{recovered}");
+    assert_eq!(recovered["state"], "open");
+    assert_eq!(recovered["attempt"], RECOVERY);
+    assert_eq!(abort(&recovery_off, RECOVERY).await.1["outcome"], "aborted");
+    assert_all_writable(&recovery_off).await;
+
+    // Two different pages may race to recover one durable attempt. The store CAS serializes the takeovers: exactly
+    // one remains active and the other observes that it was replaced, rather than both acting as owners.
+    let concurrent = new_harness();
+    build_old_set(&concurrent).await;
+    acquire_all(&concurrent, ATTEMPT).await;
+    let concurrent_off = Harness::in_dir_with(concurrent.dir.clone(), |_| {});
+    let (left, right) = tokio::join!(
+        recover(&concurrent_off, RECOVERY, None),
+        recover(&concurrent_off, RECOVERY2, None)
+    );
+    assert_eq!(left.0, StatusCode::OK);
+    assert_eq!(right.0, StatusCode::OK);
+    let first = lookup(&concurrent_off, HOUSEHOLD, RECOVERY).await.1;
+    let second = lookup(&concurrent_off, HOUSEHOLD, RECOVERY2).await.1;
+    let (active, replaced) = if first["state"] == "open" {
+        (RECOVERY, second)
+    } else {
+        (RECOVERY2, first)
+    };
+    assert_eq!(replaced["state"], "recovered");
+    assert_eq!(replaced["recovery"], active);
+    assert_eq!(abort(&concurrent_off, active).await.0, StatusCode::OK);
+
+    // Successor copies are not the commit. If the switch closes in that window, proofless recovery takes the open
+    // reset over so the recovery owner can abort it; the startup sweep then removes only this attempt's successors.
+    let copied = new_harness();
+    build_old_set(&copied).await;
+    acquire_all(&copied, ATTEMPT).await;
+    build_successors(&copied).await;
+    let copied_off = Harness::in_dir_with(copied.dir.clone(), |_| {});
+    let (status, rolled_back) = recover(&copied_off, RECOVERY, None).await;
+    assert_eq!(status, StatusCode::OK, "{rolled_back}");
+    assert_eq!(rolled_back["state"], "open");
+    assert_eq!(abort(&copied_off, RECOVERY).await.1["outcome"], "aborted");
+    sweep_startup(Arc::clone(&copied_off.state)).await;
+    for id in [NEW_HOUSEHOLD, NEW_OWNER, NEW_KID1, NEW_KID2] {
+        assert_moved(&changes(&copied_off, id).await);
+    }
+    assert_all_writable(&copied_off).await;
+
+    // The same proofless recovery rule remains available after a committed response was lost but before the first
+    // retirement crossed the door. Once a member retirement lands, proof is required and no old library is guessed.
+    let committed_rollback = new_harness();
+    build_old_set(&committed_rollback).await;
+    acquire_all(&committed_rollback, ATTEMPT).await;
+    build_successors(&committed_rollback).await;
+    assert_eq!(commit(&committed_rollback, ATTEMPT, NEW_HOUSEHOLD).await.0, StatusCode::OK);
+    let committed_off = Harness::in_dir_with(committed_rollback.dir.clone(), |_| {});
+    let (status, rolled_back) = recover(&committed_off, RECOVERY, None).await;
+    assert_eq!(status, StatusCode::OK, "{rolled_back}");
+    assert_eq!(rolled_back["outcome"], "aborted");
+    assert_all_writable(&committed_off).await;
+
+    let crossed = new_harness();
+    build_old_set(&crossed).await;
+    acquire_all(&crossed, ATTEMPT).await;
+    build_successors(&crossed).await;
+    assert_eq!(commit(&crossed, ATTEMPT, NEW_HOUSEHOLD).await.0, StatusCode::OK);
+    assert_eq!(retire(&crossed, OWNER, ATTEMPT, NEW_OWNER).await.0, StatusCode::OK);
+    let crossed_off = Harness::in_dir_with(crossed.dir.clone(), |_| {});
+    assert_in_progress(&recover(&crossed_off, RECOVERY, None).await);
+    let (status, takeover) = recover(&crossed_off, RECOVERY, Some(NEW_HOUSEHOLD)).await;
+    assert_eq!(status, StatusCode::OK, "{takeover}");
+    assert_eq!(takeover["recovers"]["phase"], "retiring");
+
+    // A committed attempt drains through every declared retirement while new admission remains off.
+    let committed = new_harness();
+    build_old_set(&committed).await;
+    acquire_all(&committed, ATTEMPT).await;
+    build_successors(&committed).await;
+    assert_eq!(commit(&committed, ATTEMPT, NEW_HOUSEHOLD).await.0, StatusCode::OK);
+    let drain = Harness::in_dir_with(committed.dir.clone(), |_| {});
+    sweep_startup(Arc::clone(&drain.state)).await;
+    assert_eq!(commit(&drain, ATTEMPT, NEW_HOUSEHOLD).await.1["state"], "committed");
+    let metrics = drain.state.metrics.render();
+    assert!(metrics.contains("den_edge_profile_reset_live{phase=\"committed\"} 1"), "{metrics}");
+    let members = old_members();
+    assert_eq!(retire(&drain, members[0].0, ATTEMPT, members[0].1).await.0, StatusCode::OK);
+    let drain = Harness::in_dir_with(drain.dir.clone(), |_| {});
+    sweep_startup(Arc::clone(&drain.state)).await;
+    let metrics = drain.state.metrics.render();
+    assert!(metrics.contains("den_edge_profile_reset_live{phase=\"retiring\"} 1"), "{metrics}");
+    assert_eq!(retire(&drain, members[0].0, ATTEMPT, members[0].1).await.0, StatusCode::OK);
+    assert_eq!(retire(&drain, members[1].0, ATTEMPT, members[1].1).await.0, StatusCode::OK);
+    let drain = Harness::in_dir_with(drain.dir.clone(), |_| {});
+    assert_eq!(retire(&drain, members[1].0, ATTEMPT, members[1].1).await.0, StatusCode::OK);
+    assert_eq!(retire(&drain, members[2].0, ATTEMPT, members[2].1).await.0, StatusCode::OK);
+    let drain = Harness::in_dir_with(drain.dir.clone(), |_| {});
+    assert_eq!(
+        retire(&drain, HOUSEHOLD, ATTEMPT, NEW_HOUSEHOLD).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(lookup(&drain, HOUSEHOLD, ATTEMPT).await.1["state"], "retired");
+    let metrics = drain.state.metrics.render();
+    assert!(metrics.contains("den_edge_profile_reset_live{phase=\"retiring\"} 0"), "{metrics}");
+    assert!(metrics.contains("den_edge_profile_reset_outcomes_total{outcome=\"retired\"} 1"), "{metrics}");
+    let retired_restart = Harness::in_dir_with(drain.dir.clone(), |_| {});
+    assert_eq!(
+        retire(&retired_restart, HOUSEHOLD, ATTEMPT, NEW_HOUSEHOLD).await.0,
+        StatusCode::OK,
+        "a lost terminal household retirement response replays after restart while admission is off"
+    );
+    assert_eq!(lookup(&retired_restart, HOUSEHOLD, ATTEMPT).await.1["state"], "retired");
+
+    // An abort may land before its successor cleanup. Startup still owes that sweep while admission is off.
+    let aborted = new_harness();
+    build_old_set(&aborted).await;
+    acquire_all(&aborted, ATTEMPT).await;
+    build_successors(&aborted).await;
+    assert_eq!(abort(&aborted, ATTEMPT).await.0, StatusCode::OK);
+    let aborted_off = Harness::in_dir_with(aborted.dir.clone(), |_| {});
+    sweep_startup(Arc::clone(&aborted_off.state)).await;
+    for id in [NEW_HOUSEHOLD, NEW_OWNER, NEW_KID1, NEW_KID2] {
+        assert_moved(&changes(&aborted_off, id).await);
+    }
+    assert_all_writable(&aborted_off).await;
+
+    // A successor-proven recovery takeover also remains usable while admission is off, including a retirement
+    // response lost between member steps.
+    let takeover = new_harness();
+    build_old_set(&takeover).await;
+    acquire_all(&takeover, ATTEMPT).await;
+    build_successors(&takeover).await;
+    assert_eq!(commit(&takeover, ATTEMPT, NEW_HOUSEHOLD).await.0, StatusCode::OK);
+    let recovery_off = Harness::in_dir_with(takeover.dir.clone(), |_| {});
+    let (status, recovered) = recover(&recovery_off, RECOVERY, Some(NEW_HOUSEHOLD)).await;
+    assert_eq!(status, StatusCode::OK, "{recovered}");
+    assert_eq!(recovered["recovers"]["phase"], "committed");
+    let members = old_members();
+    let (first_old, first_successor) = members[0];
+    assert_eq!(retire(&recovery_off, first_old, RECOVERY, first_successor).await.0, StatusCode::OK);
+    assert_eq!(
+        retire(&recovery_off, first_old, RECOVERY, first_successor).await.0,
+        StatusCode::OK,
+        "a lost retirement response replays"
+    );
+    for (old, successor) in members.into_iter().skip(1) {
+        assert_eq!(retire(&recovery_off, old, RECOVERY, successor).await.0, StatusCode::OK);
+    }
+    assert_eq!(
+        retire(&recovery_off, HOUSEHOLD, RECOVERY, NEW_HOUSEHOLD).await.0,
+        StatusCode::OK
+    );
 }
 
 #[test]

@@ -591,6 +591,14 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'Make a recovery code': 'Hacer un código de recuperación',
   'Den holds too many codes for this library just now. Try again in a minute.':
     'Den guarda demasiados códigos para esta biblioteca en este momento. Inténtalo de nuevo en un minuto.',
+  'Den couldn’t verify this household’s profile directory, so no keys were changed. Reload Settings to try again. If it persists, keep this browser paired and wait for the profile directory to recover; do not use a single-library reset.':
+    'Den no pudo verificar el directorio de perfiles de este hogar, por lo que no se cambió ninguna clave. Vuelve a cargar Ajustes para intentarlo de nuevo. Si persiste, mantén este navegador vinculado y espera a que se recupere el directorio de perfiles; no uses un restablecimiento de una sola biblioteca.',
+  'In Den on a browser linked to this household, open Settings › Connections › Linked devices to reset every profile library key together.':
+    'En Den, desde un navegador vinculado a este hogar, abre Ajustes › Conexiones › Dispositivos vinculados para restablecer juntas las claves de las bibliotecas de todos los perfiles.',
+  'Reset profile keys in a supported browser':
+    'Restablece las claves de los perfiles en un navegador compatible',
+  'Profile key reset is not available on this TV':
+    'El restablecimiento de claves de perfil no está disponible en este televisor',
   'Make one, or open a library with one': 'Crea uno o abre una biblioteca con uno',
   'Making a secure link…': 'Creando un enlace seguro…',
   Malayalam: 'malayalam',
@@ -846,8 +854,28 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   Rename: 'Cambiar nombre',
   Reset: 'Reiniciar',
   'Reset key': 'Tecla de reinicio',
+  'Reset keys': 'Restablecer claves',
+  'Reset library keys…': 'Restablecer claves de biblioteca…',
   'Reset outcome unknown.': 'Restablecer resultado desconocido.',
+  'Reset every profile library key?': '¿Restablecer todas las claves de biblioteca de perfiles?',
   'Reset your library key?': '¿Restablecer la clave de tu biblioteca?',
+  'Rotating every profile library key…': 'Rotando todas las claves de biblioteca de perfiles…',
+  'That Owner PIN didn’t match.': 'Ese PIN de propietario no coincide.',
+  'Every profile and the household move to new keys together. Every other device must pair again; this browser keeps the household. Enter the Owner PIN to continue.':
+    'Todos los perfiles y el hogar pasan juntos a claves nuevas. Todos los demás dispositivos deben vincularse de nuevo; este navegador conserva el hogar. Ingrese el PIN del propietario para continuar.',
+  'Key reset isn’t available for this household right now. Nothing changed.':
+    'El restablecimiento de claves no está disponible para este hogar en este momento. Nada cambió.',
+  'Library key reset in progress.': 'Restablecimiento de claves de biblioteca en curso.',
+  'Keep this browser paired. Den keeps the old and new keys safely and can continue after a reload or interrupted connection.':
+    'Mantenga este navegador vinculado. Den conserva de forma segura las claves antiguas y nuevas y puede continuar después de recargar o de una conexión interrumpida.',
+  'Continue key reset': 'Continuar restablecimiento de claves',
+  'Continuing…': 'Continuando…',
+  'The key reset is still in progress. Keep this browser paired; Den will continue it here.':
+    'El restablecimiento de claves sigue en curso. Mantenga este navegador vinculado; Den continuará aquí.',
+  'Couldn’t start the key reset. Nothing changed. Check your connection and try again.':
+    'No se pudo iniciar el restablecimiento de claves. Nada cambió. Compruebe la conexión e inténtelo de nuevo.',
+  'To cut a device off, reset every profile library key together. Removing it from the list doesn’t: it still holds a key.':
+    'Para desconectar un dispositivo, restablezca juntas todas las claves de biblioteca de perfiles. Quitar el dispositivo de la lista no lo desconecta: todavía conserva una clave.',
   'Review what was found': 'Revisar lo encontrado',
   Revoke: 'Revocar',
   'Revoke access…': 'Revocar acceso…',

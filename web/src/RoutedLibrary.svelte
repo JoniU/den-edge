@@ -78,7 +78,7 @@
     startupMark,
     watchStartupHandover,
   } from './lib/startupTiming';
-  import { CompoundResetPage } from './lib/profileKeyResetPage';
+  import type { CompoundResetPage, CompoundResetStartResult } from './lib/profileKeyResetPage';
   import {
     bornHouseholds,
     commitHousehold,
@@ -770,6 +770,16 @@
     owner.notify(`Assistant ${result.detail.replace('%s', name ? `“${name}”` : 'a title')}`);
   }
   let pendingReset = $state.raw<PendingReset | null>(untrack(() => readPendingReset()));
+  const readPublishedReset = () => {
+    const published = readPendingReset();
+    pendingReset = published;
+    return published;
+  };
+  onMount(() => {
+    const changed = () => void readPublishedReset();
+    window.addEventListener('storage', changed);
+    return () => window.removeEventListener('storage', changed);
+  });
   let resetInFlight = $state(false);
   let convergence = 0;
   let convergenceWork = Promise.resolve();
@@ -1240,44 +1250,103 @@
     }
   }
 
-  // The page's half of a compound key reset of a profile household. Nothing starts one yet (`start` has no caller);
-  // this only carries a reset whose marker is already kept through its install, so a reload or a crash converges.
-  const compoundReset = new CompoundResetPage<{ session: ProfileSession }>({
-    pending: { read: () => pendingReset, write: publishReset },
-    worker: async (from) => {
-      if (from === libraryIdentity && session.model)
-        return { model: session.model, close: () => {} };
-      const old = open(from, false);
-      if (!old.model) {
-        old.close();
-        throw new Error('The library service of the old household is not available');
+  // The page's half of a compound key reset of a profile household. Initiation and recovery share the same durable
+  // marker/install path so a reload, crash or ambiguous response converges.
+  type CompoundDestination = { session: ProfileSession; close(): void };
+  let compoundReset: Promise<CompoundResetPage<CompoundDestination> | null> | undefined;
+  const compoundResetPage = () => {
+    // Tizen 3 is the explicit viewer-only tier. It gets the browser handoff in Settings and never downloads the
+    // destructive reset coordinator; Browser, WebOS and modern Tizen load it only when initiation/recovery needs it.
+    if (__DEN_TV_LEGACY_JS_CORE__) return Promise.resolve(null);
+    return (compoundReset ??= import('./lib/profileKeyResetPage').then(
+      ({ CompoundResetPage }) =>
+        new CompoundResetPage<CompoundDestination>({
+          // The Web Lock is browser-wide but this Svelte state is tab-local. Reread localStorage inside every lock so
+          // the winner's marker, not this tab's startup snapshot, decides whether a second reset may start.
+          pending: { read: readPublishedReset, write: publishReset },
+          worker: async (from) => {
+            // The profile coordinator may replace/close its household settings model during an Owner/Kid handover.
+            // A destructive, journaled operation owns a separate bounded client so that presentation replacement can
+            // neither kill its authority mid-request nor make the page continue through a closed borrowed model.
+            const old = open(from, false);
+            if (!old.model) {
+              old.close();
+              throw new Error('The library service of the old household is not available');
+            }
+            try {
+              await old.model.ready;
+            } catch (error) {
+              old.close();
+              throw error;
+            }
+            return { model: old.model, close: () => old.close() };
+          },
+          openDestination: async (key) => {
+            if (key === libraryIdentity) return { session, close: () => {} };
+            const destination = open(key, false);
+            try {
+              await destination.model!.ready;
+            } catch (error) {
+              destination.close();
+              throw error;
+            }
+            return { session: destination, close: () => destination.close() };
+          },
+          link: () => links.list.find((l) => l.libraryKey === pendingReset?.to) ?? null,
+          install: (from, to) => links.rekey(from, to, true),
+          release: async (pending) => {
+            if (!(await links.releaseRekeyed(pending.from, pending))) return false;
+            pendingReset = null;
+            return true;
+          },
+          adopt: (destination, to, from) => {
+            if (libraryIdentity === to) return true;
+            if (!alive || pendingReset !== null || libraryIdentity !== from) return false;
+            libraryIdentity = to;
+            session = destination.session;
+            return true;
+          },
+          current: () => libraryIdentity,
+          // Browser initiation needs a browser-wide lock because the marker precedes the Worker RPC. Packaged/hosted
+          // TV builds have one app realm; a browser without Web Locks retains recovery but refuses a new start.
+          active: (from) =>
+            libraryIdentity === from &&
+            // A settled Owner hint is the durable authority through the coordinator's same-Owner teardown turn. The
+            // hint validates the active-profile marker, so an actual Kid/Visitor replacement fails this check before
+            // its new coordinator has painted.
+            (profileSettingsRoute(session, profileCoordinator?.mode ?? null) === 'household' ||
+              readProfileHint() !== null) &&
+            (__DEN_TV__ || navigator.locks !== undefined),
+          definitiveStartRefusal: (error) =>
+            error instanceof LibraryServiceError && error.failure.code === 'unauthorized',
+        }),
+    ));
+  };
+
+  async function startCompoundReset(pin: string): Promise<CompoundResetStartResult> {
+    const from = libraryIdentity;
+    const active = householdSettingsModel;
+    if (resetInFlight || !from || !active || session.local) return 'unavailable';
+    resetInFlight = true;
+    try {
+      const page = await compoundResetPage();
+      if (!page) return 'unavailable';
+      const existing = pendingReset;
+      if (existing?.compound) {
+        if (existing.from !== from) return 'blocked';
+        return await page.run(existing);
       }
-      await old.model.ready;
-      return { model: old.model, close: () => old.close() };
-    },
-    openDestination: async (key) => {
-      if (key === libraryIdentity) return { session, close: () => {} };
-      const destination = open(key, false);
-      try {
-        await destination.model!.ready;
-      } catch (error) {
-        destination.close();
-        throw error;
+      return await page.start(from, pin);
+    } catch (error) {
+      if (error instanceof LibraryServiceError && error.failure.code === 'unauthorized') {
+        return 'unauthorized';
       }
-      return { session: destination, close: () => destination.close() };
-    },
-    link: () => links.list.find((l) => l.libraryKey === pendingReset?.to) ?? null,
-    install: (from, to) => void links.rekey(from, to, true),
-    release: async (from) => {
-      await links.releaseRekeyed(from);
-      pendingReset = null;
-    },
-    adopt: (destination, to) => {
-      if (libraryIdentity === to || !alive) return;
-      libraryIdentity = to;
-      session = destination.session;
-    },
-  });
+      console.warn('den: the profile key reset could not start', error);
+      return pendingReset?.compound && pendingReset.from === from ? 'blocked' : 'failed';
+    } finally {
+      resetInFlight = false;
+    }
+  }
   let compoundRetry: ReturnType<typeof setTimeout> | undefined;
   onDestroy(() => clearTimeout(compoundRetry));
 
@@ -1349,10 +1418,10 @@
   // A compound reset is settled by the library service that holds its journal, not by the legacy standing check.
   $effect(() => {
     const pending = pendingReset;
-    if (!pending?.compound || resetInFlight) return;
+    if (!pending?.compound || pending.from !== libraryIdentity || resetInFlight) return;
     const run = () =>
-      void compoundReset
-        .run(pending)
+      void compoundResetPage()
+        .then((page) => page?.run(pending))
         .then((result) => {
           if (alive && (result === 'waiting' || result === 'blocked'))
             compoundRetry = setTimeout(() => (pendingReset = readPendingReset()), 15_000);
@@ -1679,7 +1748,14 @@
   });
   $effect(() => {
     const status = session.model?.status;
-    if (status?.kind === 'moved' && link) void links.forgetMoved(link);
+    // A reset that lost its page response deliberately leaves the old link and marker together. Its authority/journal
+    // must finish the verified successor install before the ordinary moved cleanup is allowed to forget that link.
+    if (
+      status?.kind === 'moved' &&
+      link &&
+      (!pendingReset || pendingReset.from !== link.libraryKey)
+    )
+      void links.forgetMoved(link);
   });
   $effect(() => {
     if (session.updateRequired) requestReleaseCheck();
@@ -1915,6 +1991,9 @@
                   }}
                   onjoin={!link && (session.local || ownHousehold) ? joinLibrary : undefined}
                   onresetkey={resetLibraryKey}
+                  oncompoundreset={startCompoundReset}
+                  compoundResetPending={pendingReset?.compound === true &&
+                    pendingReset.from === libraryIdentity}
                   heldReset={pendingReset?.held === true}
                   onadoptheld={adoptHeldReset}
                 />
