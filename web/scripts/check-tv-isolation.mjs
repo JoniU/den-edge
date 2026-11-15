@@ -354,5 +354,10 @@ if (process.argv.includes('--capture')) {
   // Optional title-facts recovery then adds 1,607 bytes on matched a819734f/head builds, split between the existing
   // lazy Detail and content-service Worker boundaries. Another split adds a request on the failure path or Worker
   // startup and cannot reduce the complete graph. Allow the smallest 128-byte boundary, retaining 112 bytes.
-  if (coreTotalDelta > 106880) throw new Error('Browser total JS/CSS budget exceeded');
+  // Authority-scoped series-release recall adds 1,170 gzip bytes to the complete non-translation graph on matched
+  // current-main/head builds (106,768 -> 107,938), 1,131 in the existing lazy Player chunk and 61 at startup. The
+  // compact authority/remount fence must stay eager so replaced authority cannot publish delayed recall; the digest,
+  // codec and bounded source lookup already live with Player. Another boundary cannot reduce this complete-graph
+  // total and would add a request before the first session lookup. Allow the next 128-byte boundary, retaining 94.
+  if (coreTotalDelta > 108032) throw new Error('Browser total JS/CSS budget exceeded');
 }
