@@ -110,12 +110,10 @@ pub async fn handle(State(state): State<Arc<AppState>>, mut req: Request) -> Res
     let den_disabled = (den_playback_path(&path)
         || matches!(path.as_str(), "/grant/den-install" | "/grant/den-configure"))
         && !state.den_playback_enabled;
-    let reset_source_disabled =
-        !state.profile_reset_enabled && path.starts_with("/lib/") && path.ends_with("/exclusive-operation/source");
-    let route_disabled = reset_source_disabled || den_disabled || path == "/den/migrate";
+    let route_disabled = den_disabled || path == "/den/migrate";
     // A disabled feature is not a route. In particular, do not disclose its method/body contract in metrics or
     // let the generic preflight answer advertise its private candidate-token header. Exclusive-operation is
-    // different: only new acquisition is disabled, while authenticated durable-attempt continuation remains a route.
+    // different: its authenticated source reports admission while continuation/recovery remains a route.
     let route = if route_disabled { "other" } else { route_label(&path) };
     let origin = allowed_origin(&state, &req);
     let bulk = !is_control(route, &method);

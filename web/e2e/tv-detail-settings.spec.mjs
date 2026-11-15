@@ -190,13 +190,27 @@ test('Tizen 3 preserves queued managed-playback receipts for a capable linked de
   expect(receiptRequests).toEqual([]);
 });
 
-test('Tizen 3 names the supported-browser guest administration handoff', async ({ page }) => {
+test('Tizen 3 names the supported-browser administration handoffs', async ({ page }) => {
   test.skip(
     process.env.DEN_TIZEN_VERSION !== '3.0',
     'only the Tizen 3 viewer omits guest administration',
   );
 
   await setupSeries(page, { linked: true });
+  // Give the reduced target the strongest otherwise-offered state: a linked household with a durable compound marker.
+  // The viewer must still compile out the coordinator and replace the destructive continuation with its handoff.
+  await page.evaluate(() => {
+    const [link] = JSON.parse(localStorage.getItem('den.links') ?? '[]');
+    localStorage.setItem(
+      'den.keyReset',
+      JSON.stringify({
+        from: link.libraryKey,
+        to: link.libraryKey,
+        device: 'tizen3-fixture',
+        compound: true,
+      }),
+    );
+  });
   await page.goto(`${E2E_ORIGIN}/settings`);
 
   const sectionNavigation = page.getByRole('navigation', { name: 'Settings sections' });
@@ -224,6 +238,19 @@ test('Tizen 3 names the supported-browser guest administration handoff', async (
   await expect(page.getByRole('button', { name: 'Invite a guest Lend your addons' })).toHaveCount(
     0,
   );
+  const resetHandoff = page.getByRole('button', {
+    name: 'Reset profile keys in a supported browser Profile key reset is not available on this TV',
+  });
+  await expect(resetHandoff).toBeVisible();
+  await resetHandoff.focus();
+  await page.keyboard.press('Enter');
+  await expect(
+    page.getByText(
+      'In Den on a browser linked to this household, open Settings › Connections › Linked devices to reset every profile library key together.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reset library keys…' })).toHaveCount(0);
 });
 
 test('remote changes seasons from the focused season tab', async ({ page }) => {

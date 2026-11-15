@@ -9,8 +9,9 @@
 //! * `model` is the pure decision function the spec's `resetLockContract` vectors pin.
 //! * This module builds a world from what is stored, asks the model, and performs exactly the decided effect.
 //!
-//! New-attempt admission is behind `PROFILE_RESET_ENABLED`; authenticated durable-attempt continuation remains, and a
-//! `DELETE` carrying the exclusive headers is an ordinary `DELETE`.
+//! New-attempt admission is behind `PROFILE_RESET_ENABLED`; authenticated durable-attempt continuation remains. While
+//! admission is off, exclusive headers continue an existing durable reset, but retain ordinary `DELETE` semantics when
+//! no reset record or tombstone exists.
 
 pub(crate) mod model;
 #[cfg(test)]
@@ -645,12 +646,6 @@ pub(super) async fn handle(
         None => return not_found(),
     };
     let method = request.method().clone();
-    // Disabling new resets is an admission decision, not permission to strand a durable lock. Keep authenticated
-    // lookup/abort/successor settlement available, while the source probe remains the typed "new starts off"
-    // capability and `post` below refuses an unknown acquisition.
-    if !state.profile_reset_enabled && segments.as_slice() == ["source"] {
-        return not_found();
-    }
     match (segments.as_slice(), &method) {
         ([], &Method::POST) => post(state, id, token_hash, request).await,
         (["source"], &Method::GET) => source(state, id, token_hash).await,
@@ -677,7 +672,25 @@ async fn source(state: &AppState, id: &str, token_hash: [u8; 32]) -> Response {
     let store = tri!(target_store(state, id, token_hash, &set, &mut guards).await);
     let owned_id = id.to_owned();
     let (source, _) = tri!(blocking("exclusive source", move || observed(&owned_id, store.as_ref())).await);
-    json_reply(StatusCode::OK, &json!({ "source": source }))
+    json_reply(
+        StatusCode::OK,
+        &json!({ "source": source, "newAttempt": state.profile_reset_enabled }),
+    )
+}
+
+/// Whether exclusive retirement headers name a surface that existed before the operator disabled new admission.
+/// With no durable record/tombstone, those headers retain their pre-feature meaning and ordinary DELETE handles them.
+pub(super) async fn retirement_continuation(state: &AppState, id: &str) -> io::Result<bool> {
+    let found = peer(state, id).await?;
+    if found.marker.is_some() {
+        return Ok(true);
+    }
+    let Some(store) = found.store else { return Ok(false) };
+    tokio::task::spawn_blocking(move || read::<Record>(store.as_ref(), RESET))
+        .await
+        .map_err(io::Error::other)?
+        .map(|record| record.is_some())
+        .map_err(v3_io)
 }
 
 async fn lookup(state: &AppState, id: &str, token_hash: [u8; 32], attempt: &str) -> Response {
@@ -856,9 +869,23 @@ async fn post(state: &AppState, id: &str, token_hash: [u8; 32], request: Request
         return found.map_or_else(not_found, |found| json_reply(StatusCode::OK, &found));
     }
 
-    // The gate only closes acquisition of a previously unknown reset. A recovery takeover for the durable record
-    // already on disk is still required to drain it, and an exact replay was returned above.
-    if !state.profile_reset_enabled && (acquire || current.is_none()) {
+    // The gate closes a previously unknown household attempt, not the remaining member acquisitions declared by an
+    // already-admitted durable household record. A recovery takeover is likewise required to drain a durable record,
+    // and an exact same-library replay was returned above. The pure model below still verifies the member declaration,
+    // source, successor and attempt before it commits anything.
+    let continuing_member = if !state.profile_reset_enabled && acquire && body.role == Role::Profile {
+        let household = tri!(peer_or_500(state, household_id.as_deref().expect("profile household checked")).await);
+        match household.store {
+            Some(store) => match tri!(read_record(&store).await) {
+                Some((record, _)) => record.role == Role::Household && record.attempt == body.attempt,
+                None => false,
+            },
+            None => false,
+        }
+    } else {
+        false
+    };
+    if !state.profile_reset_enabled && ((acquire && !continuing_member) || (!acquire && current.is_none())) {
         return not_found();
     }
 
@@ -916,7 +943,11 @@ async fn post(state: &AppState, id: &str, token_hash: [u8; 32], request: Request
         }
         Decision::Takeover { .. } => {
             let proven = proof_hash.is_some();
-            takeover(id, &store, &body, proven).await
+            let response = takeover(id, &store, &body, proven).await;
+            if response.status() == StatusCode::OK {
+                state.metrics.profile_reset_phase(id, Some("recovery"));
+            }
+            response
         }
         Decision::Rollback => rollback(state, id, &store, &body).await,
         _ => conflict(),
@@ -950,6 +981,9 @@ async fn open_household(
     body: &AcquireBody,
     fence: Fence,
 ) -> Response {
+    // This bounded hint is the restart inventory for operator telemetry as well as aborted-successor sweeping. It
+    // precedes the durable lock; a crash before commit leaves a harmless hint startup removes.
+    write_hint(state, id).await;
     let successor = body.successor.clone().unwrap_or_default();
     let members = body.members.clone().unwrap_or_default();
     let mut preexisting = Vec::new();
@@ -979,6 +1013,7 @@ async fn open_household(
     let entry = new_entry(&record, body);
     let answer = open_json(id, &body.attempt, &entry, Phase::Open);
     tri!(commit_open(store, &record, &entry).await);
+    state.metrics.profile_reset_phase(id, Some("open"));
     json_reply(StatusCode::OK, &answer)
 }
 
@@ -1127,6 +1162,7 @@ async fn rollback(state: &AppState, id: &str, store: &Arc<dyn LibraryStore>, bod
         .await
     );
     note_sweep(state, id);
+    state.metrics.profile_reset_outcome(id, "aborted");
     json_reply(
         StatusCode::OK,
         &json!({ "attempt": body.attempt, "state": "completed", "outcome": Outcome::Aborted }),
@@ -1254,6 +1290,7 @@ async fn successor_commit(
                 })
                 .await
             );
+            state.metrics.profile_reset_phase(id, Some("committed"));
             lookup_reply(id, &store, attempt).await
         }
         _ => conflict(),
@@ -1306,6 +1343,7 @@ async fn abort(state: &AppState, id: &str, token_hash: [u8; 32], attempt: &str) 
                 .await
             );
             note_sweep(state, id);
+            state.metrics.profile_reset_outcome(id, "aborted");
             lookup_reply(id, &store, attempt).await
         }
         _ => conflict(),
@@ -1453,6 +1491,7 @@ pub(super) async fn retire(
             })
             .await
         );
+        state.metrics.profile_reset_phase(&household, Some("retiring"));
     }
 
     let tombstone = Marker {
@@ -1469,8 +1508,13 @@ pub(super) async fn retire(
     };
     let marker = serde_json::to_vec(&tombstone).expect("a marker always serialises");
     drop(store);
-    retire_owned_marked(state, id, &set.slots[index], &mut guards[index], selected_v3, &marker, recovery)
-        .await
+    let response =
+        retire_owned_marked(state, id, &set.slots[index], &mut guards[index], selected_v3, &marker, recovery)
+            .await;
+    if response.status() == StatusCode::OK && record.role == Role::Household {
+        state.metrics.profile_reset_outcome(id, "retired");
+    }
+    response
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1574,7 +1618,7 @@ pub(super) async fn sweep_if_due(state: &AppState, id: &str) {
     let due = crate::lock(&state.reset_sweeps).contains(id);
     if due {
         if let Err(reason) = sweep(state, id).await {
-            eprintln!("key reset sweep: library={} {reason}", &id[..id.len().min(8)]);
+            eprintln!("key reset sweep failed: {reason}");
         }
     }
 }
@@ -1703,9 +1747,25 @@ pub async fn sweep_startup(state: Arc<AppState>) {
     hinted.sort();
     hinted.dedup();
     for household in hinted {
+        if let Ok(Some(record)) = record_of(&state, &household).await {
+            if record.phase.live() {
+                let phase = if record.owner != record.attempt {
+                    "recovery"
+                } else {
+                    match record.phase {
+                        Phase::Open => "open",
+                        Phase::Committed => "committed",
+                        Phase::Retiring => "retiring",
+                        Phase::Retired | Phase::Aborted => unreachable!("live phase was checked"),
+                    }
+                };
+                state.metrics.profile_reset_phase(&household, Some(phase));
+                continue;
+            }
+        }
         crate::lock(&state.reset_sweeps).insert(household.clone());
         if let Err(reason) = sweep(&state, &household).await {
-            eprintln!("key reset sweep: library={} {reason}", &household[..household.len().min(8)]);
+            eprintln!("key reset startup sweep failed: {reason}");
         }
     }
 }

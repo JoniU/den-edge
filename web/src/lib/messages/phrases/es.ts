@@ -591,6 +591,14 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'Make a recovery code': 'Hacer un código de recuperación',
   'Den holds too many codes for this library just now. Try again in a minute.':
     'Den guarda demasiados códigos para esta biblioteca en este momento. Inténtalo de nuevo en un minuto.',
+  'Den couldn’t verify this household’s profile directory, so no keys were changed. Reload Settings to try again. If it persists, keep this browser paired and wait for the profile directory to recover; do not use a single-library reset.':
+    'Den no pudo verificar el directorio de perfiles de este hogar, por lo que no se cambió ninguna clave. Vuelve a cargar Ajustes para intentarlo de nuevo. Si persiste, mantén este navegador vinculado y espera a que se recupere el directorio de perfiles; no uses un restablecimiento de una sola biblioteca.',
+  'In Den on a browser linked to this household, open Settings › Connections › Linked devices to reset every profile library key together.':
+    'En Den, desde un navegador vinculado a este hogar, abre Ajustes › Conexiones › Dispositivos vinculados para restablecer juntas las claves de las bibliotecas de todos los perfiles.',
+  'Reset profile keys in a supported browser':
+    'Restablece las claves de los perfiles en un navegador compatible',
+  'Profile key reset is not available on this TV':
+    'El restablecimiento de claves de perfil no está disponible en este televisor',
   'Make one, or open a library with one': 'Crea uno o abre una biblioteca con uno',
   'Making a secure link…': 'Creando un enlace seguro…',
   Malayalam: 'malayalam',

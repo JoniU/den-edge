@@ -579,6 +579,13 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'Make a recovery code': 'Skapa en återställningskod',
   'Den holds too many codes for this library just now. Try again in a minute.':
     'Den lagrar för många koder för det här biblioteket just nu. Försök igen om en minut.',
+  'Den couldn’t verify this household’s profile directory, so no keys were changed. Reload Settings to try again. If it persists, keep this browser paired and wait for the profile directory to recover; do not use a single-library reset.':
+    'Den kunde inte verifiera hushållets profilkatalog, så inga nycklar ändrades. Läs in Inställningar igen för att försöka på nytt. Om problemet kvarstår ska du behålla webbläsaren parkopplad och vänta tills profilkatalogen har återställts. Använd inte en återställning av ett enda bibliotek.',
+  'In Den on a browser linked to this household, open Settings › Connections › Linked devices to reset every profile library key together.':
+    'Öppna Den i en webbläsare som är kopplad till hushållet och gå till Inställningar › Anslutningar › Länkade enheter för att återställa alla profilbiblioteksnycklar tillsammans.',
+  'Reset profile keys in a supported browser': 'Återställ profilnycklar i en webbläsare som stöds',
+  'Profile key reset is not available on this TV':
+    'Återställning av profilnycklar är inte tillgänglig på den här TV:n',
   'Make one, or open a library with one': 'Gör en eller öppna ett bibliotek med en',
   'Making a secure link…': 'Gör en säker länk...',
   Malayalam: 'Malayalam',

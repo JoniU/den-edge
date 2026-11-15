@@ -228,7 +228,7 @@ export class ProfileKeyResetService {
     readonly recoveryAttempt: string;
     readonly successorKey: string | null;
   }): Promise<ProfileKeyResetOutcome> {
-    if (!(await this.deps.gate())) return 'unavailable';
+    // Recovery settles an already-durable server attempt. New-start admission must not strand it.
     await this.#requirePin(input.pin);
     const recovery = new ProfileKeyResetRecovery({
       journal: this.#journal,

@@ -458,29 +458,46 @@ test('a profile household shows Owner PIN management instead of the legacy matur
   await expect(page.getByText('Enter your current Owner PIN to change it.')).toBeVisible();
 });
 
-for (const query of ['profiles', 'wire5-missing']) {
-  test(`a ${query} household uses the Owner-PIN compound reset and never exposes legacy reset`, async ({
-    page,
-  }) => {
-    await page.goto(`${E2E_ORIGIN}/test/settings.html?${query}`);
-    const devices = page.getByRole('region', { name: 'Linked devices' });
-    await page.getByRole('button', { name: /Linked devices/ }).click();
-    await expect(devices.getByRole('button', { name: 'Reset library key…' })).toHaveCount(0);
+test('a profile household uses the Owner-PIN compound reset and never exposes legacy reset', async ({
+  page,
+}) => {
+  await page.goto(`${E2E_ORIGIN}/test/settings.html?profiles`);
+  const devices = page.getByRole('region', { name: 'Linked devices' });
+  await page.getByRole('button', { name: /Linked devices/ }).click();
+  await expect(devices.getByRole('button', { name: 'Reset library key…' })).toHaveCount(0);
 
-    await devices.getByRole('button', { name: 'Reset library keys…' }).click();
-    const pin = devices.getByRole('textbox', { name: 'Owner PIN' });
-    await expect(pin).toBeFocused();
-    await pin.fill('0000');
-    await devices.getByRole('button', { name: 'Reset keys' }).click();
-    await expect(devices.getByRole('alert')).toContainText('That Owner PIN didn’t match.');
-    await expect(pin).toBeFocused();
+  const trigger = devices.getByRole('button', { name: 'Reset library keys…' });
+  await trigger.click();
+  const pin = devices.getByRole('textbox', { name: 'Owner PIN' });
+  await expect(pin).toBeFocused();
+  await devices.getByRole('button', { name: 'Cancel' }).click();
+  await expect(trigger).toBeFocused();
 
-    await pin.fill('1234');
-    await devices.getByRole('button', { name: 'Reset keys' }).click();
-    await expect(devices.getByRole('button', { name: 'Reset library keys…' })).toBeFocused();
-    expect(await page.evaluate(() => window.fixtureProfileResetPins?.())).toEqual(['0000', '1234']);
-  });
-}
+  await trigger.click();
+  await pin.fill('0000');
+  await devices.getByRole('button', { name: 'Reset keys' }).click();
+  await expect(devices.getByRole('alert')).toContainText('That Owner PIN didn’t match.');
+  await expect(pin).toBeFocused();
+
+  await pin.fill('1234');
+  await devices.getByRole('button', { name: 'Reset keys' }).click();
+  await expect(devices.getByRole('button', { name: 'Reset library keys…' })).toBeFocused();
+  expect(await page.evaluate(() => window.fixtureProfileResetPins?.())).toEqual(['0000', '1234']);
+});
+
+test('wire 5 without a readable profile directory stays recovery-blocked and never offers either reset', async ({
+  page,
+}) => {
+  await page.goto(`${E2E_ORIGIN}/test/settings.html?wire5-missing`);
+  const devices = page.getByRole('region', { name: 'Linked devices' });
+  await page.getByRole('button', { name: /Linked devices/ }).click();
+  await expect(devices.getByRole('button', { name: /Reset library key/ })).toHaveCount(0);
+  await expect(
+    devices.getByText(/couldn’t verify this household’s profile directory/),
+  ).toBeVisible();
+  await expect(devices.getByRole('button', { name: 'Try again' })).toBeVisible();
+  expect(await page.evaluate(() => window.fixtureProfileResetPins?.())).toEqual([]);
+});
 
 test('an interrupted compound reset remains visible and actionable without asking for a new PIN', async ({
   page,
@@ -491,7 +508,20 @@ test('an interrupted compound reset remains visible and actionable without askin
   await expect(devices.getByText('Library key reset in progress.')).toBeVisible();
   await devices.getByRole('button', { name: 'Continue key reset' }).click();
   expect(await page.evaluate(() => window.fixtureProfileResetPins?.())).toEqual(['']);
-  await expect(devices.getByRole('button', { name: 'Reset library keys…' })).toBeVisible();
+  await expect(devices.getByRole('button', { name: 'Reset library keys…' })).toBeFocused();
+});
+
+test('an ambiguous compound start focuses its durable Continue recovery action', async ({
+  page,
+}) => {
+  await page.goto(`${E2E_ORIGIN}/test/settings.html?profiles&profile-reset-waiting`);
+  await page.getByRole('button', { name: /Linked devices/ }).click();
+  const devices = page.getByRole('region', { name: 'Linked devices' });
+  await devices.getByRole('button', { name: 'Reset library keys…' }).click();
+  await devices.getByRole('textbox', { name: 'Owner PIN' }).fill('1234');
+  await devices.getByRole('button', { name: 'Reset keys' }).click();
+  await expect(devices.getByRole('button', { name: 'Continue key reset' })).toBeFocused();
+  await expect(devices.getByRole('alert')).toContainText('still in progress');
 });
 
 test('opening Settings preserves legacy installs without automatic config exchange', async ({

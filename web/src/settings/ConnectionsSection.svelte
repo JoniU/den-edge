@@ -876,6 +876,7 @@
   let compoundPin = $state('');
   let compoundAsking = $state(false);
   let compoundTrigger = $state<HTMLButtonElement>();
+  let compoundContinue = $state<HTMLButtonElement>();
   const resetFailures: Partial<Record<KeyResetOutcome, string>> = {
     'update-required':
       'Your library holds something only a newer version of Den can move. Update Den on your devices, then try again.',
@@ -923,7 +924,10 @@
           : result === 'waiting' || result === 'blocked'
             ? 'The key reset is still in progress. Keep this browser paired; Den will continue it here.'
             : 'Couldn’t start the key reset. Nothing changed. Check your connection and try again.';
-    requestAnimationFrame(() => document.getElementById('profile-reset-pin')?.focus());
+    await tick();
+    if ((result === 'waiting' || result === 'blocked') && compoundResetPending)
+      compoundContinue?.focus();
+    else document.getElementById('profile-reset-pin')?.focus({ preventScroll: true });
   }
 
   /**
@@ -1520,6 +1524,7 @@
             variant="primary"
             label={resetting ? 'Continuing…' : 'Continue key reset'}
             disabled={disabled || resetting}
+            bind:element={compoundContinue}
             onclick={() => void resetProfileKeys()}
           />
         </div>
@@ -1563,10 +1568,12 @@
                   size="compact"
                   label="Cancel"
                   disabled={resetting}
-                  onclick={() => {
+                  onclick={async () => {
                     compoundAsking = false;
                     compoundPin = '';
                     resetProblem = null;
+                    await tick();
+                    compoundTrigger?.focus();
                   }}
                 />
               </span>
@@ -1624,10 +1631,14 @@
         holds the key.
       </p>
     {:else if profileResetBlocked}
-      <p class="foot">
-        Profile libraries need to rotate together. Key reset will be available after Den finishes
-        that update.
-      </p>
+      <div class="pair" role="status">
+        <p class="foot">
+          Den couldn’t verify this household’s profile directory, so no keys were changed. Reload
+          Settings to try again. If it persists, keep this browser paired and wait for the profile
+          directory to recover; do not use a single-library reset.
+        </p>
+        <Button variant="secondary" label="Try again" onclick={() => location.reload()} />
+      </div>
     {:else}
       <p class="foot">
         To cut a device off, reset the library key on your Apple TV under Settings › Linked devices.

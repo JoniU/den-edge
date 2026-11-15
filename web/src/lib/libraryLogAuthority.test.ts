@@ -1038,11 +1038,13 @@ describe('LibraryLogAuthority', () => {
         requests.push(`${init?.method ?? 'GET'} ${url}`);
         if (!url.endsWith('/exclusive-operation/source'))
           throw new Error(`unexpected request ${url}`);
-        if (!enrolled) return new Response('{"error":"not_found"}', { status: 404 });
-        return new Response(JSON.stringify({ source: { generation: 1, head: 'a'.repeat(64) } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
+        return new Response(
+          JSON.stringify({
+            source: { generation: 1, head: 'a'.repeat(64) },
+            newAttempt: enrolled,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
       }),
     );
     try {
@@ -1068,11 +1070,17 @@ describe('LibraryLogAuthority', () => {
         },
       ] as const;
 
-      // Profile reset off: every entry is unavailable, and the only request is the source read.
-      for (const task of tasks)
+      // New admission is off. Start and resume stay unavailable without accepting a PIN. Journal-less recovery may
+      // read the source, but still authenticates the Owner before it can take over a durable attempt.
+      for (const task of [tasks[0], tasks[1]])
         await expect(reset.task(task, `off-${task.kind}`)).resolves.toMatchObject({
           result: { kind: task.kind, outcome: 'unavailable' },
         });
+      await expect(reset.task(tasks[2], `off-${tasks[2].kind}`)).rejects.toEqual(
+        expect.objectContaining<Partial<LibraryServiceAuthorityError>>({
+          failure: expect.objectContaining({ code: 'unauthorized' }),
+        }),
+      );
       expect(requests.every((request) => request.endsWith('/exclusive-operation/source'))).toBe(
         true,
       );

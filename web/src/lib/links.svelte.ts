@@ -265,6 +265,13 @@ export function writePendingReset(
   }
 }
 
+const samePendingReset = (left: PendingReset | null, right: PendingReset): boolean =>
+  left?.from === right.from &&
+  left.to === right.to &&
+  left.device === right.device &&
+  left.held === right.held &&
+  left.compound === right.compound;
+
 /**
  * The links and shared devices, as every tab of this browser keeps them. Each change starts from what storage holds
  * now, and a change made in another tab is taken up as it lands (`storage`). Each tab used to write its own copy from
@@ -578,11 +585,14 @@ export class Links {
     }
   }
 
-  /** Drop what a reset from `from` left behind: the pending marker and the old library's kept state. */
-  async releaseRekeyed(from: string): Promise<void> {
+  /** Drop what this exact reset left behind. A replacement marker is another tab's authority and is never cleared. */
+  async releaseRekeyed(from: string, expected?: PendingReset): Promise<boolean> {
+    if (expected && !samePendingReset(readPendingReset(), expected)) return false;
     const retirement = await this.retirements.prepare(from);
+    if (expected && !samePendingReset(readPendingReset(), expected)) return false;
     writePendingReset(null);
     this.retirements.start(retirement);
+    return true;
   }
 }
 
