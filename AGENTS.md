@@ -91,6 +91,17 @@ everything the committed code imports is committed too.
 
 ## Bundle budget records
 
+- Optional title-facts recovery (#1270) was measured on matched production builds at base `a819734f` and the
+  final repair: ordinary browser startup moves 203,991 → 203,986 gzip bytes (-5), while the complete graph moves
+  878,272 → 879,947 (+1,675). Independently lazy Spanish/Swedish catalogs account for +68, so the complete
+  non-translation budget graph moves 105,161 → 106,768 (+1,607). The existing lazy Detail JS/CSS accounts for
+  +834 and the existing content-service Worker for +807; unrelated minification changes offset the remainder.
+  Recovery owns partial-lane presentation, focus restoration and exact-title/region/locale/profile cancellation in
+  Detail, while producer validation, selective provider calls and the bounded wire contract must remain in the
+  Worker. Both are already lazy boundaries; splitting either again would add a request during detail failure or
+  Worker startup without removing the complete graph, and EN/ES/SV copy is already catalog-lazy. No dependency,
+  polling, timer, persisted state or healthy-path provider request is added. Allow the smallest 128-byte boundary,
+  106,880, preserving 112 bytes of margin after the previous budget's 55-byte reserve.
 - The truthful Apple TV diagnostics handoff for Den #538 was measured on matched production builds at base
   `9783e49c` and the final repair: ordinary browser startup moved 204,013 → 203,991 gzip bytes (-22), while the
   complete graph moved 878,206 → 878,272 (+66). Independently lazy Spanish/Swedish catalogs account for +51, so

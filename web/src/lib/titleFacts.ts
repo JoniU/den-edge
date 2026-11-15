@@ -31,13 +31,82 @@ export const NO_FACTS: TitleFacts = {
   countries: [],
 };
 
+const MAX_FACT_VALUES = 128;
+const MAX_FACT_NAME = 512;
+const MAX_FACT_MOOD = 256;
+const MAX_FACT_ID = 64;
+
+const factName = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0 && value.trim().length <= MAX_FACT_NAME;
+const factMood = (value: unknown): value is string =>
+  typeof value === 'string' && value.length <= MAX_FACT_MOOD && value.trim().length > 0;
+
+/** True when Atlas's optional fact fields can be represented by the bounded content-service wire shape. */
+export function validTitleFacts(body: unknown): boolean {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const at = body as Record<string, unknown>;
+  for (const field of ['companies', 'networks', 'subjects', 'places', 'authors'] as const) {
+    const values = at[field];
+    if (values === undefined) continue;
+    if (
+      !Array.isArray(values) ||
+      values.length > MAX_FACT_VALUES ||
+      !values.every((value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+        const { id, name, titles } = value as Record<string, unknown>;
+        return (
+          typeof id === 'string' &&
+          id.length <= MAX_FACT_ID &&
+          /^Q[1-9]\d*$/.test(id) &&
+          factName(name) &&
+          Number.isSafeInteger(titles) &&
+          (titles as number) >= 0
+        );
+      })
+    )
+      return false;
+  }
+  if (
+    at.labels !== undefined &&
+    (!at.labels || typeof at.labels !== 'object' || Array.isArray(at.labels))
+  )
+    return false;
+  const moods = (at.labels as Record<string, unknown> | undefined)?.moods;
+  if (
+    moods !== undefined &&
+    (!Array.isArray(moods) || moods.length > MAX_FACT_VALUES || !moods.every(factMood))
+  )
+    return false;
+  return (
+    at.countries === undefined ||
+    (Array.isArray(at.countries) &&
+      at.countries.length <= MAX_FACT_VALUES &&
+      at.countries.every((id) => typeof id === 'string' && /^[A-Z]{2}$/.test(id)))
+  );
+}
+
 function browsable(list: unknown): Browsable[] {
   if (!Array.isArray(list)) return [];
-  return list.flatMap((value): Browsable[] => {
+  return list.slice(0, MAX_FACT_VALUES).flatMap((value): Browsable[] => {
     const { id, name, titles } = (value ?? {}) as Record<string, unknown>;
-    if (typeof id !== 'string' || !/^Q[1-9]\d*$/.test(id) || typeof name !== 'string') return [];
+    if (
+      typeof id !== 'string' ||
+      id.length > MAX_FACT_ID ||
+      !/^Q[1-9]\d*$/.test(id) ||
+      typeof name !== 'string'
+    )
+      return [];
     const clean = name.trim();
-    return clean ? [{ id, name: clean, titles: typeof titles === 'number' ? titles : 0 }] : [];
+    return clean && clean.length <= MAX_FACT_NAME
+      ? [
+          {
+            id,
+            name: clean,
+            titles:
+              Number.isSafeInteger(titles) && (titles as number) >= 0 ? (titles as number) : 0,
+          },
+        ]
+      : [];
   });
 }
 
@@ -51,10 +120,18 @@ export function parseTitleFacts(body: unknown): TitleFacts {
     places: browsable(at.places),
     authors: browsable(at.authors),
     moods: Array.isArray(moods)
-      ? moods.filter((mood): mood is string => typeof mood === 'string' && mood.trim() !== '')
+      ? moods
+          .filter(
+            (mood): mood is string =>
+              typeof mood === 'string' && mood.length <= MAX_FACT_MOOD && mood.trim() !== '',
+          )
+          .map((mood) => mood.trim())
+          .slice(0, MAX_FACT_VALUES)
       : [],
     countries: Array.isArray(at.countries)
-      ? at.countries.filter((id): id is string => typeof id === 'string' && /^[A-Z]{2}$/.test(id))
+      ? at.countries
+          .filter((id): id is string => typeof id === 'string' && /^[A-Z]{2}$/.test(id))
+          .slice(0, MAX_FACT_VALUES)
       : [],
   };
 }

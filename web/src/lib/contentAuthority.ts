@@ -44,7 +44,7 @@ import type { MediaType } from './library';
 import { onGrantEnded, relayFetch, useHeldGrants } from './relayFetch';
 import { retryAfterMs } from './retryAfter';
 import { briefDetails, seriesShape, titleAppends, toTitle, type Details } from './tmdb';
-import { parseTitleFacts, type TitleFacts } from './titleFacts';
+import { parseTitleFacts, validTitleFacts, type TitleFacts } from './titleFacts';
 import {
   clearTmdbCache,
   onTmdbThrottle,
@@ -586,7 +586,13 @@ export class ContentAuthority implements ContentReader, ContentServiceAuthority 
             },
           };
         }
-        return this.#queryExtras(request.title, request.warningCategories, signal, policy);
+        return this.#queryExtras(
+          request.title,
+          request.warningCategories,
+          signal,
+          policy,
+          request.fields,
+        );
       }
       case 'catalog.page':
         // TMDB's lists (discover, trending, popular, top rated, upcoming, recommendations) carry no age or audience
@@ -949,13 +955,17 @@ export class ContentAuthority implements ContentReader, ContentServiceAuthority 
     });
   }
 
-  async extras(imdbId: string, warningCategories: readonly string[] = []): Promise<ContentExtras> {
+  async extras(
+    imdbId: string,
+    warningCategories: readonly string[] = [],
+    fields: ReadonlySet<'ratings' | 'warnings'> = new Set(['ratings', 'warnings']),
+  ): Promise<ContentExtras> {
     if (!/^tt\d+$/.test(imdbId))
       return { ratings: { kind: 'missing' }, warnings: { kind: 'missing' } };
     const categories = [...new Set(warningCategories.filter((value) => value.length <= 4_096))];
     const [ratings, warnings] = await Promise.all([
-      this.#ratings(imdbId),
-      this.#warnings(imdbId, categories),
+      fields.has('ratings') ? this.#ratings(imdbId) : { kind: 'missing' as const },
+      fields.has('warnings') ? this.#warnings(imdbId, categories) : { kind: 'missing' as const },
     ]);
     return { ratings, warnings };
   }
@@ -965,29 +975,42 @@ export class ContentAuthority implements ContentReader, ContentServiceAuthority 
     warningCategories: readonly string[],
     signal: AbortSignal,
     policy: ContentPolicy | undefined,
+    requested?: readonly import('./contentServiceProtocol').ContentTitleExtrasField[],
   ): Promise<ServiceContentResult> {
+    const fields = new Set(requested ?? ['ratings', 'warnings', 'facts', 'iconicStudios']);
+    const wantsExternal = fields.has('ratings') || fields.has('warnings');
     const [identifiers, facts, iconicStudios] = await Promise.all([
-      this.#wait(this.identifiers(ref), signal),
-      this.#wait(this.#facts(ref, policy), signal),
-      this.#wait(this.#iconicStudios(ref, policy), signal),
+      wantsExternal ? this.#wait(this.identifiers(ref), signal) : undefined,
+      fields.has('facts') ? this.#wait(this.#facts(ref, policy), signal) : undefined,
+      fields.has('iconicStudios')
+        ? this.#wait(this.#iconicStudios(ref, policy), signal)
+        : undefined,
     ]);
-    let ratings: OptionalContent<Ratings>;
-    let warnings: OptionalContent<Warning[]>;
-    if (identifiers.kind === 'found' && identifiers.value.imdbId) {
+    let ratings: OptionalContent<Ratings> = { state: 'absent' };
+    let warnings: OptionalContent<Warning[]> = { state: 'absent' };
+    if (identifiers?.kind === 'found' && identifiers.value.imdbId) {
       const extras = await this.#wait(
-        this.extras(identifiers.value.imdbId, warningCategories),
+        this.extras(
+          identifiers.value.imdbId,
+          warningCategories,
+          new Set(
+            [...fields].filter(
+              (field): field is 'ratings' | 'warnings' =>
+                field === 'ratings' || field === 'warnings',
+            ),
+          ),
+        ),
         signal,
       );
-      ratings = optional(extras.ratings, 'ratings');
-      const warned = optional(extras.warnings, 'warnings');
-      warnings =
-        warned.state === 'ready' ? { state: 'ready', value: warned.value.warnings } : warned;
-    } else if (identifiers.kind === 'found' || identifiers.kind === 'missing') {
-      ratings = { state: 'absent' };
-      warnings = { state: 'absent' };
-    } else {
-      ratings = optional(identifiers, 'tmdb');
-      warnings = optional(identifiers, 'tmdb');
+      if (fields.has('ratings')) ratings = optional(extras.ratings, 'ratings');
+      if (fields.has('warnings')) {
+        const warned = optional(extras.warnings, 'warnings');
+        warnings =
+          warned.state === 'ready' ? { state: 'ready', value: warned.value.warnings } : warned;
+      }
+    } else if (identifiers && identifiers.kind !== 'found' && identifiers.kind !== 'missing') {
+      if (fields.has('ratings')) ratings = optional(identifiers, 'tmdb');
+      if (fields.has('warnings')) warnings = optional(identifiers, 'tmdb');
     }
     return {
       kind: 'title.extras',
@@ -995,8 +1018,8 @@ export class ContentAuthority implements ContentReader, ContentServiceAuthority 
         title: { type: ref.type, id: ref.id },
         ratings,
         warnings,
-        facts: optional(facts, 'atlas'),
-        iconicStudios: optional(iconicStudios, 'atlas'),
+        facts: facts ? optional(facts, 'atlas') : { state: 'absent' },
+        iconicStudios: iconicStudios ? optional(iconicStudios, 'atlas') : { state: 'absent' },
       },
     };
   }
@@ -1767,9 +1790,17 @@ export class ContentAuthority implements ContentReader, ContentServiceAuthority 
         {},
         this.#atlasFetch(atlas, policy),
       );
-      return response.kind === 'found'
-        ? { kind: 'found', value: parseTitleFacts(response.value) }
-        : response;
+      if (response.kind !== 'found') return response;
+      const envelope = object(response.value);
+      if (
+        !envelope ||
+        envelope.type !== type ||
+        envelope.id !== ref.id ||
+        typeof envelope.indexed !== 'boolean' ||
+        !validTitleFacts(envelope)
+      )
+        return unavailable('invalid-answer');
+      return { kind: 'found', value: parseTitleFacts(envelope) };
     });
   }
 

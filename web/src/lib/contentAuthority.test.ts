@@ -161,6 +161,106 @@ describe('ContentAuthority', () => {
     ]);
   });
 
+  it('retries only the requested optional title lane', async () => {
+    const credentials = new WorkerContentCredentials();
+    credentials.configureAtlas('http://atlas.test/base');
+    const asked: string[] = [];
+    const authority = new ContentAuthority(credentials, {
+      tmdbFetch: async (input) => {
+        asked.push(String(input));
+        return json({ imdb_id: 'tt42' });
+      },
+      providerFetch: async (input) => {
+        asked.push(String(input));
+        return json({ type: 'movie', id: 42, indexed: true, labels: { moods: ['Warm'] } });
+      },
+    });
+
+    const answer = await authority.query(
+      {
+        kind: 'title.extras',
+        title: { type: 'movie', id: 42 },
+        warningCategories: [],
+        fields: ['facts'],
+      },
+      new AbortController().signal,
+    );
+
+    expect(asked).toEqual(['http://atlas.test/base/index/title/movie/42.json']);
+    expect(answer).toMatchObject({
+      kind: 'title.extras',
+      extras: {
+        ratings: { state: 'absent' },
+        warnings: { state: 'absent' },
+        facts: { state: 'ready', value: { moods: ['Warm'] } },
+        iconicStudios: { state: 'absent' },
+      },
+    });
+  });
+
+  it('refuses malformed or mismatched Atlas title facts instead of inventing empty facts', async () => {
+    const credentials = new WorkerContentCredentials();
+    credentials.configureAtlas('http://atlas.test/base');
+    const authority = new ContentAuthority(credentials, {
+      providerFetch: async () => json({ type: 'movie', id: 99, indexed: true }),
+    });
+
+    const answer = await authority.query(
+      {
+        kind: 'title.extras',
+        title: { type: 'movie', id: 42 },
+        warningCategories: [],
+        fields: ['facts'],
+      },
+      new AbortController().signal,
+    );
+
+    expect(answer).toMatchObject({
+      kind: 'title.extras',
+      extras: { facts: { state: 'unavailable', provider: 'atlas', reason: 'invalid-answer' } },
+    });
+  });
+
+  it('keeps a ready optional lane when malformed Atlas facts are refused', async () => {
+    const credentials = new WorkerContentCredentials();
+    credentials.configureAtlas('http://atlas.test/base');
+    const authority = new ContentAuthority(credentials, {
+      tmdbFetch: async () => json({ imdb_id: 'tt42' }),
+      providerFetch: async (input) => {
+        const path = String(input);
+        if (path.includes('/index/title/'))
+          return json({
+            type: 'movie',
+            id: 42,
+            indexed: true,
+            companies: [{ id: 'Q1', name: 'Bad count', titles: -1 }],
+          });
+        if (path.includes('/index/studios/')) return json({}, { status: 404 });
+        if (path.includes('/ratings/'))
+          return json({ Response: 'True', imdbRating: '8.2', imdbVotes: '100' });
+        return json({}, { status: 404 });
+      },
+    });
+
+    const answer = await authority.query(
+      {
+        kind: 'title.extras',
+        title: { type: 'movie', id: 42 },
+        warningCategories: [],
+        fields: ['ratings', 'facts'],
+      },
+      new AbortController().signal,
+    );
+
+    expect(answer).toMatchObject({
+      kind: 'title.extras',
+      extras: {
+        ratings: { state: 'ready', value: { imdb: 8.2, votes: 100 } },
+        facts: { state: 'unavailable', provider: 'atlas', reason: 'invalid-answer' },
+      },
+    });
+  });
+
   it('keeps equal Atlas selections on independent cursors and cancels only one page', async () => {
     const credentials = new WorkerContentCredentials();
     credentials.configureAtlas('/atlas');

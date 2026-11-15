@@ -20,8 +20,10 @@ import type {
  * optional affinity references so the page can order every row for the active profile without preloading it.
  * Version 8 carries the active Kid's exact-title approvals with every restricted content query. Version 9 adds
  * the compact billboard projection; an earlier Worker must not silently reject that new critical-path query.
+ * Version 10 adds selective title-extras retry and bounded per-lane answers, which must not be sent to or accepted
+ * from an older long-lived SharedWorker that only knows the all-lane request.
  */
-export const CONTENT_SERVICE_PROTOCOL = 9 as const;
+export const CONTENT_SERVICE_PROTOCOL = 10 as const;
 export type ContentServiceProtocol = typeof CONTENT_SERVICE_PROTOCOL;
 
 export const CONTENT_SERVICE_WIRE_LIMITS = {
@@ -206,6 +208,8 @@ export interface ContentImportSearchHit {
   year?: number;
 }
 
+export type ContentTitleExtrasField = 'ratings' | 'warnings' | 'facts' | 'iconicStudios';
+
 type ContentOperation =
   | { kind: 'sources.configure'; atlas: string | null }
   /** The guest grants the page holds, whole, so the Worker's own `~<gid>` calls can carry them. */
@@ -213,7 +217,13 @@ type ContentOperation =
   | { kind: 'titles'; titles: ContentTitleRef[] }
   | { kind: 'title.detail'; title: ContentTitleRef; region: string }
   | { kind: 'title.hero'; title: ContentTitleRef; region: string }
-  | { kind: 'title.extras'; title: ContentTitleRef; warningCategories: string[] }
+  | {
+      kind: 'title.extras';
+      title: ContentTitleRef;
+      warningCategories: string[];
+      /** Omitted by older callers to request every lane. A retry names only the failed lanes. */
+      fields?: ContentTitleExtrasField[];
+    }
   | { kind: 'title.external-id'; title: ContentTitleRef }
   /** The one shared age check every boundary (detail, trailer, play, download, cast...) asks. */
   | { kind: 'title.eligibility'; titles: ContentTitleRef[] }

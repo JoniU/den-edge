@@ -40,3 +40,18 @@ it('shows a repeated warning once, with its most yes votes', () => {
     { id: 153, label: 'a dog dies', votes: 34 },
   ]);
 });
+
+it('keeps the wire answer bounded and drops values it cannot represent', () => {
+  const warnings = Array.from({ length: 140 }, (_, index) => ({
+    id: index + 1,
+    name: `Warning ${index + 1}`,
+    yes: 200 - index,
+    no: 0,
+  }));
+  warnings.unshift({ id: 999, name: 'x'.repeat(513), yes: 300, no: 0 });
+  expect(parseWarnings({ warnings }, [])).toHaveLength(128);
+  expect(parseWarnings({ warnings: [{ id: -1, name: 'Bad', yes: 2.5, no: 0 }] }, [])).toEqual([]);
+  expect(parseWarnings({ warnings: [{ id: 1e20, name: 'Unsafe', yes: 2, no: 0 }] }, [])).toEqual(
+    [],
+  );
+});

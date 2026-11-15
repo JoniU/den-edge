@@ -49,7 +49,7 @@
   import type { LibraryModel, LibraryModelLease } from '../lib/libraryModel.svelte';
   import type { DownloadsView } from '../lib/libraryServiceProtocol';
   import type { ContentServiceClientPort } from '../lib/contentServiceClient';
-  import type { OptionalContent } from '../lib/contentServiceProtocol';
+  import type { ContentTitleExtrasField, OptionalContent } from '../lib/contentServiceProtocol';
   import type { Warning } from '../lib/contentWarnings';
   import type { MenuItem } from '../lib/titleActions';
   import type { HouseholdTv } from '../lib/householdTvs';
@@ -422,6 +422,17 @@
   let episodeLimit = $state(0);
   let retry = $state(0),
     seasonRetry = $state(0);
+  let extrasRetry = $state(0);
+  let extrasFailed = $state.raw<ContentTitleExtrasField[]>([]);
+  let extrasBusy = $state(false);
+  let extrasRecovered = $state(false);
+  let extrasRetryButton = $state.raw<HTMLButtonElement>();
+  let extrasRecoveryStatus = $state.raw<HTMLParagraphElement>();
+  let extrasFocusFallback = $state.raw<HTMLHeadingElement>();
+  let restoreExtrasFocus = false;
+  function trackExtrasFocus(event: FocusEvent) {
+    if (restoreExtrasFocus && event.target !== extrasRetryButton) restoreExtrasFocus = false;
+  }
   let ratings = $state.raw<Ratings | null>(null);
   let warnings = $state.raw<Warning[] | undefined>();
 
@@ -504,17 +515,25 @@
   });
 
   const extrasRequest = $derived(
-    `${ref.type}:${ref.id}\u0000${warningCategories.slice().sort().join('\u0001')}`,
+    `${ref.type}:${ref.id}\u0000${region}\u0000${i18n.language}\u0000${warningCategories.slice().sort().join('\u0001')}`,
   );
   /** The `extrasRequest` whose answer is already on the page: Back to a retained page keeps it rather than asking again. */
   let extrasAnswered: string | null = null;
+  let extrasAttemptAnswered = -1;
   $effect(() => {
+    void content;
     void extrasRequest;
     extrasAnswered = null;
+    extrasAttemptAnswered = -1;
     ratings = null;
     warnings = undefined;
     iconicStudios = undefined;
     titleFacts = undefined;
+    extrasFailed = [];
+    extrasBusy = false;
+    extrasRecovered = false;
+    restoreExtrasFocus = false;
+    extrasRetry = 0;
   });
 
   // Optional providers are one independent Worker question, asked beside base detail rather than after it: none of
@@ -525,35 +544,136 @@
   // so replaced the rows the viewer had scrolled along.
   $effect(() => {
     const request = extrasRequest;
-    if (!active || extrasAnswered === request) return;
+    const client = content;
+    void extrasRetry;
+    const fields = untrack(() => (extrasFailed.length ? [...extrasFailed] : undefined));
+    if (!active || (extrasAnswered === request && extrasAttemptAnswered === extrasRetry)) return;
     const title = untrack(() => ({ type: ref.type, id: ref.id }));
     const categories = untrack(() => [...warningCategories]);
     const controller = new AbortController();
-    void content
+    extrasBusy = !!fields;
+    void client
       .query(
         {
           kind: 'title.extras' as const,
           title,
           warningCategories: categories,
+          ...(fields ? { fields } : {}),
         },
         controller.signal,
       )
       .then(({ extras }) => {
         if (controller.signal.aborted) return;
+        if (extras.title.type !== title.type || extras.title.id !== title.id)
+          throw new Error('content service returned title extras for another title');
         extrasAnswered = request;
-        ratings = extras.ratings.state === 'ready' ? extras.ratings.value : null;
-        warnings = extras.warnings.state === 'ready' ? extras.warnings.value : [];
-        iconicStudios = extras.iconicStudios.state === 'ready' ? extras.iconicStudios.value : [];
-        titleFacts = extras.facts.state === 'ready' ? extras.facts.value : NO_FACTS;
+        extrasAttemptAnswered = extrasRetry;
+        const wanted = (field: ContentTitleExtrasField) => !fields || fields.includes(field);
+        const failed: ContentTitleExtrasField[] = [];
+        let resolved = false;
+        if (wanted('ratings')) {
+          if (extras.ratings.state === 'ready') {
+            ratings = extras.ratings.value;
+            resolved = true;
+          } else if (
+            extras.ratings.state === 'unavailable' &&
+            extras.ratings.reason !== 'refused'
+          ) {
+            ratings ??= null;
+            failed.push('ratings');
+          } else {
+            ratings = null;
+            resolved ||= extras.ratings.state === 'absent';
+          }
+        }
+        if (wanted('warnings')) {
+          if (extras.warnings.state === 'ready') {
+            warnings = extras.warnings.value;
+            resolved = true;
+          } else if (
+            extras.warnings.state === 'unavailable' &&
+            extras.warnings.reason !== 'refused'
+          ) {
+            warnings ??= [];
+            failed.push('warnings');
+          } else {
+            warnings = [];
+            resolved ||= extras.warnings.state === 'absent';
+          }
+        }
+        if (wanted('iconicStudios')) {
+          if (extras.iconicStudios.state === 'ready') {
+            iconicStudios = extras.iconicStudios.value;
+            resolved = true;
+          } else if (
+            extras.iconicStudios.state === 'unavailable' &&
+            extras.iconicStudios.reason !== 'refused'
+          ) {
+            iconicStudios ??= [];
+            failed.push('iconicStudios');
+          } else {
+            iconicStudios = [];
+            resolved ||= extras.iconicStudios.state === 'absent';
+          }
+        }
+        if (wanted('facts')) {
+          if (extras.facts.state === 'ready') {
+            titleFacts = extras.facts.value;
+            resolved = true;
+          } else if (extras.facts.state === 'unavailable' && extras.facts.reason !== 'refused') {
+            titleFacts ??= NO_FACTS;
+            failed.push('facts');
+          } else {
+            titleFacts = NO_FACTS;
+            resolved ||= extras.facts.state === 'absent';
+          }
+        }
+        const returnFocus = restoreExtrasFocus;
+        restoreExtrasFocus = false;
+        extrasFailed = failed;
+        extrasBusy = false;
+        if (returnFocus) {
+          extrasRecovered = !failed.length && resolved;
+          requestAnimationFrame(() => {
+            if (!active || extrasAnswered !== request) return;
+            if (failed.length) extrasRetryButton?.focus();
+            else if (resolved) extrasRecoveryStatus?.focus();
+            else extrasFocusFallback?.focus();
+          });
+        }
       })
       .catch(() => {
         if (controller.signal.aborted) return;
-        warnings = [];
-        iconicStudios = [];
-        titleFacts = NO_FACTS;
+        const returnFocus = restoreExtrasFocus;
+        extrasAnswered = request;
+        extrasAttemptAnswered = extrasRetry;
+        const failed: ContentTitleExtrasField[] = fields ?? [
+          'ratings',
+          'warnings',
+          'facts',
+          'iconicStudios',
+        ];
+        if (failed.includes('ratings')) ratings ??= null;
+        if (failed.includes('warnings')) warnings ??= [];
+        if (failed.includes('facts')) titleFacts ??= NO_FACTS;
+        if (failed.includes('iconicStudios')) iconicStudios ??= [];
+        restoreExtrasFocus = false;
+        extrasFailed = failed;
+        extrasBusy = false;
+        if (returnFocus)
+          requestAnimationFrame(() => {
+            if (active && extrasAnswered === request) extrasRetryButton?.focus();
+          });
       });
     return () => controller.abort();
   });
+
+  function retryExtras() {
+    if (extrasBusy || !extrasFailed.length) return;
+    restoreExtrasFocus = document.activeElement === extrasRetryButton;
+    extrasRecovered = false;
+    extrasRetry++;
+  }
 
   // Back and Forward between this page's seasons move the address and not the page, so the season follows the
   // address. Only a change of address does: a page coming back on screen, or episodes changing what the page would
@@ -949,6 +1069,8 @@
   });
 </script>
 
+<svelte:document onfocusin={trackExtrasFocus} />
+
 {#if withheld}
   <p class="note">This title isn’t available on this profile.</p>
 {:else if detail === null}
@@ -1043,7 +1165,7 @@
             />
           {:else}<span class="poster placeholder" aria-hidden="true"></span>{/if}
           <div class="copy">
-            <h1>{d.title.title}</h1>
+            <h1 bind:this={extrasFocusFallback} tabindex="-1">{d.title.title}</h1>
             <TitleMetadata
               detail={d}
               {content}
@@ -1202,6 +1324,22 @@
           {ratings?.awards ?? ''}
         </p>{/if}
     </div>
+    {#if extrasFailed.length}
+      <div class="extras-recovery" role="alert" data-spatial-section>
+        <span>{i18n.phrase('Some title details couldn’t be loaded.')}</span>
+        <button
+          bind:this={extrasRetryButton}
+          type="button"
+          disabled={extrasBusy}
+          aria-busy={extrasBusy}
+          onclick={retryExtras}>{i18n.phrase('Try again')}</button
+        >
+      </div>
+    {:else if extrasRecovered}
+      <p bind:this={extrasRecoveryStatus} class="extras-recovered" role="status" tabindex="-1">
+        {i18n.phrase('Title details loaded.')}
+      </p>
+    {/if}
     {#if !guestScout}
       <div class="title-sources" hidden={restricted}>
         <TitleSources
@@ -1703,6 +1841,43 @@
     background: none;
     color: var(--fg);
     cursor: pointer;
+  }
+
+  .extras-recovery {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin: 0 0 20px;
+    color: var(--danger);
+  }
+
+  .extras-recovery button {
+    border: 1px solid currentcolor;
+    border-radius: 999px;
+    padding: 8px 14px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 650;
+  }
+
+  .extras-recovery button:focus-visible {
+    outline: var(--ring-width) solid var(--focus-ring);
+    outline-offset: 3px;
+  }
+
+  .extras-recovery button:disabled {
+    opacity: 0.6;
+  }
+
+  .extras-recovered {
+    margin: 0 0 20px;
+    color: var(--muted);
+  }
+
+  .extras-recovered:focus {
+    outline: none;
   }
 
   .placeholder {

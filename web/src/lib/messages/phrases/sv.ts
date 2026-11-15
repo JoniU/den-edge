@@ -962,6 +962,7 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
     'Någon delade sina Den-tillägg med dig. Om du accepterar kan den här webbläsaren använda dem för att hitta och spela saker. Du kan lämna det när som helst under Inställningar › Delning.',
   'Some guest sharing settings may be out of date.':
     'Vissa inställningar för gästdelning kan vara inaktuella.',
+  'Some title details couldn’t be loaded.': 'Vissa titeldetaljer kunde inte läsas in.',
   'Something went wrong on this page.': 'Något gick fel på den här sidan.',
   'Sort people': 'Sortera folk',
   Sources: 'Källor',
@@ -1098,6 +1099,7 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   time: 'tid',
   'Time Travel': 'Tidsresor',
   times: 'gånger',
+  'Title details loaded.': 'Titeldetaljerna har lästs in.',
   'Titles will stop playing from your own library, on every device.':
     'Titlar kommer att sluta spelas från ditt eget bibliotek, på alla enheter.',
   tmdb: 'tmdb',

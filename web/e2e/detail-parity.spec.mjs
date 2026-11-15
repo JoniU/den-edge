@@ -1297,3 +1297,179 @@ test('a direct episode player URL starts its exact episode and selected release'
     await browser.close();
   }
 });
+
+test('optional title facts retain ready detail and retry only the failed lane', async ({
+  page,
+}) => {
+  const requests = [];
+  page.on('request', (request) => requests.push(new URL(request.url()).pathname));
+  await setup(page);
+  let factsCalls = 0;
+  let studiosCalls = 0;
+  let releaseRetry;
+  const retryGate = new Promise((resolve) => (releaseRetry = resolve));
+  await page.route('**/atlas/index/studios/series/9.json*', async (route) => {
+    studiosCalls++;
+    await route.fulfill({ status: 404, json: { error: 'not_found' } });
+  });
+  await page.route('**/atlas/index/title/series/9.json*', async (route) => {
+    factsCalls++;
+    if (factsCalls === 1)
+      return route.fulfill({ status: 503, json: { error: 'temporarily_unavailable' } });
+    await retryGate;
+    await route.fulfill({
+      json: {
+        type: 'series',
+        id: 9,
+        indexed: true,
+        networks: [{ id: 'Q907311', name: 'Netflix', titles: 100 }],
+      },
+    });
+  });
+
+  await page.addInitScript(() => history.replaceState(null, '', '/tv/9?language=sv'));
+  await page.goto(`${E2E_ORIGIN}/test/detail-parity.html?language=sv`);
+  const active = page.locator('[data-active="true"]');
+  await expect(active.locator('h1')).toHaveText('The Series');
+  await expect(active.getByText('IMDb', { exact: true })).toBeVisible();
+  const alert = active.getByRole('alert').filter({
+    hasText: 'Vissa titeldetaljer kunde inte läsas in.',
+  });
+  await expect(alert).toBeVisible();
+  const retry = alert.getByRole('button', { name: 'Försök igen' });
+
+  const unrelated = (path) =>
+    path.includes('/external_ids') ||
+    path.includes('/ratings/') ||
+    path.includes('/warnings/') ||
+    path.includes('/index/studios/');
+  const unrelatedBefore = requests.filter(unrelated).length;
+  await retry.focus();
+  await retry.click();
+  await expect.poll(() => factsCalls).toBe(2);
+  await expect(retry).toBeDisabled();
+  await expect(active.getByText('IMDb', { exact: true })).toBeVisible();
+  releaseRetry();
+
+  const recovered = active.getByRole('status').filter({ hasText: 'Titeldetaljerna har lästs in.' });
+  await expect(recovered).toBeVisible();
+  await expect(recovered).toBeFocused();
+  await expect(alert).toHaveCount(0);
+  await expect(
+    active.locator('.production').first().getByRole('link', { name: 'Netflix' }),
+  ).toHaveAttribute('href', '/search?c=network-Q907311');
+  expect(studiosCalls).toBe(1);
+  expect(requests.filter(unrelated)).toHaveLength(unrelatedBefore);
+});
+
+test('terminal and ready-empty optional title facts stay quiet', async ({ page }) => {
+  await setup(page);
+  let factsCalls = 0;
+  await page.route('**/atlas/index/title/series/9.json*', async (route) => {
+    factsCalls++;
+    await route.fulfill({ status: 403, json: { error: 'forbidden' } });
+  });
+  await page.route('**/atlas/index/studios/series/9.json*', (route) =>
+    route.fulfill({ json: { studios: [] } }),
+  );
+  let movieFactsCalls = 0;
+  await page.route('**/atlas/index/title/movie/42.json*', (route) => {
+    movieFactsCalls++;
+    return route.fulfill({ json: { type: 'movie', id: 42, indexed: true } });
+  });
+
+  await page.addInitScript(() => history.replaceState(null, '', '/tv/9'));
+  await page.goto(`${E2E_ORIGIN}/test/detail-parity.html`);
+  const active = page.locator('[data-active="true"]');
+  await expect(active.locator('h1')).toHaveText('The Series');
+  await expect.poll(() => factsCalls).toBe(1);
+  await expect(active.getByText('IMDb', { exact: true })).toBeVisible();
+  await expect(active.getByRole('alert')).toHaveCount(0);
+  await page.evaluate(() => {
+    history.pushState(null, '', '/movie/42');
+    dispatchEvent(new PopStateEvent('popstate'));
+  });
+  const replacement = page.locator('[data-active="true"]');
+  await expect(replacement.locator('h1')).toHaveText('A Film');
+  await expect.poll(() => movieFactsCalls).toBe(1);
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  await expect(replacement.getByRole('alert')).toHaveCount(0);
+});
+
+test('a failed title-facts retry restores focus and a later refusal stays quiet', async ({
+  page,
+}) => {
+  await setup(page);
+  let factsCalls = 0;
+  await page.route('**/atlas/index/title/series/9.json*', (route) => {
+    factsCalls++;
+    return route.fulfill({
+      status: factsCalls < 3 ? 503 : 403,
+      json: { error: factsCalls < 3 ? 'temporarily_unavailable' : 'forbidden' },
+    });
+  });
+
+  await page.addInitScript(() => history.replaceState(null, '', '/tv/9'));
+  await page.goto(`${E2E_ORIGIN}/test/detail-parity.html`);
+  const active = page.locator('[data-active="true"]');
+  const alert = active
+    .getByRole('alert')
+    .filter({ hasText: 'Some title details couldn’t be loaded.' });
+  const retry = alert.getByRole('button', { name: 'Try again' });
+  await retry.focus();
+  await retry.press('Enter');
+  await expect.poll(() => factsCalls).toBe(2);
+  await expect(retry).toBeFocused();
+  await expect(retry).toBeEnabled();
+  await retry.press('Enter');
+  await expect.poll(() => factsCalls).toBe(3);
+  await expect(alert).toHaveCount(0);
+  await expect(active.getByRole('status').filter({ hasText: 'Title details loaded.' })).toHaveCount(
+    0,
+  );
+  await expect(active.locator('h1')).toBeFocused();
+});
+
+test('a held title-facts retry cannot publish or steal focus after title replacement', async ({
+  page,
+}) => {
+  await setup(page);
+  let seriesFactsCalls = 0;
+  let releaseRetry;
+  const retryGate = new Promise((resolve) => (releaseRetry = resolve));
+  await page.route('**/atlas/index/title/series/9.json*', async (route) => {
+    seriesFactsCalls++;
+    if (seriesFactsCalls === 1)
+      return route.fulfill({ status: 503, json: { error: 'temporarily_unavailable' } });
+    await retryGate;
+    await route.fulfill({
+      json: { type: 'series', id: 9, indexed: true, labels: { moods: ['Old title'] } },
+    });
+  });
+  await page.route('**/atlas/index/title/movie/42.json*', (route) =>
+    route.fulfill({ json: { type: 'movie', id: 42, indexed: true } }),
+  );
+
+  await page.addInitScript(() => history.replaceState(null, '', '/tv/9'));
+  await page.goto(`${E2E_ORIGIN}/test/detail-parity.html`);
+  const current = () => page.locator('[data-active="true"]');
+  const retry = current().getByRole('alert').getByRole('button', { name: 'Try again' });
+  await retry.focus();
+  await retry.click();
+  await expect.poll(() => seriesFactsCalls).toBe(2);
+  await page.evaluate(() => {
+    history.pushState(null, '', '/movie/42');
+    dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(current().locator('h1')).toHaveText('A Film');
+  const watchlist = current().getByRole('button', { name: 'Watchlist', exact: true });
+  await watchlist.focus();
+  releaseRetry();
+  await expect(current().getByRole('alert')).toHaveCount(0);
+  await expect(
+    current().getByRole('status').filter({ hasText: 'Title details loaded.' }),
+  ).toHaveCount(0);
+  await expect(watchlist).toBeFocused();
+});

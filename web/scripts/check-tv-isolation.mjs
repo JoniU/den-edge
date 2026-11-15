@@ -351,5 +351,8 @@ if (process.argv.includes('--capture')) {
   // duplicate or delay the same authority used by radar rows/captions. Another split adds a request before a badge
   // becomes usable. Allow the smallest 128-byte boundary containing the reviewed graph, retaining 70 bytes;
   // translation catalogs remain unchanged.
-  if (coreTotalDelta > 105216) throw new Error('Browser total JS/CSS budget exceeded');
+  // Optional title-facts recovery then adds 1,607 bytes on matched a819734f/head builds, split between the existing
+  // lazy Detail and content-service Worker boundaries. Another split adds a request on the failure path or Worker
+  // startup and cannot reduce the complete graph. Allow the smallest 128-byte boundary, retaining 112 bytes.
+  if (coreTotalDelta > 106880) throw new Error('Browser total JS/CSS budget exceeded');
 }

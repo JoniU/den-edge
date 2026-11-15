@@ -34,7 +34,7 @@ const finite = (value: unknown): value is number =>
 const media = (value: unknown): value is 'movie' | 'tv' => value === 'movie' || value === 'tv';
 const strings = (
   value: unknown,
-  maximum = CONTENT_SERVICE_WIRE_LIMITS.filters,
+  maximum: number = CONTENT_SERVICE_WIRE_LIMITS.filters,
 ): value is string[] =>
   Array.isArray(value) && value.length <= maximum && value.every((item) => text(item, 256));
 const integers = (
@@ -429,9 +429,26 @@ function request(value: unknown): value is ContentRequest {
       );
     case 'title.extras':
       return (
-        exact(value, ['kind', 'title', 'warningCategories']) &&
+        exact(
+          value,
+          value.fields === undefined
+            ? ['kind', 'title', 'warningCategories']
+            : ['kind', 'title', 'warningCategories', 'fields'],
+        ) &&
         titleRef(value.title) &&
-        strings(value.warningCategories)
+        strings(value.warningCategories) &&
+        (value.fields === undefined ||
+          (Array.isArray(value.fields) &&
+            value.fields.length > 0 &&
+            value.fields.length <= 4 &&
+            new Set(value.fields).size === value.fields.length &&
+            value.fields.every(
+              (field) =>
+                field === 'ratings' ||
+                field === 'warnings' ||
+                field === 'facts' ||
+                field === 'iconicStudios',
+            )))
       );
     case 'title.external-id':
       return exact(value, ['kind', 'title']) && titleRef(value.title);
@@ -557,6 +574,63 @@ function result(value: unknown): value is ContentResult {
       (candidate.retryAfterMs === undefined || integer(candidate.retryAfterMs))
     );
   };
+  const readyValue = (candidate: unknown, validate: (ready: unknown) => boolean) =>
+    resource(candidate) &&
+    (!record(candidate) || candidate.state !== 'ready' || validate(candidate.value));
+  const ratings = (candidate: unknown) =>
+    record(candidate) &&
+    exact(candidate, ['imdb', 'votes', 'rottenTomatoes', 'metacritic', 'awards']) &&
+    ['imdb', 'votes', 'rottenTomatoes', 'metacritic'].every(
+      (key) => candidate[key] === undefined || finite(candidate[key]),
+    ) &&
+    (candidate.awards === undefined || text(candidate.awards, 2_048));
+  const warnings = (candidate: unknown) =>
+    boundedArray(candidate, 128) &&
+    candidate.every(
+      (warning) =>
+        record(warning) &&
+        exact(warning, ['id', 'label', 'votes']) &&
+        integer(warning.id, 1) &&
+        text(warning.label, 512) &&
+        integer(warning.votes),
+    );
+  const browsable = (candidate: unknown) =>
+    boundedArray(candidate, 128) &&
+    candidate.every(
+      (item) =>
+        record(item) &&
+        exact(item, ['id', 'name', 'titles']) &&
+        text(item.id, 64) &&
+        /^Q[1-9]\d*$/.test(item.id) &&
+        text(item.name, 512) &&
+        integer(item.titles),
+    );
+  const facts = (candidate: unknown) =>
+    record(candidate) &&
+    exact(candidate, [
+      'companies',
+      'networks',
+      'subjects',
+      'places',
+      'authors',
+      'moods',
+      'countries',
+    ]) &&
+    ['companies', 'networks', 'subjects', 'places', 'authors'].every((key) =>
+      browsable(candidate[key]),
+    ) &&
+    strings(candidate.moods, 128) &&
+    strings(candidate.countries, 128);
+  const studios = (candidate: unknown) =>
+    boundedArray(candidate, 128) &&
+    candidate.every(
+      (studio) =>
+        record(studio) &&
+        exact(studio, ['id', 'name']) &&
+        text(studio.id, 64) &&
+        /^Q[1-9]\d*$/.test(studio.id) &&
+        text(studio.name, 512),
+    );
   switch (value.kind) {
     case 'sources.configure':
     case 'grants.configure':
@@ -573,7 +647,16 @@ function result(value: unknown): value is ContentResult {
     case 'title.hero':
       return exact(value, ['kind', 'hero']) && resource(value.hero);
     case 'title.extras':
-      return exact(value, ['kind', 'extras']) && record(value.extras);
+      return (
+        exact(value, ['kind', 'extras']) &&
+        record(value.extras) &&
+        exact(value.extras, ['title', 'ratings', 'warnings', 'facts', 'iconicStudios']) &&
+        titleRef(value.extras.title) &&
+        readyValue(value.extras.ratings, ratings) &&
+        readyValue(value.extras.warnings, warnings) &&
+        readyValue(value.extras.facts, facts) &&
+        readyValue(value.extras.iconicStudios, studios)
+      );
     case 'title.external-id':
       return exact(value, ['kind', 'imdbId']) && resource(value.imdbId);
     case 'title.eligibility':
