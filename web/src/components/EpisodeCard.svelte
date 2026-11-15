@@ -67,7 +67,7 @@
     downloadState?: 'downloading' | 'ready';
   } = $props();
   const seen = $derived(progress >= WATCHED);
-  /** Not aired yet: the row says when it airs instead of describing it. */
+  /** Not aired yet: the row says when it airs alongside the episode description. */
   const upcoming = $derived(futureDate(episode.airDate));
   /** Too far out to have a release: nothing to play, list or download. Within a week it acts like an aired one. */
   const held = $derived(airWindow(episode.airDate) === 'upcoming');
@@ -161,7 +161,8 @@
     {:else if upcoming}<span class="air-date"
         >Airs <time datetime={episode.airDate}>{date}</time></span
       >
-    {:else if episode.overview}<span class="overview">{cleanedOverview(episode)}</span>{/if}
+    {/if}
+    {#if episode.overview}<span class="overview">{cleanedOverview(episode)}</span>{/if}
   </span>
 {/snippet}
 
