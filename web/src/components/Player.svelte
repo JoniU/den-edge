@@ -1554,7 +1554,14 @@
     stallCount = 0;
     stalledMs = 0;
     stallSince = undefined;
-    hold = result.prebuffer ? new PrebufferHold(result.prebuffer, performance.now()) : null;
+    hold = result.prebuffer
+      ? new PrebufferHold(
+          result.prebuffer,
+          performance.now(),
+          result.prebufferLead,
+          result.segments,
+        )
+      : null;
     startsIn = null;
     // For the startup timing line (den-edge#234's "Findings"), logged once this session's first frame arrives.
     // `Date.now()` throughout (`startupAskedAt`'s own clock), never mixed with `performance.now()`'s epoch.
@@ -2493,6 +2500,7 @@
       const { ready, seconds } = held.update(
         aheadIn(element.buffered, element.currentTime),
         performance.now(),
+        element.currentTime,
       );
       if (ready) {
         clearInterval(tick);
