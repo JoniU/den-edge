@@ -360,5 +360,9 @@ if (process.argv.includes('--capture')) {
   // Owner-only Kid creation (#940) adds 4,433 gzip bytes to the complete non-translation graph; 2,059 bytes are the
   // separately lazy form, while the remaining admission/recovery authority is shared by the startup page and Worker.
   // The final matched current-main/head measurement and smallest combined boundary are recorded in AGENTS.md.
-  if (coreTotalDelta > 111232) throw new Error('Browser total JS/CSS budget exceeded');
+  // Compound profile-key reset (#941) adds 2,423 gzip bytes to the complete non-translation graph while startup
+  // shrinks by 73 bytes. Its 1,121-byte page coordinator is separately lazy; the remaining Settings presentation,
+  // link handoff and Worker protocol must bracket that coordinator so reload can recover before the form opens.
+  // Allow the smallest 128-byte boundary containing the reviewed graph, retaining 40 bytes on the matched build.
+  if (coreTotalDelta > 113664) throw new Error('Browser total JS/CSS budget exceeded');
 }
