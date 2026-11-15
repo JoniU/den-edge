@@ -47,6 +47,7 @@ export const PRODUCTION_BUILD_SPECS = [
   'library-retirement.spec.mjs',
   'origin-outage.spec.mjs',
   'playback-receipt-recovery.spec.mjs',
+  'player-source-iphone.spec.mjs',
   'profile-transition-failures.spec.mjs',
   'startup-fetches.spec.mjs',
 ];
