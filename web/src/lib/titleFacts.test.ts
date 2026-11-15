@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chipFor, NO_FACTS, parseTitleFacts } from './titleFacts';
+import { chipFor, NO_FACTS, parseTitleFacts, validTitleFacts } from './titleFacts';
 
 const facts = parseTitleFacts({
   networks: [{ id: 'Q23589', name: 'Showtime', titles: 59 }],
@@ -22,6 +22,27 @@ describe('parseTitleFacts', () => {
     expect(facts.moods).toEqual(['Dark & Gritty', 'Tense/Edge-of-seat']);
     expect(facts.countries).toEqual(['ES']);
     expect(parseTitleFacts(null)).toEqual(NO_FACTS);
+  });
+
+  it('rejects values that cannot cross the bounded content-service wire', () => {
+    expect(
+      validTitleFacts({
+        companies: [{ id: 'Q1', name: 'Studio', titles: -1 }],
+      }),
+    ).toBe(false);
+    expect(validTitleFacts({ labels: { moods: Array(129).fill('Warm') } })).toBe(false);
+    expect(validTitleFacts({ labels: { moods: ['x'.repeat(257)] } })).toBe(false);
+    expect(validTitleFacts({ labels: { moods: [` ${'x'.repeat(255)} `] } })).toBe(false);
+    expect(
+      validTitleFacts({ companies: [{ id: `Q${'1'.repeat(64)}`, name: 'Studio', titles: 1 }] }),
+    ).toBe(false);
+    expect(
+      validTitleFacts({
+        companies: [{ id: 'Q1', name: 'Studio', titles: 1 }],
+        labels: { moods: ['Warm'] },
+        countries: ['SE'],
+      }),
+    ).toBe(true);
   });
 });
 

@@ -40,6 +40,32 @@ it('validates bounded semantic requests and unversioned content replies', () => 
     decodeContentServiceClientMessage({
       type: 'content-query',
       protocol: CONTENT_SERVICE_PROTOCOL,
+      requestId: 'extras-retry',
+      request: {
+        kind: 'title.extras',
+        title: { type: 'movie', id: 7 },
+        warningCategories: [],
+        fields: ['facts'],
+      },
+    }).ok,
+  ).toBe(true);
+  expect(
+    decodeContentServiceClientMessage({
+      type: 'content-query',
+      protocol: CONTENT_SERVICE_PROTOCOL,
+      requestId: 'extras-duplicate',
+      request: {
+        kind: 'title.extras',
+        title: { type: 'movie', id: 7 },
+        warningCategories: [],
+        fields: ['facts', 'facts'],
+      },
+    }).ok,
+  ).toBe(false);
+  expect(
+    decodeContentServiceClientMessage({
+      type: 'content-query',
+      protocol: CONTENT_SERVICE_PROTOCOL,
       requestId: 'one',
       request: {
         kind: 'catalog.page',
@@ -172,6 +198,71 @@ it('validates bounded semantic requests and unversioned content replies', () => 
     decodeContentServiceServerMessage({
       ...heroReply,
       result: { ...heroReply.result, detail: { state: 'absent' } },
+    }).ok,
+  ).toBe(false);
+  const extrasReply = {
+    ...reply,
+    requestId: 'extras',
+    result: {
+      kind: 'title.extras',
+      extras: {
+        title: { type: 'movie', id: 7 },
+        ratings: { state: 'ready', value: { imdb: 8.2, votes: 100 } },
+        warnings: { state: 'ready', value: [{ id: 1, label: 'Flashing lights', votes: 3 }] },
+        facts: {
+          state: 'ready',
+          value: {
+            companies: [],
+            networks: [],
+            subjects: [],
+            places: [],
+            authors: [],
+            moods: ['Warm'],
+            countries: ['FI'],
+          },
+        },
+        iconicStudios: { state: 'ready', value: [{ id: 'Q1', name: 'Studio' }] },
+      },
+    },
+  };
+  expect(decodeContentServiceServerMessage(extrasReply).ok).toBe(true);
+  expect(
+    decodeContentServiceServerMessage({
+      ...extrasReply,
+      result: {
+        ...extrasReply.result,
+        extras: {
+          ...extrasReply.result.extras,
+          facts: {
+            state: 'ready',
+            value: { ...extrasReply.result.extras.facts.value, moods: ['x'.repeat(256)] },
+          },
+        },
+      },
+    }).ok,
+  ).toBe(true);
+  expect(
+    decodeContentServiceServerMessage({
+      ...extrasReply,
+      result: {
+        ...extrasReply.result,
+        extras: {
+          ...extrasReply.result.extras,
+          facts: {
+            state: 'ready',
+            value: { ...extrasReply.result.extras.facts.value, moods: ['x'.repeat(257)] },
+          },
+        },
+      },
+    }).ok,
+  ).toBe(false);
+  expect(
+    decodeContentServiceServerMessage({
+      ...extrasReply,
+      result: {
+        ...extrasReply.result,
+        extras: { ...extrasReply.result.extras, facts: { state: 'ready', value: {} } },
+      },
     }).ok,
   ).toBe(false);
   expect(decodeContentServiceServerMessage({ ...reply, version: { revision: 1 } }).ok).toBe(false);

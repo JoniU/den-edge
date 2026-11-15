@@ -11,6 +11,9 @@ export interface Warning {
   votes: number;
 }
 
+const MAX_WARNINGS = 128;
+const MAX_WARNING_LABEL = 512;
+
 /**
  * The warnings to show: confirmed by more yes votes than no, never a spoiler, and among `categories` if any are picked.
  * Each once: an answer can list a topic more than once, with different votes (The Wire's names "a dog dies" five
@@ -26,18 +29,23 @@ export function parseWarnings(body: unknown, categories: string[]): Warning[] {
         yes = Number(r?.yes ?? 0),
         no = Number(r?.no ?? 0);
       if (
-        !Number.isInteger(id) ||
+        !Number.isSafeInteger(id) ||
         r?.spoiler ||
         (categories.length && !categories.includes(r?.category)) ||
-        !Number.isFinite(yes) ||
-        !Number.isFinite(no) ||
+        id < 1 ||
+        !Number.isSafeInteger(yes) ||
+        !Number.isSafeInteger(no) ||
+        yes < 0 ||
+        no < 0 ||
         yes <= no ||
         yes < 1
       )
         return [];
       const label = r?.name;
-      return typeof label === 'string' && label.trim() ? [{ id, label, votes: yes }] : [];
+      const clean = typeof label === 'string' ? label.trim() : '';
+      return clean && clean.length <= MAX_WARNING_LABEL ? [{ id, label: clean, votes: yes }] : [];
     })
     .sort((a, b) => b.votes - a.votes)
-    .filter((warning) => !seen.has(warning.id) && !!seen.add(warning.id));
+    .filter((warning) => !seen.has(warning.id) && !!seen.add(warning.id))
+    .slice(0, MAX_WARNINGS);
 }

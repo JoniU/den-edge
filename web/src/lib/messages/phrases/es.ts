@@ -976,6 +976,7 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
     'Alguien compartió sus complementos Den contigo. Aceptar permite que este navegador los use para buscar y reproducir cosas. Puedes dejarlo en cualquier momento en Configuración › Compartir.',
   'Some guest sharing settings may be out of date.':
     'Es posible que algunos ajustes para compartir con invitados estén desactualizados.',
+  'Some title details couldn’t be loaded.': 'No se pudieron cargar algunos detalles del título.',
   'Something went wrong on this page.': 'Algo salió mal en esta página.',
   'Sort people': 'ordenar personas',
   Sources: 'Fuentes',
@@ -1112,6 +1113,7 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   time: 'tiempo',
   'Time Travel': 'Viaje en el tiempo',
   times: 'veces',
+  'Title details loaded.': 'Se cargaron los detalles del título.',
   'Titles will stop playing from your own library, on every device.':
     'Los títulos dejarán de reproducirse desde su propia biblioteca, en todos los dispositivos.',
   tmdb: 'tmdb',

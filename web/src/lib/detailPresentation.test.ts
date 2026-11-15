@@ -348,6 +348,12 @@ describe('detail presentation', () => {
       } as never),
     ).toMatchObject({ ratingSources: [], autoplay: false });
   });
+
+  it('bounds awards and keeps vote counts integral for the content-service wire', () => {
+    expect(
+      parseRatings({ Response: 'True', imdbVotes: '1.5', Awards: 'x'.repeat(2_049) }),
+    ).toMatchObject({ votes: undefined, awards: undefined });
+  });
 });
 
 describe('full actor filmography', () => {
