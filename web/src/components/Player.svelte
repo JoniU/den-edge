@@ -31,7 +31,7 @@
   import { hlsConfig } from '../lib/hlsConfig';
   import { retryWithoutHint } from '../lib/ipv4';
   import type { Title } from '../lib/library';
-  import type { InterfaceLanguage } from '../lib/interfaceLanguage';
+  import { interfaceLocale, type InterfaceLanguage } from '../lib/interfaceLanguage';
   import type { Episode as EpisodeDetail } from '../lib/detail';
   import { PLAYBACK_PROGRESS_SAVE_MS, PlaybackProgressReporter } from '../lib/playbackProgress';
   import { playable, withoutRefused, type Playable } from '../lib/playable';
@@ -119,6 +119,12 @@
   import { startPlayback, type PlaybackCause, type PlaybackWant } from '../lib/playback';
   import { directRecovery } from '../lib/playbackRecovery';
   import { checkSubtitleResync, resyncSubtitle } from '../lib/subtitleResync';
+  import {
+    hasSubtitleResyncNotice,
+    scheduleNoticeExpiry,
+    subtitleResyncNoticeText,
+    type SubtitleResyncNotice,
+  } from '../lib/subtitleResyncNotice';
   import type { MenuItem } from '../lib/titleActions';
   import {
     activeAt,
@@ -1032,37 +1038,35 @@
   /** The resume notice stays longer: it carries Start over. */
   const RESUME_NOTICE_MS = 6_000;
   /** Clear a notice NOTICE_MS after `shown` says it is up; a new text starts the time over. */
-  function fades(shown: () => unknown, clear: () => void, ms = NOTICE_MS) {
+  function fades(shown: () => boolean, clear: () => void, ms = NOTICE_MS) {
     $effect(() => {
-      if (!shown()) return;
-      const timer = setTimeout(clear, ms);
-      return () => clearTimeout(timer);
+      return scheduleNoticeExpiry(shown(), clear, ms);
     });
   }
   fades(
-    () => volumeNotice,
+    () => volumeNotice !== null,
     () => (volumeNotice = null),
   );
   fades(
-    () => resumedAt,
+    () => resumedAt !== null,
     () => (resumedAt = null),
     RESUME_NOTICE_MS,
   );
   fades(
-    () => swapped,
+    () => swapped !== null,
     () => (swapped = null),
   );
   // Only once the switch has landed: "trying another release…" stays until it says where it went.
   fades(
-    () => !switching && autoSwitch,
+    () => !switching && autoSwitch !== null,
     () => (autoSwitch = null),
   );
   fades(
-    () => struggling,
+    () => struggling !== null,
     () => (struggling = null),
   );
   fades(
-    () => unchanged,
+    () => unchanged !== null,
     () => (unchanged = null),
   );
   // A terminal result replaces progress feedback. In particular, a direct URL can be accepted and then fail before
@@ -3773,13 +3777,13 @@
   const subtitleTimingOffset = $derived(subtitleOffset + subtitleResyncOffset);
   let subtitleResyncReady = $state(false);
   let subtitleResyncBusy = $state(false);
-  let subtitleResyncNotice = $state<string | null>(null);
+  let subtitleResyncNotice = $state<SubtitleResyncNotice>(null);
   let subtitleResyncRequest: AbortController | undefined;
   let subtitleSelectionGeneration = 0;
   let subtitleLoadFailure = $state.raw<NonNullable<Session['subtitles']>[number] | null>(null);
   const alignedUrls = new SvelteSet<string>();
   fades(
-    () => subtitleResyncNotice,
+    () => hasSubtitleResyncNotice(subtitleResyncNotice),
     () => (subtitleResyncNotice = null),
   );
 
@@ -3873,7 +3877,7 @@
       await renderTick();
       applySubtitles();
       if (previous && alignedUrls.delete(previous.url)) URL.revokeObjectURL(previous.url);
-      subtitleResyncNotice = `Subtitles re-synced · ${result.offset >= 0 ? '+' : ''}${result.offset.toFixed(1)}s`;
+      subtitleResyncNotice = result.offset;
     } catch {
       if (
         !controller.signal.aborted &&
@@ -3881,8 +3885,7 @@
         subtitleChoice === choice &&
         generation === subtitleSelectionGeneration
       )
-        subtitleResyncNotice =
-          'Subtitles could not be re-synced. Your current timing is unchanged.';
+        subtitleResyncNotice = false;
     } finally {
       clearTransition(pending);
       if (subtitleResyncRequest === controller) {
@@ -4012,6 +4015,33 @@
     subtitleOffset = Math.max(-30, Math.min(30, Math.round((subtitleOffset + change) * 2) / 2));
     avplay?.setSubtitleOffset(subtitleOffset);
     retimeSubtitles();
+  }
+
+  let subtitleOffsetFormatterLanguage: InterfaceLanguage | undefined;
+  let subtitleOffsetFormatter: Intl.NumberFormat | undefined;
+
+  /** Profile-locale output for both the compact HUD and its spoken live value. */
+  function formattedSubtitleOffset(
+    offset = subtitleTimingOffset,
+    unitDisplay: 'compact' | 'spoken' = 'compact',
+  ): string {
+    const language = i18n.language;
+    let formatter = subtitleOffsetFormatter;
+    if (!formatter || subtitleOffsetFormatterLanguage !== language) {
+      formatter = new Intl.NumberFormat(interfaceLocale(language), {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      });
+      subtitleOffsetFormatter = formatter;
+      subtitleOffsetFormatterLanguage = language;
+    }
+    const id =
+      unitDisplay === 'spoken' ? 'player.subtitleOffsetSpoken' : 'player.subtitleOffsetCompact';
+    const english = unitDisplay === 'spoken' ? '{sign}{offset} seconds' : '{sign}{offset}s';
+    return i18n.format(id, english, {
+      sign: offset >= 0 ? '+' : '',
+      offset: formatter.format(offset),
+    });
   }
 
   async function openSubtitleTiming() {
@@ -5150,8 +5180,17 @@
   /** What playback says as it goes, in the order the TV's stack shows it. */
   const notices = $derived.by(() => {
     const list: Notice[] = [];
-    if (transitionNotice) list.push({ text: transitionNotice, quiet: true, busy: true });
-    if (subtitleResyncNotice) list.push({ text: subtitleResyncNotice, quiet: true });
+    if (transitionNotice)
+      list.push({ text: i18n.phrase(transitionNotice), quiet: true, busy: true });
+    if (hasSubtitleResyncNotice(subtitleResyncNotice))
+      list.push({
+        text: subtitleResyncNoticeText(
+          subtitleResyncNotice,
+          (english) => i18n.phrase(english),
+          (offset) => formattedSubtitleOffset(offset),
+        ),
+        quiet: true,
+      });
     const failed = subtitleLoadFailure;
     if (failed)
       list.push({
@@ -5400,18 +5439,18 @@
   }
 
   function subtitleTimingItems(): MenuItem[] {
-    const offset = `${subtitleTimingOffset >= 0 ? '+' : ''}${subtitleTimingOffset.toFixed(1)}`;
+    const offset = formattedSubtitleOffset();
     return [
       {
         kind: 'item',
-        label: i18n.format('player.adjustSubtitleTiming', 'Adjust subtitle timing ({offset}s)', {
+        label: i18n.format('player.adjustSubtitleTiming', 'Adjust subtitle timing ({offset})', {
           offset,
         }),
         onselect: openSubtitleTiming,
       },
       {
         kind: 'item',
-        label: i18n.format('player.resetSubtitleTiming', 'Reset subtitle timing ({offset}s)', {
+        label: i18n.format('player.resetSubtitleTiming', 'Reset subtitle timing ({offset})', {
           offset,
         }),
         disabled: subtitleOffset === 0,
@@ -5486,11 +5525,9 @@
         items: sourceItems,
       });
     if (current && subtitleChoice !== null)
-      page(
-        'Subtitle timing',
-        `${subtitleTimingOffset >= 0 ? '+' : ''}${subtitleTimingOffset.toFixed(1)} s`,
-        { items: subtitleTimingItems },
-      );
+      page(i18n.text('player.subtitleTiming'), formattedSubtitleOffset(), {
+        items: subtitleTimingItems,
+      });
     if (current)
       items.push({ kind: 'item', label: 'Play from beginning', onselect: playFromBeginning });
     if (desktopTransport)
@@ -6345,29 +6382,32 @@
           <section
             bind:this={subtitleTimingPanel}
             class="tv-subtitle-timing"
-            aria-label="Subtitle timing"
+            aria-label={i18n.text('player.subtitleTiming')}
             role="group"
           >
             {#if webTransport}<button type="button" onclick={() => adjustSubtitleOffset(-0.5)}
-                >Earlier</button
-              >{:else}<span>‹ Earlier</span>{/if}
-            <strong aria-live="polite"
-              >{subtitleTimingOffset >= 0 ? '+' : ''}{subtitleTimingOffset.toFixed(1)}s</strong
+                >{i18n.text('player.subtitleEarlier')}</button
+              >{:else}<span>‹ {i18n.text('player.subtitleEarlier')}</span>{/if}
+            <strong role="status" aria-label={formattedSubtitleOffset(undefined, 'spoken')}
+              >{formattedSubtitleOffset()}</strong
             >
             {#if webTransport}<button type="button" onclick={() => adjustSubtitleOffset(0.5)}
-                >Later</button
-              >{:else}<span>Later ›</span>{/if}
+                >{i18n.text('player.subtitleLater')}</button
+              >{:else}<span>{i18n.text('player.subtitleLater')} ›</span>{/if}
             {#if webTransport}
               <div class="web-timing-actions">
                 <button
                   type="button"
                   disabled={subtitleOffset === 0}
-                  onclick={() => adjustSubtitleOffset(-subtitleOffset)}>Reset</button
+                  onclick={() => adjustSubtitleOffset(-subtitleOffset)}
+                  >{i18n.text('player.subtitleReset')}</button
                 >
-                <button type="button" onclick={() => void closeSubtitleTiming()}>Done</button>
+                <button type="button" onclick={() => void closeSubtitleTiming()}
+                  >{i18n.text('player.subtitleDone')}</button
+                >
               </div>
             {:else}
-              <small>Left or right to adjust · Select to finish</small>
+              <small>{i18n.text('player.subtitleTimingInstructions')}</small>
             {/if}
           </section>
         {/if}
