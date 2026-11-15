@@ -165,6 +165,10 @@ if (process.argv.includes('--capture')) {
   // (206,114 -> 206,173): the compact authority tuple and Player remount key which prevent replaced authority from
   // publishing delayed recall. The digest, codec and source lookup remain lazy. Raise both caps to the next 128-byte
   // boundary, retaining 79 bytes on this build.
+  // Exact-current Owner PIN replacement/removal (#1145) adds 88 gzip bytes at startup on matched base/head builds.
+  // The UI stays in lazy Settings and Tizen 3 compiles it out; only the versioned command and write authority remain
+  // with the Worker that must reject old clients and stale rows before Settings can recover. Allow the smallest
+  // 128-byte boundary containing the reviewed graph, retaining 102 bytes.
   if (initialDelta > Math.min(9856, Math.floor(baseline.initialGzip * 0.0502)))
     throw new Error('Browser initial JS/CSS budget exceeded');
   // Complete UI translations are opt-in chunks: neither is fetched on the higher-priority English path. Budget
@@ -375,5 +379,9 @@ if (process.argv.includes('--capture')) {
   // Assistant recovery (#1278) stays in the existing lazy Connect/Settings boundaries, while acknowledged durable
   // readback stays with the shared Worker that owns those rows. Reduced Tizen compiles the connector/queue runtime
   // out entirely. Matched measurements and consolidation are in AGENTS.md; allow the smallest 128-byte boundary.
-  if (coreTotalDelta > 115072) throw new Error('Browser total JS/CSS budget exceeded');
+  // Exact-current Owner PIN authority (#1145) adds 1,432 gzip bytes to the complete non-translation graph. Its form
+  // remains in lazy Settings; command admission, exact-row CAS and durable replay prevention remain in the Worker.
+  // Another split would add an authority request and duplicate the row guard. Allow the smallest 128-byte boundary,
+  // retaining 7 bytes on the matched build.
+  if (coreTotalDelta > 116480) throw new Error('Browser total JS/CSS budget exceeded');
 }
