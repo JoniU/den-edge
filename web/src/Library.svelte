@@ -3118,9 +3118,9 @@
       {seenCounts}
       ondetails={requestHistoryDetails}
       {failure}
-      ondismiss={(title) => void dismiss(title)}
-      onremove={(title) => void toggleWatchlist(title, false)}
-      onseen={(title, seen) => void setSeen(title, seen)}
+      ondismiss={dismiss}
+      onremove={(title) => toggleWatchlist(title, false)}
+      onseen={setSeen}
     />
   {/if}
 {:else}

@@ -60,7 +60,7 @@ const episodes = (n) => ({
       still_path: '/still.jpg',
       runtime: 48,
       air_date: n === 2 ? '2099-06-30' : '2024-01-08',
-      overview: 'This must stay hidden until the episode airs.',
+      overview: 'The investigation reaches a future turning point.',
     },
     // Due two days out: a streaming service may already have released it, so it plays like an aired one.
     ...(n === 2
@@ -421,15 +421,22 @@ for (const width of [390, 834, 1280])
       const upcoming = active.locator('.episode').filter({ hasText: 'Coming soon' });
       await expect(upcoming.locator('.air-date')).toContainText('2099');
       await expect(upcoming.locator('.episode-play')).toBeDisabled();
-      await expect(upcoming.locator('.overview')).toHaveCount(0);
+      await expect(upcoming.locator('.overview')).toHaveText(
+        'The investigation reaches a future turning point.',
+      );
       const upcomingMenu = upcoming.getByRole('button', {
         name: 'Options for episode 2',
         exact: true,
       });
       await upcomingMenu.click();
-      await expect(upcoming.getByRole('menuitem', { name: 'Mark watched' })).toBeVisible();
+      const markWatched = upcoming.getByRole('menuitem', { name: 'Mark watched' });
+      await expect(markWatched).toBeVisible();
       await expect(upcoming.getByRole('menuitem', { name: 'Sources', exact: true })).toHaveCount(0);
-      await upcomingMenu.click();
+      await markWatched.click();
+      await expect(upcoming.locator('.watched')).toBeVisible();
+      await expect(upcoming.locator('.overview')).toHaveText(
+        'The investigation reaches a future turning point.',
+      );
       // Within a week of its air date the episode still says when it airs, but Sources and Play work.
       const near = active.locator('.episode').filter({ hasText: 'Out early' });
       await expect(near.locator('.air-date')).toBeVisible();
@@ -527,6 +534,9 @@ test('season requests cannot overwrite a newer selection and retained detail and
     await expect(active().getByText('Season 1 premiere', { exact: true })).toBeVisible();
     await active().getByRole('tab', { name: 'Season 2', exact: true }).click();
     await expect(active().getByText('Season 2 premiere', { exact: true })).toBeVisible();
+    await expect(
+      active().locator('.episode').filter({ hasText: 'Coming soon' }).locator('.overview'),
+    ).toHaveText('The investigation reaches a future turning point.');
     expect(requests.filter((p) => p.endsWith('/season/2'))).toHaveLength(1);
     await expect(
       active().getByRole('heading', { name: 'More like this', exact: true }).getByRole('link'),

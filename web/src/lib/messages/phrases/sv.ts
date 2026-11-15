@@ -269,6 +269,8 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
     'Det gick inte att spara koden. Kontrollera att den här enheten är ansluten till ditt nätverk.',
   'Couldn’t save that. Check that this device is on your network, then confirm again.':
     'Det gick inte att spara. Kontrollera att den här enheten är ansluten till ditt nätverk och bekräfta igen.',
+  'Couldn’t save that. Check that this device is on your network.':
+    'Det gick inte att spara. Kontrollera att den här enheten är ansluten till ditt nätverk.',
   'Couldn’t save that. Check your connection and try again.':
     'Det gick inte att spara. Kontrollera anslutningen och försök igen.',
   'Couldn’t start that download. Try again.': 'Hämtningen kunde inte startas. Försök igen.',

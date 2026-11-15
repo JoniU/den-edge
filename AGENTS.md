@@ -120,6 +120,18 @@ everything the committed code imports is committed too.
   the existing lazy Player JS/CSS pair itself shrinks by 16 bytes. The helper remains in the Player-only binge
   module and adds no import, request, timer or listener; another lazy boundary would add a request without reducing
   the complete graph.
+- Watchlist desired-state Retry (#499) was measured on matched production builds at base `6e5bce2d` and the repair:
+  startup moved 203,801 → 203,799 gzip bytes, while the complete non-translation graph moved 101,684 → 102,327
+  bytes (+643). The existing lazy Watchlist JS/CSS pair accounts for 642 bytes of the delta (4,952 → 5,594); the
+  selected-language failure copy adds 23 gzip bytes across the independently lazy Spanish/Swedish catalogs, and the
+  test fixture/E2E do not ship. The repair reuses the existing failure and `Try again` presentation, stores only the
+  latest refused desired action while that exact card/session remains presented, restores focus after recovery, and
+  adds no dependency, request, polling, timer or healthy-path work. Its UI and authority lifetime must stay beside
+  the already lazy Watchlist surface: moving it eager would spend startup bytes, while another dynamic import would
+  add a request at the moment recovery is needed and cannot reduce the complete graph. No production code or data
+  was available to remove without losing the localized failure, stale-result, focus or retry contract. The ceiling
+  therefore advances from 101,760 to 102,400, the next 128-byte boundary, retaining 73 bytes; the independent
+  startup and translation ceilings remain unchanged.
 
 ## Testing
 

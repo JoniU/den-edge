@@ -326,9 +326,11 @@ if (process.argv.includes('--capture')) {
   // next 128-byte boundary would retain only 37: 165 retained.
   // Merging the Kid direct-read authority brings the combined graph to 101,667. Its measured consolidation and
   // rejected lazy alternatives are recorded in AGENTS.md; allow the next 128-byte boundary, retaining 93.
+  // Watchlist desired-state Retry adds 643 gzip bytes to the complete graph while startup shrinks by two bytes.
+  // It stays in the existing lazy Watchlist chunk; another split would add a request after failure without reducing
+  // the complete graph. Allow the next 128-byte boundary, retaining 73 bytes on the matched build.
   // Holding a start for den-remux's media lead (`prebufferLead`), with a bit-rate countdown and a still-buffer rule
-  // that waits for an overdue segment, adds 247 gzip bytes on a local build (101,467 -> 101,714), all in the lazy
-  // Player chunk, bringing the combined graph to about 101,914; it adds no request, timer or storage. Allow the next
-  // 128-byte boundary past it.
-  if (coreTotalDelta > 102016) throw new Error('Browser total JS/CSS budget exceeded');
+  // that waits for an overdue segment, adds 247 gzip bytes on a local build, all in the lazy Player chunk; it adds no
+  // request, timer or storage. On top of the Retry above that is about 102,574; allow the next 128-byte boundary.
+  if (coreTotalDelta > 102656) throw new Error('Browser total JS/CSS budget exceeded');
 }

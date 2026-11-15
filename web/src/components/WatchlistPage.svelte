@@ -3,7 +3,7 @@
      grouped by month and drawn a screenful at a time as you scroll, or one year of it. -->
 <script lang="ts">
   import { i18n } from '../lib/i18n.svelte';
-  import { untrack, type Snippet } from 'svelte';
+  import { onDestroy, tick, untrack, type Snippet } from 'svelte';
   import {
     UNKNOWN_YEAR,
     compareHistoryTitleKeys,
@@ -64,11 +64,11 @@
     /** Ask the library for exact watched coordinates for cards entering the drawn window. */
     ondetails?: (titles: Title[], revision?: string) => void;
     /** Off Continue Watching until it's played again; absent where nothing can be written (a guest). */
-    ondismiss?: (title: Title) => void;
+    ondismiss?: (title: Title) => Promise<boolean | undefined>;
     /** Out of the library, as the TV's Remove does. */
-    onremove?: (title: Title) => void;
+    onremove?: (title: Title) => Promise<boolean | undefined>;
     /** Seen or not, as the title page's Seen button does it: a series with every aired episode. */
-    onseen?: (title: Title, seen: boolean) => void;
+    onseen?: (title: Title, seen: boolean) => Promise<boolean | undefined>;
   } = $props();
 
   type DisplayHistoryPage = {
@@ -83,7 +83,7 @@
   type Control = {
     label: string;
     icon: 'remove' | 'seen' | 'unseen';
-    run: (title: Title) => void;
+    run: (title: Title) => Promise<boolean | undefined>;
     /** Asked first, on the same button, when the change undoes more than the card shows. */
     confirm?: string;
   };
@@ -102,6 +102,21 @@
   let savedKind = $state<MediaType | null>(null);
   /** The control waiting for its second press, by control and title, and the question it asks. */
   let confirming = $state<{ id: string; question: string } | null>(null);
+  /** The latest refused desired state. A replacement Watchlist mount owns a new retry lifetime. */
+  let failedAction = $state.raw<{
+    title: Title;
+    control: Control;
+    message: string;
+  } | null>(null);
+  let actionGeneration = 0;
+  let retrying = $state(false);
+  let retryButton = $state<HTMLButtonElement | null>(null);
+  let pageHeading = $state<HTMLHeadingElement | null>(null);
+  let alive = true;
+  onDestroy(() => {
+    alive = false;
+    actionGeneration += 1;
+  });
 
   const key = (title: Title) => `${title.type}:${title.id}`;
   // A series with an episode seen is under way: it's in Continue Watching or Watched, so the watchlist doesn't also
@@ -146,6 +161,25 @@
     return facets.years.find((candidate) => candidate.year === year)?.[kind ?? 'all'] ?? 0;
   });
   const shownTotal = $derived(remote?.total ?? filteredTotal);
+
+  /** A retry belongs only to a card still presented by this exact page/filter authority. */
+  function presented(title: Title): boolean {
+    const identity = key(title);
+    return (
+      resume.some((entry) => key(entry.title) === identity) ||
+      savedShown.slice(0, savedDrawn).some((candidate) => key(candidate) === identity) ||
+      shown.some((entry) => key(entry.title) === identity)
+    );
+  }
+
+  $effect(() => {
+    if (failedAction && !presented(failedAction.title)) failedAction = null;
+  });
+
+  $effect(() => {
+    if (!failedAction || retrying) return;
+    void tick().then(() => retryButton?.focus());
+  });
   const facetYears = $derived(
     (() => {
       const values =
@@ -331,7 +365,55 @@
       return;
     }
     confirming = null;
-    control.run(title);
+    void attempt(control, title, false);
+  }
+
+  async function attempt(control: Control, title: Title, retry: boolean) {
+    if (!presented(title)) {
+      failedAction = null;
+      return;
+    }
+    const generation = ++actionGeneration;
+    const restoreFocus = retry && document.activeElement === retryButton;
+    const focusIndex = restoreFocus
+      ? Array.from(
+          document.querySelectorAll<HTMLElement>('[data-watchlist-card] a[href]'),
+        ).findIndex(
+          (link) =>
+            link.closest<HTMLElement>('[data-watchlist-card]')?.dataset.watchlistCard ===
+            key(title),
+        )
+      : -1;
+    if (!retry) failedAction = null;
+    retrying = retry;
+    const saved = await control.run(title);
+    if (!alive || generation !== actionGeneration) return;
+    // Let the parent publish its exact failure copy before retaining it beside this desired action.
+    await tick();
+    if (!alive || generation !== actionGeneration) return;
+    retrying = false;
+    if (saved === false && presented(title)) {
+      failedAction = {
+        title,
+        control,
+        message: failure ?? 'Couldn’t save that. Check that this device is on your network.',
+      };
+    } else if (saved === true) {
+      failedAction = null;
+      if (restoreFocus) {
+        await tick();
+        const links = Array.from(
+          document.querySelectorAll<HTMLElement>('[data-watchlist-card] a[href]'),
+        );
+        (links[Math.min(Math.max(focusIndex, 0), links.length - 1)] ?? pageHeading)?.focus();
+      }
+    }
+  }
+
+  function retryFailedAction() {
+    const failed = failedAction;
+    if (!failed || retrying) return;
+    void attempt(failed.control, failed.title, true);
   }
 
   /** A press anywhere but on the question, or Escape, takes the question back. */
@@ -372,7 +454,7 @@
 <svelte:window onpointerdown={dismissQuestion} onkeydown={dismissQuestion} />
 
 {#snippet framed(title: Title, controls: Control[], card: Snippet)}
-  <div class="framed" data-spatial-overlay>
+  <div class="framed" data-watchlist-card={key(title)} data-spatial-overlay>
     {@render card()}
     {#if controls.length}
       <div class="controls" data-spatial-overlay-actions>
@@ -422,11 +504,18 @@
 {/snippet}
 
 <div class="title">
-  <h1>{i18n.phrase('Watchlist')}</h1>
+  <h1 bind:this={pageHeading} tabindex="-1">{i18n.phrase('Watchlist')}</h1>
   <!-- The library's other list: what the debrid is fetching for it, from any device. -->
   <a class="aside" href="/downloads">{i18n.phrase('Downloads')} ›</a>
 </div>
-{#if failure}<p class="failure" role="alert">{i18n.phrase(failure)}</p>{/if}
+{#if failedAction}
+  <div class="failure" role="alert">
+    <span>{i18n.phrase(failedAction.message)}</span>
+    <button bind:this={retryButton} type="button" disabled={retrying} onclick={retryFailedAction}>
+      {i18n.phrase('Try again')}
+    </button>
+  </div>
+{/if}
 <p class="visually-hidden" aria-live="polite">{confirming?.question ?? ''}</p>
 
 {#if !resume.length && !saved.length && !(historyPage?.facets.all ?? history.length)}
@@ -581,7 +670,26 @@
   }
 
   .failure {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
     color: var(--danger);
+  }
+
+  .failure button {
+    border: 1px solid currentcolor;
+    border-radius: 999px;
+    padding: 6px 12px;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    font-weight: 650;
+  }
+
+  .failure button:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
   }
 
   .visually-hidden {
