@@ -251,6 +251,11 @@ export default defineConfig({
     'import.meta.env.DEN_E2E': JSON.stringify(
       process.env.DEN_E2E === '1' && process.env.DEN_E2E_SHARED_WORKER !== '1',
     ),
+    // Only the routed multi-entry production build has the stable explicit projection entry. The ordinary E2E dev
+    // server must keep Vite's ?worker constructor so it can compile and serve that Worker on demand.
+    'import.meta.env.DEN_E2E_PROJECTION_ENTRY': JSON.stringify(
+      process.env.DEN_E2E === '1' && process.env.DEN_E2E_SEED === '1',
+    ),
     'import.meta.env.DEN_ALLOCATION_AUDIT': JSON.stringify(
       process.env.DEN_ALLOCATION_AUDIT === '1',
     ),
@@ -314,7 +319,25 @@ export default defineConfig({
     // The production build the time budgets run against (`playwright.budgets.config.ts`) also carries the page that
     // seeds their household with the app's own code (`test/seed-library.html`). Never in a release build.
     ...(process.env.DEN_E2E_SEED === '1'
-      ? { rolldownOptions: { input: { index: 'index.html', seed: 'test/seed-library.html' } } }
+      ? {
+          // Rolldown may retain the nested library Worker's generated URL while dropping its asset from a
+          // multi-entry build. An explicit, stable test-only entry keeps the production-path Worker executable.
+          rolldownOptions: {
+            input: {
+              index: 'index.html',
+              seed: 'test/seed-library.html',
+              assistantProjectionWorker: 'src/lib/assistantProjectionWorker.ts',
+            },
+            output: {
+              entryFileNames: (chunk) =>
+                chunk.name === 'assistantProjectionWorker'
+                  ? 'assets/assistantProjectionWorker.js'
+                  : chunk.name === 'shell'
+                    ? 'shell.js'
+                    : 'assets/[name]-[hash].js',
+            },
+          },
+        }
       : {}),
   },
   test: {
