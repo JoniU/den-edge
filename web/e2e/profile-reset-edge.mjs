@@ -139,6 +139,11 @@ export async function routeProfileResetEdge(page, edge) {
     if (method === 'GET' && rest.length === 2) {
       if (!record || record.attempt !== attempt)
         return json(route, 404, { error: 'not_found' }, headers(library));
+      // A lost acquire reply is ambiguous even when den-edge committed it. While held, lose the exact recovery read
+      // too; otherwise the production client immediately observes the journal and finishes instead of publishing its
+      // durable pending/reload recovery state.
+      if (record.role === 'household' && edge.profileResetHoldReplies)
+        return route.abort('connectionfailed');
       const household =
         record.role === 'household' ? record : edge.profileResetRecords.get(record.household);
       return json(route, 200, rendered(record, household?.state ?? record.state), headers(library));

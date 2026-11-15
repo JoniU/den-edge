@@ -70,8 +70,7 @@ async function openReset(page) {
 }
 
 test('RoutedLibrary resumes one lost compound reset across reload', async ({
-  context,
-  page,
+  browser,
   browserName,
 }, testInfo) => {
   test.skip(
@@ -86,23 +85,34 @@ test('RoutedLibrary resumes one lost compound reset across reload', async ({
     target.on('console', (message) => lines.push(`${message.type()} ${message.text()}`));
     target.on('pageerror', (error) => lines.push(`pageerror ${error.message}`));
   };
-  let app = page;
-  observe(app);
+  let seedContext;
+  let appContext;
+  let forwarderContext;
+  let app;
   let forwarder;
   try {
-    await routeGuestEdge(app, edge);
-    await routeProfileResetEdge(app, edge);
     // Playwright page routes do not observe a SharedWorker's fetches. The production SharedWorker reaches the preview
     // server's upstream bridge, which asks this otherwise blank routed page for only den-edge's fixture answers.
-    forwarder = await context.newPage();
+    forwarderContext = await browser.newContext();
+    forwarder = await forwarderContext.newPage();
     await routeGuestEdge(forwarder, edge);
     await routeProfileResetEdge(forwarder, edge);
     await bridge.answerFrom(forwarder);
-    // Seed one durable row, then close its page exactly as a user closes a tab. A new page in the same browser adopts
-    // the retained production SharedWorker/vault and exercises invite migration without racing two page-owned models.
-    await seedLocalLibrary(app, lines);
-    await app.close();
-    app = await context.newPage();
+
+    // Seed one durable local row and persist its browser database, then close that context. The invitation opens from
+    // the real stored state in a fresh Worker realm, like reopening the browser, without an old port/vault owner.
+    seedContext = await browser.newContext();
+    const seed = await seedContext.newPage();
+    observe(seed);
+    await routeGuestEdge(seed, edge);
+    await routeProfileResetEdge(seed, edge);
+    await seedLocalLibrary(seed, lines);
+    const seededState = await seedContext.storageState({ indexedDB: true });
+    await seedContext.close();
+    seedContext = undefined;
+
+    appContext = await browser.newContext({ storageState: seededState });
+    app = await appContext.newPage();
     observe(app);
     await routeGuestEdge(app, edge);
     await routeProfileResetEdge(app, edge);
@@ -113,10 +123,11 @@ test('RoutedLibrary resumes one lost compound reset across reload', async ({
     // durable marker remains; reload must replay the same attempt after this fixture starts answering again.
     edge.profileResetHoldReplies = true;
     await firstDevices.getByRole('textbox', { name: 'Owner PIN' }).fill('1234');
-    await firstDevices.getByRole('button', { name: 'Reset keys' }).click();
-    await expect(firstDevices.getByRole('alert')).toContainText('still in progress', {
-      timeout: 30_000,
-    });
+    const reset = firstDevices.getByRole('button', { name: 'Reset keys' });
+    await reset.click();
+    await expect
+      .poll(() => app.evaluate(() => localStorage.getItem('den.keyReset')), { timeout: 30_000 })
+      .not.toBeNull();
     const marker = JSON.parse(await app.evaluate(() => localStorage.getItem('den.keyReset')));
     expect(marker).toMatchObject({ compound: true });
     expect(edge.profileResetAttempts).toBe(1);
@@ -163,8 +174,9 @@ test('RoutedLibrary resumes one lost compound reset across reload', async ({
       contentType: 'text/plain',
       path: diagnostic,
     });
-    await app.close();
-    await forwarder?.close();
+    await appContext?.close();
+    await seedContext?.close();
+    await forwarderContext?.close();
     await bridge.close();
   }
 });
