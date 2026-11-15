@@ -94,6 +94,13 @@
     {title}
     {content}
     scout={{ install: scoutInstall, base: '/scout/config' }}
+    releaseAuthority={{
+      profile: 'fixture:owner',
+      library: 'fixture-library',
+      household: 'fixture-household',
+      addon: scoutInstall,
+      source: '/scout/config',
+    }}
     {remux}
     {playback}
     {interfaceLanguage}

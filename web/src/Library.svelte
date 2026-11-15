@@ -3310,9 +3310,17 @@
   {@const after = following}
   <!-- A session names one source: a shared scout goes with the shared subtitles, a library's with its own. -->
   {@const guestSource = !!sharedInstallOf(scout.install)}
+  {@const releaseAuthority = {
+    profile: `${session.identity.kind}:${session.identity.id}`,
+    library: session.identity.libraryKey,
+    household: session.household.identity.libraryKey,
+    addon: scout.install,
+    source: scout.base,
+  }}
   <!-- Keyed by the title alone: the next episode plays in the same player (`playEpisode`), so the video in fullscreen
-       — and a Chromecast it is cast to — carries on into it. -->
-  {#key titleKey(target.title)}
+       — and a Chromecast it is cast to — carries on into it. Authority replacement deliberately remounts it: an
+       old source session and its late lookups cannot survive a profile/library/household/add-on change. -->
+  {#key `${titleKey(target.title)}:${JSON.stringify(releaseAuthority)}`}
     <PlayerScreen.current
       title={target.title}
       season={target.season}
@@ -3320,6 +3328,7 @@
       filename={target.filename}
       content={session.content}
       {scout}
+      {releaseAuthority}
       {routes}
       remux={remux ?? '/remux'}
       playback={scout.playback}

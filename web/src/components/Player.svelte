@@ -111,7 +111,7 @@
     waitAt,
     type Delivery,
   } from '../lib/switchPolicy';
-  import { recallReleases, rememberReleases } from '../lib/releaseMemory';
+  import { ScopedReleaseMemory, type ReleaseAuthority } from '../lib/releaseMemory';
   import type { Addon } from '../lib/scout';
   import type { ContentServiceClientPort } from '../lib/contentServiceClient';
   import type { SamsungAvplayAdapter } from '../tv/player/avplay';
@@ -128,8 +128,8 @@
     type SkipKind,
     type SkipSegment,
   } from '../lib/skipdb';
-  import { continuationPrefetch, shouldWarmNext } from '../lib/binge';
-  import { fetchSourceList, prepareSource } from '../lib/titleSources';
+  import { bingeGroupFor, BoundedLookup, continuationPrefetch, shouldWarmNext } from '../lib/binge';
+  import { fetchSourceList, prepareSource, type SourceListResult } from '../lib/titleSources';
   import type { Routes } from '../lib/routes';
   import { titleAllowed } from '../lib/playGuard';
   import { lanReachable, privateLanRemuxPlaylist } from '../lib/localNetwork';
@@ -166,6 +166,7 @@
     filename,
     content,
     scout,
+    releaseAuthority,
     routes = {},
     remux,
     playback,
@@ -195,6 +196,8 @@
     filename?: string;
     content: ContentServiceClientPort;
     scout: Addon;
+    /** Every authority under which Scout's opaque binge group is meaningful. */
+    releaseAuthority: ReleaseAuthority;
     /** Live service routes, used to validate the next episode's same-origin Scout play ticket. */
     routes?: Routes;
     /** Where den-remux answers (`findRemux`): '' for this origin, else the tailnet's address. */
@@ -527,14 +530,23 @@
   let askedMaxBitrate: number | undefined;
   /** What this page's own video reports to den-remux (`watchPlayback`); stopped before hls.js is destroyed. */
   let watcher: Watcher | undefined;
-  /** This title's (or episode's) releases as this tab remembers them across a reload (`releaseMemory`). */
-  let memoryKey = untrack(() => `${title.type}:${title.id}:${season ?? ''}:${episode ?? ''}`);
-  const recalled = recallReleases(memoryKey);
+  const releaseTitle = untrack(() => `${title.type}:${title.id}`);
+  const releaseMemory = ScopedReleaseMemory.open(untrack(() => releaseAuthority));
+  /** A monotonic coordinate fence for source-list and retained-memory completions. */
+  let episodeGeneration = 0;
+  let manualChoiceGeneration = 0;
+  /** The deliberate season-pack choice, never a raw filename outside this mounted player's memory. */
+  let continuityGroup: string | undefined;
+  const initialSeason = untrack(() => season);
+  let memoryReady = releaseMemory.then((memory) => {
+    if (ended || episodeGeneration !== 0) return;
+    continuityGroup = memory.recall(releaseTitle, initialSeason)?.group;
+  });
   /**
    * The release the viewer chose — from the title's sources, or the picker here — rather than den-remux's own pick.
    * Nothing moves playback off it on its own: where it can't keep up, the viewer is told and offered another.
    */
-  let chosenRelease: string | undefined = untrack(() => filename) ?? recalled.chosen;
+  let chosenRelease: string | undefined = untrack(() => filename);
   let session = $state<Session | null>(null);
   /** Holds a direct Cast handoff until its selected external subtitle has its receiver URL. */
   let castSubtitlePreparing = $state(false);
@@ -612,6 +624,8 @@
   let countdown: ReturnType<typeof setInterval> | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
   const RECEIPT_PREPARE_MS = 3_000;
+  /** A retained choice may add a short exact-group lookup before the ordinary session; it may never hold recovery. */
+  const CONTINUITY_LOOKUP_MS = 3_000;
 
   function beforeAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
     if (signal.aborted) return Promise.reject(signal.reason);
@@ -632,6 +646,7 @@
   }
   /** The one session POST this player still wants. A newer attempt or close aborts all of its recursive retries. */
   let startingSession: AbortController | undefined;
+  let sessionStartGeneration = 0;
   let clientFailureGeneration = 0;
   let ended = false;
   /** The episode playing, which the props name ahead of it once an advance asks for the next (`playEpisode`). */
@@ -682,16 +697,88 @@
   function discoverReleases(can: Playable) {
     if (!imdb || releaseListing === 'loading' || releaseListing === 'ready') return;
     releaseListing = 'loading';
-    const listing = memoryKey;
+    const listing = episodeGeneration;
     void listReleases({ imdb, season, episode, scout: scout.install }, undefined, route, {
       videoCodecs: videoCodecsOf(can),
       playable: can,
     }).then((list) => {
       // An episode advanced from meanwhile lists its own.
-      if (memoryKey !== listing) return;
+      if (episodeGeneration !== listing) return;
       releases = list ?? [];
       releaseListing = list === null ? 'failed' : 'ready';
     });
+  }
+
+  /** At most the playing and next coordinate's Scout answer. Failed warms are evicted, so foreground playback gets
+   * its ordinary retry instead of inheriting a background outage. Consumers still fence every completion. */
+  const sourceLists = new BoundedLookup<SourceListResult>(2, (answer) => !!answer.sources);
+  const sourceCoordinate = (at: Episode): string => `${at.season ?? ''}:${at.episode ?? ''}`;
+  function sourceListFor(at: Episode): Promise<SourceListResult> {
+    const key = sourceCoordinate(at);
+    return sourceLists.get(key, () => fetchSourceList(scout, imdb!, routes, at.season, at.episode));
+  }
+
+  function forgetContinuity() {
+    manualChoiceGeneration += 1;
+    continuityGroup = undefined;
+    void releaseMemory.then((memory) => memory.forget(releaseTitle));
+  }
+
+  /** Resolve a deliberate filename to Scout's stable group. A failed/partial lookup invents no continuity; a late
+   * completion cannot restore a choice after another manual pick, episode replacement, or player close. */
+  function rememberContinuityChoice(filename: string) {
+    if (title.type !== 'tv' || playingEpisode.season === undefined || !imdb) return;
+    const choice = ++manualChoiceGeneration;
+    const generation = episodeGeneration;
+    const at = { ...playingEpisode };
+    continuityGroup = undefined;
+    void releaseMemory.then((memory) => memory.forget(releaseTitle));
+    void sourceListFor(at).then((answer) => {
+      if (
+        ended ||
+        generation !== episodeGeneration ||
+        choice !== manualChoiceGeneration ||
+        chosenRelease !== filename
+      )
+        return;
+      const group = bingeGroupFor(answer.sources ?? [], filename);
+      if (!group || at.season === undefined) return;
+      continuityGroup = group;
+      void releaseMemory.then((memory) =>
+        memory.remember(releaseTitle, { season: at.season!, group }),
+      );
+    });
+  }
+
+  /** The only automatic foreground selection: an exact non-empty group in the same season. Missing groups and
+   * lookup failures fall through to the normal ranked session request with no filename asserted. */
+  async function continuityPick(
+    at: Episode,
+    generation: number,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    await memoryReady;
+    const group = continuityGroup;
+    if (!group || at.season === undefined || signal.aborted) return undefined;
+    const choice = manualChoiceGeneration;
+    let answer: SourceListResult;
+    try {
+      const lookupSignal = AbortSignal.any([signal, AbortSignal.timeout(CONTINUITY_LOOKUP_MS)]);
+      answer = await beforeAbort(sourceListFor(at), lookupSignal);
+    } catch {
+      return undefined;
+    }
+    if (
+      signal.aborted ||
+      ended ||
+      generation !== sessionStartGeneration ||
+      at.season !== playingEpisode.season ||
+      at.episode !== playingEpisode.episode ||
+      choice !== manualChoiceGeneration ||
+      group !== continuityGroup
+    )
+      return undefined;
+    return continuationPrefetch(answer.sources ?? [], group, at.season, at.season)?.filename;
   }
   /** Said when den-remux opened another release than the one picked; dismissed by the viewer. */
   let swapped = $state<string | null>(null);
@@ -739,9 +826,11 @@
   const AUTOPLAY_GRACE_MS = 1_000;
   /**
    * Releases of this title playback left — a switch moved away from it (`switchAway`), or a decoder refused it — which
-   * no automatic pick lands on again this visit, a reload included. The viewer may still pick one from the list.
+   * no automatic pick lands on again while this player remains mounted. The viewer may still pick one from the list.
    */
-  let excluded: string[] = recalled.left;
+  // Decoder refusals apply only to this mounted visit. Retaining them would persist raw filenames and let a changed
+  // add-on list suppress a release after reload.
+  let excluded: string[] = [];
   // $state: a notice of a switch under way stays up until it lands, and only then starts to fade.
   let switching = $state(false);
   /**
@@ -814,15 +903,9 @@
     }
   }
 
-  /** Keep `chosenRelease` and `excluded` for a reload of this same visit. */
-  function keepReleases() {
-    rememberReleases(memoryKey, { chosen: chosenRelease, left: excluded });
-  }
-
   /** Leave `filename` for good this visit: no automatic pick lands on it again. */
   function leave(filename: string) {
     if (!excluded.includes(filename)) excluded = [...excluded, filename];
-    keepReleases();
   }
   /**
    * The session `broke` is already judging, and whether a decoder refused it. A video's `error` and a fatal hls.js
@@ -1124,6 +1207,13 @@
     retryNotice: string | null = null,
     compatibleSubtitles = true,
   ): Promise<boolean | Failure> {
+    // Own the whole start, including external-id, release-continuity, capability and link lookups. Previously an
+    // older call could reach the session POST after a newer manual choice and abort the newer one there.
+    const generation = ++sessionStartGeneration;
+    startingSession?.abort(new DOMException('superseded session start', 'AbortError'));
+    const attempt = new AbortController();
+    startingSession = attempt;
+    const requestedEpisode = { ...playingEpisode };
     const replacingSubtitleLanguage = replacing
       ? selectedSubtitle(replacing, subtitleChoice)?.language
       : undefined;
@@ -1153,7 +1243,10 @@
     // Each wait below may outlast the player: once it is closed, nothing more is asked for, and no session started.
     if (!imdb) {
       const answer = await content
-        .query({ kind: 'title.external-id', title: { type: title.type, id: title.id } })
+        .query(
+          { kind: 'title.external-id', title: { type: title.type, id: title.id } },
+          attempt.signal,
+        )
         .catch(() => null);
       const found =
         answer?.imdbId.state === 'ready'
@@ -1161,13 +1254,21 @@
           : answer?.imdbId.state === 'absent'
             ? null
             : undefined;
-      if (ended) return false;
+      if (attempt.signal.aborted || ended) return false;
       if (!found) {
         failure = found === null ? 'imdb' : 'unreachable';
         return false;
       }
       imdb = found;
     }
+    if (!pick && !replacing && title.type === 'tv') {
+      const continued = await continuityPick(requestedEpisode, generation, attempt.signal);
+      if (continued) {
+        chosenRelease = continued;
+        pick = { filename: continued };
+      }
+    }
+    if (attempt.signal.aborted || ended) return false;
     const { audio, subtitleLanguages } = wantedLanguages(
       {
         audio: audioLanguage,
@@ -1192,7 +1293,7 @@
             subtitleLanguages.map((language) => ({ language })),
           ) !== null));
     const claimed = (decodes ??= await playable());
-    if (ended) return false;
+    if (attempt.signal.aborted || ended) return false;
     // What this browser hasn't disproved. After a refusal it asks as something that takes no HEVC, no HDR and no
     // E-AC-3, so den-remux copies another release this browser does decode — never converting one mid-film.
     const can = castMode
@@ -1211,7 +1312,7 @@
       (/^https?:/.test(route)
         ? await linkLimit(route)
         : (publicMaxBitrate = relayLimit(route, publicMaxBitrate)));
-    if (ended) return false;
+    if (attempt.signal.aborted || ended) return false;
     // Not the very start, nor the credits. A resume the library holds as a fraction alone can't be named before the
     // video's length is known: it is sought to once the video has loaded, as before.
     const from = startAt ?? resume;
@@ -1256,9 +1357,6 @@
         : {}),
     };
     const on = route;
-    startingSession?.abort(new DOMException('superseded session start', 'AbortError'));
-    const attempt = new AbortController();
-    startingSession = attempt;
     const diagnosticGeneration = ++clientFailureGeneration;
     replaceClientFailureGeneration('session', diagnosticGeneration);
     const {
@@ -1468,7 +1566,6 @@
       // pick while there is another to make, so the start is asked for again with none left out.
       if ((result.failure === 'none' || result.failure === 'noCopy') && excluded.length) {
         excluded = [];
-        keepReleases();
         return begin(
           pick,
           extra,
@@ -1563,6 +1660,8 @@
     subtitleSelectionGeneration += 1;
     subtitleLoadFailure = null;
     session = result;
+    if (chosenRelease === result.release.filename && !continuityGroup)
+      rememberContinuityChoice(result.release.filename);
     if (webTransport && airPlayActive) {
       clearAirPlayProgressWatch();
       airPlayDelivery = result.external ? 'direct' : 'remux';
@@ -1861,7 +1960,7 @@
     if (!current) return;
     slowPick = null;
     chosenRelease = undefined;
-    keepReleases();
+    forgetContinuity();
     const rate = hls ? meter.rate()?.bitsPerSecond : undefined;
     void switchAway('delivery', rate).then((moved) => gaveUp(current, moved));
   }
@@ -3518,7 +3617,10 @@
     const moved = judging.decode && !picked ? await switchAway('decode') : false;
     if (judging.decode) {
       // No automatic pick lands on it again this visit; and a pick of the viewer's it disproved is theirs no more.
-      if (picked) chosenRelease = undefined;
+      if (picked) {
+        chosenRelease = undefined;
+        forgetContinuity();
+      }
       leave(current.release.filename);
     }
     if (moved === true) return;
@@ -4291,13 +4393,16 @@
     warmedNext = true;
     const playingFilename = session.release.filename;
     const from = { ...playingEpisode };
-    void Promise.all([
-      fetchSourceList(scout, imdb, routes, from.season, from.episode),
-      fetchSourceList(scout, imdb, routes, to.season, to.episode),
-    ]).then(async ([current, upcoming]) => {
-      const playingBingeGroup = current.sources?.find(
-        (source) => source.filename === playingFilename,
-      )?.bingeGroup;
+    const generation = episodeGeneration;
+    void Promise.all([sourceListFor(from), sourceListFor(to)]).then(async ([current, upcoming]) => {
+      if (ended || generation !== episodeGeneration) return;
+      const playingBingeGroup = bingeGroupFor(current.sources ?? [], playingFilename);
+      if (playingBingeGroup && chosenRelease === playingFilename && from.season !== undefined) {
+        continuityGroup = playingBingeGroup;
+        void releaseMemory.then((memory) =>
+          memory.remember(releaseTitle, { season: from.season!, group: playingBingeGroup }),
+        );
+      }
       const continuity = continuationPrefetch(
         upcoming.sources ?? [],
         playingBingeGroup,
@@ -4311,6 +4416,7 @@
         return;
       }
       const prepared = await prepareSource(continuity.url, true, undefined, true);
+      if (ended || generation !== episodeGeneration) return;
       console.info(
         `[Den binge] ${JSON.stringify({ event: 'next-prefetch', outcome: prepared.state, season: to.season, episode: to.episode, continuity: 'binge_group', listedCached: continuity.cached })}`,
       );
@@ -4578,7 +4684,7 @@
     degraded = false;
     excluded = excluded.filter((one) => one !== filename);
     chosenRelease = filename;
-    keepReleases();
+    rememberContinuityChoice(filename);
     switchCount += 1;
     lastSwitchReason = 'user';
     const pending = showTransition('Switching stream…');
@@ -4931,6 +5037,12 @@
    * itself starts over as a new player's would: its own progress, reports, release, skip segments and up-next.
    */
   function playEpisode(at: Episode) {
+    const previous = playingEpisode;
+    const generation = ++episodeGeneration;
+    manualChoiceGeneration += 1;
+    sessionStartGeneration += 1;
+    startingSession?.abort(new DOMException('episode replaced', 'AbortError'));
+    startingSession = undefined;
     // The outgoing episode's own last word, while its session and position are still here.
     report();
     stay();
@@ -4940,10 +5052,16 @@
     sendReports(watcher?.stats());
     playingEpisode = at;
     progress = reporterFor(at);
-    memoryKey = `${title.type}:${title.id}:${at.season ?? ''}:${at.episode ?? ''}`;
-    const remembered = recallReleases(memoryKey);
-    chosenRelease = filename ?? remembered.chosen;
-    excluded = remembered.left;
+    // A group is a season-pack identity. Same-season advance keeps it; crossing a season asks normally unless this
+    // exact season has its own retained deliberate choice.
+    const carriedGroup = at.season === previous.season ? continuityGroup : undefined;
+    continuityGroup = carriedGroup;
+    memoryReady = releaseMemory.then((memory) => {
+      if (ended || generation !== episodeGeneration) return;
+      continuityGroup = carriedGroup ?? memory.recall(releaseTitle, at.season)?.group;
+    });
+    chosenRelease = filename;
+    excluded = [];
     releases = [];
     releaseListing = 'idle';
     swapped = autoSwitch = struggling = slowPick = unchanged = null;
