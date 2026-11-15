@@ -161,7 +161,11 @@ if (process.argv.includes('--capture')) {
   // Owner-only Kid creation (#940) adds 2,128 gzip bytes to startup on matched base/head builds after placing the
   // complete form in a new lazy chunk. Admission, durable recovery and the shared Worker task contract stay eager so
   // every browser/TV host observes one authority before the form loads. AGENTS.md records the full consolidation.
-  if (initialDelta > Math.min(9728, Math.floor(baseline.initialGzip * 0.04955)))
+  // Authority-scoped series-release recall then adds 59 gzip bytes at startup on matched current-main/head builds
+  // (206,114 -> 206,173): the compact authority tuple and Player remount key which prevent replaced authority from
+  // publishing delayed recall. The digest, codec and source lookup remain lazy. Raise both caps to the next 128-byte
+  // boundary, retaining 79 bytes on this build.
+  if (initialDelta > Math.min(9856, Math.floor(baseline.initialGzip * 0.0502)))
     throw new Error('Browser initial JS/CSS budget exceeded');
   // Complete UI translations are opt-in chunks: neither is fetched on the higher-priority English path. Budget
   // their compressed size separately so adding copy can never disguise growth in application code, while the
@@ -357,13 +361,12 @@ if (process.argv.includes('--capture')) {
   // Optional title-facts recovery then adds 1,607 bytes on matched a819734f/head builds, split between the existing
   // lazy Detail and content-service Worker boundaries. Another split adds a request on the failure path or Worker
   // startup and cannot reduce the complete graph. Allow the smallest 128-byte boundary, retaining 112 bytes.
-  // Authority-scoped series-release recall adds 1,170 gzip bytes to the complete non-translation graph on matched
-  // current-main/head builds (106,768 -> 107,938), 1,131 in the existing lazy Player chunk and 61 at startup. The
-  // compact authority/remount fence must stay eager so replaced authority cannot publish delayed recall; the digest,
-  // codec and bounded source lookup already live with Player. Another boundary cannot reduce this complete-graph
-  // total and would add a request before the first session lookup. Allow the next 128-byte boundary, retaining 94.
   // Owner-only Kid creation (#940) adds 4,433 gzip bytes to the complete non-translation graph; 2,059 bytes are the
   // separately lazy form, while the remaining admission/recovery authority is shared by the startup page and Worker.
   // The final matched current-main/head measurement and smallest combined boundary are recorded in AGENTS.md.
-  if (coreTotalDelta > 111232) throw new Error('Browser total JS/CSS budget exceeded');
+  // Authority-scoped series-release recall then adds 1,218 gzip bytes to the complete non-translation graph on
+  // matched current-main/head builds (111,201 -> 112,419), 1,133 in the existing lazy Player chunk and 52 in the
+  // eager app chunk. Another boundary cannot reduce this complete-graph total and would add a request before the
+  // first session lookup. Allow the next 128-byte boundary, retaining 93 bytes.
+  if (coreTotalDelta > 112512) throw new Error('Browser total JS/CSS budget exceeded');
 }

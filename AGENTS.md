@@ -165,17 +165,18 @@ everything the committed code imports is committed too.
   either the Worker admission or the existing Remux/playback code across a lazy boundary cannot reduce this total
   and would add an authorization- or playback-critical request. The ceiling therefore advances one 128-byte step
   from current main's 101,632 to 101,760, retaining 93 bytes on the combined build.
-  After merging current main through `c047e499`, authority-scoped series-release recall was measured on exact matched
-  production builds: startup moves 203,986 → 204,046 gzip bytes, the complete graph 879,947 → 881,117,
-  translations stay 47,389, and the complete non-translation graph moves 106,768 → 107,938. Of the 1,170-byte
-  complete-graph increase, 1,131 is in the existing lazy Player chunk (48,828 → 49,959) and 61 is in the
-  always-loaded app chunk (108,880 → 108,941); shared-chunk compression offsets 22 bytes. Consolidating the five
+  After merging current main through `a6b5765a`, authority-scoped series-release recall was measured on exact matched
+  production builds: startup moves 206,114 → 206,173 gzip bytes, the complete graph 885,013 → 886,231,
+  translations stay 48,022, and the complete non-translation graph moves 111,201 → 112,419. Of the 1,218-byte
+  complete-graph increase, 1,133 is in the existing lazy Player chunk (48,830 → 49,963) and 52 is in the
+  always-loaded app chunk (110,655 → 110,707); shared-chunk compression adds the remaining 33 bytes. Consolidating the five
   authority fields into a tuple removes their repeated eager property names. The authority/remount coordinate must
   remain in always-loaded Library so a replaced profile, library, household or source cannot publish delayed recall;
   the digest, retained-memory codec and bounded source lookup already live with lazy Player. A further split cannot
   reduce the isolation gate's complete-graph accounting and would add a request before the first session lookup. The
-  current startup ceiling retains 158 bytes without a change; the complete non-translation ceiling advances to the
-  next 128-byte boundary, 108,032, retaining 94 bytes; the translation ceiling is unchanged.
+  startup ceiling advances to the next 128-byte boundary, 9,856 bytes above baseline, retaining 79 bytes; the
+  complete non-translation ceiling advances to 112,512, also the next 128-byte boundary, retaining 93 bytes; the
+  translation ceiling is unchanged.
   Bounding the shared binge console records then moves the matched production build's startup 203,797 → 203,812
   gzip bytes and complete non-translation graph 101,667 → 101,700, retaining 7 and 60 bytes respectively without
   another budget change;
