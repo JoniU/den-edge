@@ -107,13 +107,15 @@ pub async fn handle(State(state): State<Arc<AppState>>, mut req: Request) -> Res
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
     let library_request = path.starts_with("/lib/");
-    let reset_path = exclusive_operation_path(&path);
     let den_disabled = (den_playback_path(&path)
         || matches!(path.as_str(), "/grant/den-install" | "/grant/den-configure"))
         && !state.den_playback_enabled;
-    let route_disabled = reset_path && !state.profile_reset_enabled || den_disabled || path == "/den/migrate";
+    let reset_source_disabled =
+        !state.profile_reset_enabled && path.starts_with("/lib/") && path.ends_with("/exclusive-operation/source");
+    let route_disabled = reset_source_disabled || den_disabled || path == "/den/migrate";
     // A disabled feature is not a route. In particular, do not disclose its method/body contract in metrics or
-    // let the generic preflight answer advertise its private candidate-token header.
+    // let the generic preflight answer advertise its private candidate-token header. Exclusive-operation is
+    // different: only new acquisition is disabled, while authenticated durable-attempt continuation remains a route.
     let route = if route_disabled { "other" } else { route_label(&path) };
     let origin = allowed_origin(&state, &req);
     let bulk = !is_control(route, &method);
@@ -796,13 +798,6 @@ async fn dispatch(
             _ => bare_json(StatusCode::NOT_FOUND, &error("not_found")),
         },
     }
-}
-
-/// A key reset's exclusive-operation route: behind `profile_reset_enabled`, not the migration's switch.
-fn exclusive_operation_path(path: &str) -> bool {
-    path.strip_prefix("/lib/").and_then(|rest| rest.split_once('/')).is_some_and(|(_, action)| {
-        action == "exclusive-operation" || action.starts_with("exclusive-operation/")
-    })
 }
 
 /// Which half of den-edge a request's `Host` names (oxyc/den#15). The web app's public name and the device API's

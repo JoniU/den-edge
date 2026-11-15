@@ -1697,26 +1697,47 @@ async fn the_retired_migration_surface_stays_absent_while_the_reset_keeps_its_ow
     for (method, path) in &retired {
         assert_eq!(call(&h, method, path, HOUSEHOLD, "5", None, &[]).await, absent);
     }
+    let fresh_source = source_of(&h, HOUSEHOLD).await;
     acquire_all(&h, ATTEMPT).await;
 
-    // Reset off: both the retired migration surface and reset routes are absent, including the retirement a
-    // `DELETE` with the exclusive headers would otherwise be.
+    // Reset off: the retired migration surface and new-reset capability stay absent. Authenticated continuation of
+    // the attempt already on disk remains available, so changing an operator flag cannot strand its durable lock.
     let m = Harness::in_dir_with(h.dir.clone(), |_| {});
     for (method, path) in &retired {
         assert_eq!(call(&m, method, path, HOUSEHOLD, "5", None, &[]).await, absent);
     }
     let reset_source = format!("/lib/{HOUSEHOLD}/exclusive-operation/source");
     assert_eq!(call(&m, "GET", &reset_source, HOUSEHOLD, "5", None, &[]).await, absent);
-    assert_eq!(lookup(&m, HOUSEHOLD, ATTEMPT).await, absent);
+    assert_eq!(lookup(&m, HOUSEHOLD, ATTEMPT).await.1["state"], "open");
+    assert_eq!(
+        post_lock(&m, HOUSEHOLD, household_request(OTHER, fresh_source)).await,
+        absent,
+        "a genuinely new reset remains refused"
+    );
     // Switching the routes off never unlocks a library: the lock is in the store, not in the switch.
     assert_in_progress(&write(&m, KID1, "during").await);
-    assert_in_progress(&retire(&m, KID1, ATTEMPT, NEW_KID1).await);
+    assert_eq!(
+        retire(&m, KID1, ATTEMPT, NEW_KID1).await,
+        (StatusCode::CONFLICT, json!({ "error": "successor_not_committed" }))
+    );
+    assert_eq!(abort(&m, ATTEMPT).await.0, StatusCode::OK);
+    assert_all_writable(&m).await;
 
-    // And the reset resumes once its switch is back.
-    let back = restart(&h);
-    assert_eq!(lookup(&back, HOUSEHOLD, ATTEMPT).await.1["state"], "open");
-    assert_eq!(abort(&back, ATTEMPT).await.0, StatusCode::OK);
-    assert_all_writable(&back).await;
+    // A committed attempt drains through every declared retirement while new admission remains off.
+    let committed = new_harness();
+    build_old_set(&committed).await;
+    acquire_all(&committed, ATTEMPT).await;
+    build_successors(&committed).await;
+    assert_eq!(commit(&committed, ATTEMPT, NEW_HOUSEHOLD).await.0, StatusCode::OK);
+    let drain = Harness::in_dir_with(committed.dir.clone(), |_| {});
+    for (old, successor) in old_members() {
+        assert_eq!(retire(&drain, old, ATTEMPT, successor).await.0, StatusCode::OK, "{old}");
+    }
+    assert_eq!(
+        retire(&drain, HOUSEHOLD, ATTEMPT, NEW_HOUSEHOLD).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(lookup(&drain, HOUSEHOLD, ATTEMPT).await.1["state"], "retired");
 }
 
 #[test]

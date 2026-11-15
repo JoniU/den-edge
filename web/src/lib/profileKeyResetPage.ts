@@ -66,6 +66,9 @@ export type CompoundResetResult =
   /** The worker could not be asked. The marker stays. */
   | 'blocked';
 
+/** What the Settings initiation surface can present in addition to the durable reset outcomes. */
+export type CompoundResetStartResult = CompoundResetResult | 'unauthorized' | 'failed';
+
 export class CompoundResetPage<Destination> {
   #running: Promise<CompoundResetResult> | undefined;
 

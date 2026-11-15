@@ -431,6 +431,17 @@ describe('LibraryLog', () => {
     }
   });
 
+  it('refuses a legacy move when wire 5 is committed without a readable directory', async () => {
+    const device = '0123456789abcdef';
+    const server = await edge();
+    const log = (await LibraryLog.open(LIBRARY_KEY, server.fetchImpl, undefined, null, 5))!;
+    (log as unknown as { wireMin: number }).wireMin = 5;
+
+    expect(log.profileTopologyPresent).toBe(false);
+    expect(await log.moving(device)).toEqual({ refused: 'profiles' });
+    expect(await log.moving(device, { replaceProfileDirectory: true })).toMatchObject({ rows: [] });
+  });
+
   describe('compound key reset primitives', () => {
     const device = '0123456789abcdef';
     const wired = <T extends LibraryLog>(log: T, wireMin: number): T => {
@@ -499,7 +510,7 @@ describe('LibraryLog', () => {
         (await LibraryLog.open(LIBRARY_KEY, server.fetchImpl, undefined, null, 5))!,
         5,
       );
-      const moving = await from.moving(device);
+      const moving = await from.moving(device, { replaceProfileDirectory: true });
       if ('refused' in moving) throw new Error('refused');
       await next.takeMoved(moving, from.memberProof);
 

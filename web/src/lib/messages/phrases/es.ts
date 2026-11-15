@@ -846,8 +846,28 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   Rename: 'Cambiar nombre',
   Reset: 'Reiniciar',
   'Reset key': 'Tecla de reinicio',
+  'Reset keys': 'Restablecer claves',
+  'Reset library keys…': 'Restablecer claves de biblioteca…',
   'Reset outcome unknown.': 'Restablecer resultado desconocido.',
+  'Reset every profile library key?': '¿Restablecer todas las claves de biblioteca de perfiles?',
   'Reset your library key?': '¿Restablecer la clave de tu biblioteca?',
+  'Rotating every profile library key…': 'Rotando todas las claves de biblioteca de perfiles…',
+  'That Owner PIN didn’t match.': 'Ese PIN de propietario no coincide.',
+  'Every profile and the household move to new keys together. Every other device must pair again; this browser keeps the household. Enter the Owner PIN to continue.':
+    'Todos los perfiles y el hogar pasan juntos a claves nuevas. Todos los demás dispositivos deben vincularse de nuevo; este navegador conserva el hogar. Ingrese el PIN del propietario para continuar.',
+  'Key reset isn’t available for this household right now. Nothing changed.':
+    'El restablecimiento de claves no está disponible para este hogar en este momento. Nada cambió.',
+  'Library key reset in progress.': 'Restablecimiento de claves de biblioteca en curso.',
+  'Keep this browser paired. Den keeps the old and new keys safely and can continue after a reload or interrupted connection.':
+    'Mantenga este navegador vinculado. Den conserva de forma segura las claves antiguas y nuevas y puede continuar después de recargar o de una conexión interrumpida.',
+  'Continue key reset': 'Continuar restablecimiento de claves',
+  'Continuing…': 'Continuando…',
+  'The key reset is still in progress. Keep this browser paired; Den will continue it here.':
+    'El restablecimiento de claves sigue en curso. Mantenga este navegador vinculado; Den continuará aquí.',
+  'Couldn’t start the key reset. Nothing changed. Check your connection and try again.':
+    'No se pudo iniciar el restablecimiento de claves. Nada cambió. Compruebe la conexión e inténtelo de nuevo.',
+  'To cut a device off, reset every profile library key together. Removing it from the list doesn’t: it still holds a key.':
+    'Para desconectar un dispositivo, restablezca juntas todas las claves de biblioteca de perfiles. Quitar el dispositivo de la lista no lo desconecta: todavía conserva una clave.',
   'Review what was found': 'Revisar lo encontrado',
   Revoke: 'Revocar',
   'Revoke access…': 'Revocar acceso…',

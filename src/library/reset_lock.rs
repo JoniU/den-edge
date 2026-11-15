@@ -9,7 +9,7 @@
 //! * `model` is the pure decision function the spec's `resetLockContract` vectors pin.
 //! * This module builds a world from what is stored, asks the model, and performs exactly the decided effect.
 //!
-//! Everything here is dormant behind `PROFILE_RESET_ENABLED`: with it off none of these routes exist, and a
+//! New-attempt admission is behind `PROFILE_RESET_ENABLED`; authenticated durable-attempt continuation remains, and a
 //! `DELETE` carrying the exclusive headers is an ordinary `DELETE`.
 
 pub(crate) mod model;
@@ -629,8 +629,8 @@ async fn typed<T: DeserializeOwned>(request: Request) -> R<T> {
     serde_json::from_value(value).map_err(|_| Box::new(bad_request()))
 }
 
-/// `/lib/{id}/exclusive-operation[...]`. The caller has checked the feature gate, the library's wire and, for a
-/// library that still has a database, its token.
+/// `/lib/{id}/exclusive-operation[...]`. The caller has checked the library's wire and, for a library that still
+/// has a database, its token. This handler separates new-start admission from durable-attempt continuation.
 pub(super) async fn handle(
     state: &AppState,
     id: &str,
@@ -645,6 +645,12 @@ pub(super) async fn handle(
         None => return not_found(),
     };
     let method = request.method().clone();
+    // Disabling new resets is an admission decision, not permission to strand a durable lock. Keep authenticated
+    // lookup/abort/successor settlement available, while the source probe remains the typed "new starts off"
+    // capability and `post` below refuses an unknown acquisition.
+    if !state.profile_reset_enabled && segments.as_slice() == ["source"] {
+        return not_found();
+    }
     match (segments.as_slice(), &method) {
         ([], &Method::POST) => post(state, id, token_hash, request).await,
         (["source"], &Method::GET) => source(state, id, token_hash).await,
@@ -848,6 +854,12 @@ async fn post(state: &AppState, id: &str, token_hash: [u8; 32], request: Request
             .await
         );
         return found.map_or_else(not_found, |found| json_reply(StatusCode::OK, &found));
+    }
+
+    // The gate only closes acquisition of a previously unknown reset. A recovery takeover for the durable record
+    // already on disk is still required to drain it, and an exact replay was returned above.
+    if !state.profile_reset_enabled && (acquire || current.is_none()) {
+        return not_found();
     }
 
     // The world the model decides over: this library, its household (a profile acquire) and, for a recovery that
@@ -1709,9 +1721,6 @@ pub async fn sweep_startup(state: Arc<AppState>) {
 /// A successor that already existed when the lock was acquired was not made by the reset, and an ended or retiring
 /// lock declares nothing to start; both are ordinary new libraries.
 pub(super) async fn declared_successor(state: &AppState, prover: &str, id: &str) -> bool {
-    if !state.profile_reset_enabled {
-        return false;
-    }
     match declares(state, prover, id).await {
         Ok(declared) => declared,
         Err(reason) => {

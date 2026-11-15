@@ -143,8 +143,8 @@ pub struct AppState {
     /// Web host names allowed to use only the synthetic, non-migrating profiles preview
     /// (env `PROFILES_PREVIEW_HOSTS`). Preview wins if a host is accidentally present in both lists.
     pub profiles_preview_hosts: Vec<String>,
-    /// Enables only the compound key reset's exclusive-operation routes (profiles-v1 §9.1)
-    /// (env `PROFILE_RESET_ENABLED`).
+    /// Enables admission of new compound key resets (profiles-v1 §9.1). Authenticated continuation of durable
+    /// attempts remains available while off so an operator rollback cannot strand locks (env `PROFILE_RESET_ENABLED`).
     pub profile_reset_enabled: bool,
     /// Batches one library may send in a burst, and how many a minute it earns back (env `LIBRARY_WRITE_BURST`,
     /// `LIBRARY_WRITE_PER_MINUTE`). A per-minute of 0 turns the budget off.

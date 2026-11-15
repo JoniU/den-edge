@@ -833,8 +833,28 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   Rename: 'Byt namn',
   Reset: 'Återställ',
   'Reset key': 'Återställ nyckel',
+  'Reset keys': 'Återställ nycklar',
+  'Reset library keys…': 'Återställ biblioteksnycklar…',
   'Reset outcome unknown.': 'Återställningsresultat okänt.',
+  'Reset every profile library key?': 'Återställa alla profilbiblioteksnycklar?',
   'Reset your library key?': 'Återställa din biblioteksnyckel?',
+  'Rotating every profile library key…': 'Roterar alla profilbiblioteksnycklar…',
+  'That Owner PIN didn’t match.': 'Ägarens PIN-kod stämde inte.',
+  'Every profile and the household move to new keys together. Every other device must pair again; this browser keeps the household. Enter the Owner PIN to continue.':
+    'Alla profiler och hushållet flyttas tillsammans till nya nycklar. Alla andra enheter måste parkopplas igen; den här webbläsaren behåller hushållet. Ange ägarens PIN-kod för att fortsätta.',
+  'Key reset isn’t available for this household right now. Nothing changed.':
+    'Nyckelåterställning är inte tillgänglig för det här hushållet just nu. Ingenting ändrades.',
+  'Library key reset in progress.': 'Återställning av biblioteksnycklar pågår.',
+  'Keep this browser paired. Den keeps the old and new keys safely and can continue after a reload or interrupted connection.':
+    'Håll den här webbläsaren parkopplad. Den förvarar de gamla och nya nycklarna säkert och kan fortsätta efter en omladdning eller avbruten anslutning.',
+  'Continue key reset': 'Fortsätt nyckelåterställningen',
+  'Continuing…': 'Fortsätter…',
+  'The key reset is still in progress. Keep this browser paired; Den will continue it here.':
+    'Nyckelåterställningen pågår fortfarande. Håll webbläsaren parkopplad; Den fortsätter här.',
+  'Couldn’t start the key reset. Nothing changed. Check your connection and try again.':
+    'Det gick inte att starta nyckelåterställningen. Ingenting ändrades. Kontrollera anslutningen och försök igen.',
+  'To cut a device off, reset every profile library key together. Removing it from the list doesn’t: it still holds a key.':
+    'För att koppla bort en enhet återställer du alla profilbiblioteksnycklar tillsammans. Att ta bort den från listan räcker inte: den har fortfarande en nyckel.',
   'Review what was found': 'Granska vad som hittades',
   Revoke: 'Återkalla',
   'Revoke access…': 'Återkalla åtkomst...',

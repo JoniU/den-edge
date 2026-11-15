@@ -78,7 +78,7 @@
     startupMark,
     watchStartupHandover,
   } from './lib/startupTiming';
-  import { CompoundResetPage } from './lib/profileKeyResetPage';
+  import { CompoundResetPage, type CompoundResetStartResult } from './lib/profileKeyResetPage';
   import {
     bornHouseholds,
     commitHousehold,
@@ -1278,6 +1278,32 @@
       session = destination.session;
     },
   });
+
+  async function startCompoundReset(pin: string): Promise<CompoundResetStartResult> {
+    const from = libraryIdentity;
+    const active = session;
+    if (resetInFlight || !from || !active.model || active.local) return 'unavailable';
+    resetInFlight = true;
+    try {
+      const existing = pendingReset;
+      if (existing?.compound) {
+        if (existing.from !== from) return 'blocked';
+        return await compoundReset.run(existing);
+      }
+      return await compoundReset.start(from, pin);
+    } catch (error) {
+      if (error instanceof LibraryServiceError && error.failure.code === 'unauthorized') {
+        // The worker checked the PIN before acquiring a remote lock. This is a definitive refusal, not an
+        // ambiguous lost response, so retire only the marker this start wrote and let the person try again.
+        if (pendingReset?.compound && pendingReset.from === from) publishReset(null);
+        return 'unauthorized';
+      }
+      console.warn('den: the profile key reset could not start', error);
+      return 'failed';
+    } finally {
+      resetInFlight = false;
+    }
+  }
   let compoundRetry: ReturnType<typeof setTimeout> | undefined;
   onDestroy(() => clearTimeout(compoundRetry));
 
@@ -1915,6 +1941,8 @@
                   }}
                   onjoin={!link && (session.local || ownHousehold) ? joinLibrary : undefined}
                   onresetkey={resetLibraryKey}
+                  oncompoundreset={startCompoundReset}
+                  compoundResetPending={pendingReset?.compound === true}
                   heldReset={pendingReset?.held === true}
                   onadoptheld={adoptHeldReset}
                 />

@@ -28,6 +28,10 @@
   const fixtureLibraryId = '50724b489a92805f23be6bba897393c7';
   const fixtureMemberToken = 'a17b6bb5b7e47d81e1fc40e34fe289274301987448de937c7ad2f566094fdf50';
   const fixtureQuery = new URLSearchParams(location.search);
+  const profileResetFixture =
+    fixtureQuery.has('profiles') ||
+    fixtureQuery.has('wire5-missing') ||
+    fixtureQuery.has('profile-reset-pending');
   const joinPresentationFixture = fixtureQuery.has('join-presentation');
   const replacesAuthority =
     fixtureQuery.has('authority-replacement') ||
@@ -96,7 +100,8 @@
   (globalThis as { fixtureRows?: () => Row[] }).fixtureRows = () => stored;
   const log = {
     readOnly: false,
-    wireMinimum: 4,
+    wireMinimum:
+      fixtureQuery.has('wire5-missing') || fixtureQuery.has('profile-reset-pending') ? 5 : 4,
     get profileTopologyPresent() {
       return new URLSearchParams(location.search).has('profiles');
     },
@@ -419,6 +424,11 @@
     linkKey: 'fixture',
   };
   const link = joinPresentationFixture ? null : linked;
+  const profileResetPins: string[] = [];
+  let compoundResetPending = $state(fixtureQuery.has('profile-reset-pending'));
+  (
+    globalThis as typeof globalThis & { fixtureProfileResetPins?: () => string[] }
+  ).fixtureProfileResetPins = () => [...profileResetPins];
 </script>
 
 <main style="padding:var(--bar-space) var(--gutter)">
@@ -431,5 +441,14 @@
       local={joinPresentationFixture}
       onjoin={joinPresentationFixture ? heldJoin : undefined}
       onresetkey={async () => null}
+      oncompoundreset={profileResetFixture
+        ? async (pin) => {
+            profileResetPins.push(pin);
+            const outcome = compoundResetPending || pin === '1234' ? 'complete' : 'unauthorized';
+            if (outcome === 'complete') compoundResetPending = false;
+            return outcome;
+          }
+        : undefined}
+      {compoundResetPending}
     />{/if}
 </main>

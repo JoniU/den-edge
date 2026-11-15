@@ -1693,7 +1693,9 @@ export class LibraryLogAuthority {
         libraryFormat: this.#log.wireMinimum,
         pendingChanges: this.#log.pendingActions,
         selfDeviceId: this.#clock.device,
-        ...(this.#log.profileTopologyPresent ? { profileTopology: true } : {}),
+        ...(this.#log.profileTopologyPresent || this.#log.wireMinimum >= 5
+          ? { profileTopology: true }
+          : {}),
       },
     };
   }
