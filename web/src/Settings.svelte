@@ -107,6 +107,10 @@
     );
   const joinPresentation = new LibraryJoinPresentationOwner();
   let authority = $state.raw(untrack(() => acquireAuthority(model, activityModel)));
+  let authorityGeneration = 0;
+  let retrying = $state(false);
+  let failure = $state<string | null>(null);
+  let saving = $state(false);
   // A retained Settings page can receive either a replacement household or a replacement Owner activity library.
   // Publish the complete replacement bundle before retiring every old lease, so tracker presentation and commands
   // can never fall back to the household control log or remain attached to the previous profile generation.
@@ -121,6 +125,10 @@
       return;
     const previous = authority;
     authority = untrack(() => acquireAuthority(replacementHousehold, replacementActivity));
+    authorityGeneration++;
+    retrying = false;
+    failure = null;
+    saving = false;
     releaseAuthority(previous);
   });
   onDestroy(() => {
@@ -152,9 +160,6 @@
       (__DEN_TV_LEGACY_JS_CORE__ || !!simkl) &&
       !loadError,
   );
-  let retrying = $state(false);
-  let failure = $state<string | null>(null);
-  let saving = $state(false);
   /** Tells Den's own plugins apart, so they're listed by name rather than by a LAN address. */
   let routes = $state.raw<Routes>({});
   /** Whether /routes has answered (or failed): until then an install on another of the deployment's names is unplaced. */
@@ -192,6 +197,7 @@
     profileTopology || profileTopologyBlocked || (connections?.diagnostics.libraryFormat ?? 0) >= 5,
   );
   async function run(action: () => Promise<unknown>, quiet = false): Promise<boolean> {
+    const generation = authorityGeneration;
     const restoreFocus =
       document.activeElement instanceof HTMLElement &&
       (__DEN_TV__ || keyboardInput() || document.activeElement.matches(':focus-visible'))
@@ -221,14 +227,15 @@
       return true;
     } catch (error) {
       console.warn('den: settings command failed', error);
-      if (!quiet) failure = 'Couldn’t save that. Check your connection and try again.';
+      if (!quiet && generation === authorityGeneration)
+        failure = 'Couldn’t save that. Check your connection and try again.';
       return false;
     } finally {
       // Commit the enabled controls and any preference publication in this task. If this waits for `tick`, a TV
       // remote can observe the newly enabled surface, move to its next control, and then have the continuation below
       // steal focus back to the setting that just saved.
       flushSync(() => {
-        if (!quiet) saving = false;
+        if (!quiet && generation === authorityGeneration) saving = false;
       });
       // Saving temporarily disables the settings surface. Some engines move focus to the document when the active
       // native control becomes disabled, which strands the next keyboard/remote press. Return keyboard users to that
@@ -340,6 +347,7 @@
 
   async function retryLoad() {
     if (retrying) return;
+    const generation = authorityGeneration;
     retrying = true;
     try {
       const current = authority;
@@ -353,7 +361,7 @@
     } catch {
       // The model snapshots keep the exact retryable failure and this surface stays available for another try.
     } finally {
-      retrying = false;
+      if (generation === authorityGeneration) retrying = false;
     }
   }
 
@@ -528,6 +536,7 @@
           {heldReset}
           {onadoptheld}
           apiKeys={connections!.apiKeys}
+          appleTVTrackerManagement={authority.activityModel === authority.model}
           simklConnected={!!simkl?.connected}
           {saveSimkl}
           heldRemovals={namedRemovals}

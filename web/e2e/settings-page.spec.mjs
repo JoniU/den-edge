@@ -427,6 +427,11 @@ test('profile Owner tracker state and mutations use activity authority, never th
   await page.goto(`${E2E_ORIGIN}/test/settings.html?profile-tracker-authority`);
 
   // The household has no tracker row. The connected presentation comes only from Owner's activity library.
+  await expect(page.getByRole('button', { name: /Trakt Unavailable/ })).toBeVisible();
+  await page.getByRole('button', { name: /Trakt Unavailable/ }).click();
+  await expect(page.getByRole('region', { name: 'Trakt' })).toContainText(
+    'Den does not send watch history to Trakt from Web or Apple TV.',
+  );
   const simkl = page.getByRole('button', { name: /SIMKL Connected/ });
   await expect(simkl).toBeVisible();
   await simkl.click();
@@ -440,15 +445,34 @@ test('profile Owner tracker state and mutations use activity authority, never th
   // Replace only the active Owner activity library while that old mutation is held. Its tracker lease and open
   // surface retire synchronously; releasing the old answer cannot republish its state or touch the household log.
   await page.evaluate(() => globalThis.fixtureTrackerAuthority.replace());
-  await expect(page.getByRole('button', { name: /SIMKL Not connected/ })).toBeVisible();
+  const replacementSimkl = page.getByRole('button', { name: /SIMKL 1 removal held/ });
+  await expect(replacementSimkl).toBeEnabled();
   await expect
     .poll(() => page.evaluate(() => globalThis.fixtureTrackerAuthority.subscriptions()))
     .toEqual({ owner: 0, replacement: 1 });
   await page.evaluate(() => globalThis.fixtureTrackerAuthority.release());
-  await expect(page.getByRole('button', { name: /SIMKL Not connected/ })).toBeVisible();
+  await expect(replacementSimkl).toBeVisible();
   expect(await page.evaluate(() => globalThis.fixtureTrackerAuthority.householdCommands())).toEqual(
     [],
   );
+
+  // This profile has no Web SIMKL client id and its Apple TV route is deliberately unavailable: never loop the
+  // viewer back to TV. Household and activity selector failures are retried independently by the one visible action.
+  await replacementSimkl.click();
+  await expect(page.getByRole('region', { name: 'SIMKL' })).toContainText(
+    'SIMKL connection is unavailable in this deployment.',
+  );
+  await page.evaluate(() => {
+    globalThis.fixtureSettingsAuthority.failConnections();
+    globalThis.fixtureTrackerAuthority.fail();
+  });
+  await expect(page.getByText('Couldn’t load your settings.')).toBeVisible();
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(replacementSimkl).toBeVisible();
+  expect(await page.evaluate(() => globalThis.fixtureTrackerAuthority.retries())).toEqual({
+    owner: 0,
+    replacement: 1,
+  });
 });
 
 test('saving a provider key validates it in the content Worker before storing it', async ({

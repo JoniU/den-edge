@@ -487,9 +487,24 @@
   const heldTrackerCommand = new Promise<void>((resolve) => (releaseTrackerCommand = resolve));
   const trackerCommands = { owner: [] as string[], replacement: [] as string[] };
   const trackerSubscriptions = { owner: 0, replacement: 0 };
-  const trackerActivityModel = (name: keyof typeof trackerCommands, connected: boolean) =>
+  const trackerViews = $state({
+    owner: { connected: true, heldRemovals: [] as { type: 'movie' | 'tv'; id: number }[] },
+    replacement: { connected: true, heldRemovals: [{ type: 'movie' as const, id: 550 }] },
+  });
+  const trackerSelectionFailed = $state({ owner: false, replacement: false });
+  const trackerRebinds = { owner: 0, replacement: 0 };
+  const trackerModelFailed = $state({ owner: false, replacement: false });
+  const trackerRetries = { owner: 0, replacement: 0 };
+  const trackerActivityModel = (name: keyof typeof trackerCommands) =>
     ({
-      connection: 'ready',
+      get connection() {
+        return trackerModelFailed[name] ? ('failed' as const) : ('ready' as const);
+      },
+      async retry() {
+        trackerRetries[name]++;
+        trackerModelFailed[name] = false;
+        trackerSelectionFailed[name] = false;
+      },
       get overview() {
         return primaryModel.overview;
       },
@@ -499,11 +514,28 @@
         trackerSubscriptions[name]++;
         let released = false;
         return {
-          snapshot: {
-            connection: 'ready',
-            value: { kind: 'simkl', connected, heldRemovals: [] },
+          get snapshot() {
+            return trackerModelFailed[name] || trackerSelectionFailed[name]
+              ? {
+                  connection: 'failed' as const,
+                  value: { kind: 'simkl' as const, ...trackerViews[name] },
+                  error: {
+                    code: 'unavailable' as const,
+                    message: 'fixture Owner activity selection failed',
+                    retryable: true,
+                  },
+                }
+              : {
+                  connection: 'ready' as const,
+                  value: { kind: 'simkl' as const, ...trackerViews[name] },
+                };
           },
-          rebind: () => false,
+          rebind() {
+            if (!trackerSelectionFailed[name]) return false;
+            trackerRebinds[name]++;
+            trackerSelectionFailed[name] = false;
+            return true;
+          },
           release() {
             if (released) return;
             released = true;
@@ -517,13 +549,15 @@
       async disconnectSimkl() {
         trackerCommands[name].push('disconnect');
         if (name === 'owner') await heldTrackerCommand;
+        trackerViews[name].connected = false;
+        trackerViews[name].heldRemovals = [];
       },
       async approveSimklRemovals() {
         trackerCommands[name].push('approve');
       },
     }) as unknown as LibraryModel;
-  const ownerTrackerModel = trackerActivityModel('owner', true);
-  const replacementTrackerModel = trackerActivityModel('replacement', false);
+  const ownerTrackerModel = trackerActivityModel('owner');
+  const replacementTrackerModel = trackerActivityModel('replacement');
   let activityModel = $state.raw<LibraryModel>(
     profileTrackerAuthorityFixture ? ownerTrackerModel : primaryModel,
   );
@@ -542,9 +576,14 @@
   };
   const trackerAuthorityControls = {
     replace: () => (activityModel = replacementTrackerModel),
+    fail() {
+      trackerModelFailed.replacement = true;
+    },
     release: () => releaseTrackerCommand(),
     commands: () => structuredClone(trackerCommands),
     subscriptions: () => structuredClone(trackerSubscriptions),
+    rebinds: () => structuredClone(trackerRebinds),
+    retries: () => structuredClone(trackerRetries),
     householdCommands: () => [...library.commandKinds],
   };
   (

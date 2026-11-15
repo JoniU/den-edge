@@ -1396,4 +1396,10 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
     'Byt till den här profilen och öppna Den › Inställningar › Innehåll på en telefon eller dator som är länkad till hushållet.',
   'Use this TV for playback, or end the Visitor visit and choose a household profile. Nothing is changed.':
     'Använd TV:n för uppspelning, eller avsluta besöket och välj en hushållsprofil. Ingenting ändras.',
+  'Trakt connection and delivery are unavailable in this release. Den does not send watch history to Trakt from Web or Apple TV.':
+    'Trakt-anslutning och leverans är inte tillgängliga i den här versionen. Den skickar inte visningshistorik till Trakt från webben eller Apple TV.',
+  'Connect it here for this Owner profile, and it reaches your other devices through your library.':
+    'Anslut det här för den här ägarprofilen så når det dina andra enheter via biblioteket.',
+  'SIMKL connection is unavailable in this deployment. Ask the Den Web administrator to configure it.':
+    'SIMKL-anslutning är inte tillgänglig i den här installationen. Be Den Web-administratören att konfigurera den.',
 };

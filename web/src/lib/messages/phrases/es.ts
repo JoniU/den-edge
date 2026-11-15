@@ -1415,4 +1415,10 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
     'En un teléfono u ordenador vinculado a este hogar, cambia a este perfil y abre Den › Configuración › Contenido.',
   'Use this TV for playback, or end the Visitor visit and choose a household profile. Nothing is changed.':
     'Usa este televisor para reproducir, o finaliza la visita y elige un perfil del hogar. No se cambia nada.',
+  'Trakt connection and delivery are unavailable in this release. Den does not send watch history to Trakt from Web or Apple TV.':
+    'La conexión y la entrega de Trakt no están disponibles en esta versión. Den no envía el historial de reproducciones a Trakt desde la web ni desde Apple TV.',
+  'Connect it here for this Owner profile, and it reaches your other devices through your library.':
+    'Conéctalo aquí para este perfil de propietario y llegará a tus otros dispositivos a través de tu biblioteca.',
+  'SIMKL connection is unavailable in this deployment. Ask the Den Web administrator to configure it.':
+    'La conexión de SIMKL no está disponible en este despliegue. Pide al administrador de Den Web que la configure.',
 };

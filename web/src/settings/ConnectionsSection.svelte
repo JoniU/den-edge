@@ -90,6 +90,7 @@
     heldReset = false,
     onadoptheld,
     viewerOnly = false,
+    appleTVTrackerManagement = true,
     presentationOwner,
   }: {
     /** Null for a browser using its own library, with no TV linked yet. */
@@ -149,6 +150,8 @@
     onadoptheld?: () => Promise<void>;
     /** Old-engine viewer tier: expose only pairing and linked-device controls. */
     viewerOnly?: boolean;
+    /** Legacy Owner may manage SIMKL on Apple TV; persistent Owner has only this exact activity model on Web. */
+    appleTVTrackerManagement?: boolean;
     presentationOwner: LibraryJoinPresentationOwner;
   } = $props();
 
@@ -986,11 +989,10 @@
       </p>
     </SettingRow>
 
-    <SettingRow id="trakt" label="Trakt" value="On each Apple TV">
+    <SettingRow id="trakt" label="Trakt" value="Unavailable">
       <p class="foot">
-        Trakt syncs your watch history and records what you watch. Connect it on each Apple TV,
-        under Settings › Trakt: its sign-in renews itself with every use, so two devices can’t share
-        one.
+        Trakt connection and delivery are unavailable in this release. Den does not send watch
+        history to Trakt from Web or Apple TV.
       </p>
     </SettingRow>
     <SettingRow
@@ -1082,8 +1084,12 @@
         syncs your watch history and records what you watch. {simkl
           ? 'The sign-in reaches your devices through your library.'
           : simklClientId
-            ? 'Connect it here or on your Apple TV, and it reaches your other devices through your library.'
-            : 'Connect it on your Apple TV, under Settings › SIMKL, and it reaches your other devices through your library.'}
+            ? appleTVTrackerManagement
+              ? 'Connect it here or on your Apple TV, and it reaches your other devices through your library.'
+              : 'Connect it here for this Owner profile, and it reaches your other devices through your library.'
+            : appleTVTrackerManagement
+              ? 'Connect it on your Apple TV, under Settings › SIMKL, and it reaches your other devices through your library.'
+              : 'SIMKL connection is unavailable in this deployment. Ask the Den Web administrator to configure it.'}
       </p>
     </SettingRow>
 
