@@ -91,6 +91,22 @@ everything the committed code imports is committed too.
 
 ## Bundle budget records
 
+- Exact profile authority and truthful tracker capability (#534) were measured on matched production builds at
+  base `87c470e9` and production/test head `4027875e`. Ordinary Browser startup moves 206,566 → 206,545 gzip
+  bytes (-21), while the complete graph moves 894,656 → 895,131 (+475). Independently lazy Spanish/Swedish
+  catalogs account for +237, leaving the non-translation graph 844,161 → 844,399 (+238). WebOS startup moves
+  241,242 → 241,206 and its non-translation graph 943,464 → 943,558 (+94); supported Tizen moves 241,877 →
+  241,896 and 1,263,906 → 1,264,160 (+254). Reduced Tizen 3 keeps tracker administration compiled out and adds
+  no tracker affordance: startup moves 193,379 → 193,378, the non-translation graph 2,347,707 → 2,347,956
+  (+249 gzip), and the raw JS/CSS graph 8,328,215 → 8,329,668 (+1,453 bytes).
+  The exact Owner activity-model lease and generation fence must stay beside the existing eagerly mounted Settings
+  authority so a household/profile replacement retires both selectors before either can publish; splitting that
+  compact selection would add a request or duplicate authority state. Presentation remains in the existing lazy
+  Settings chunk, locale copy remains independently lazy, and Tizen 3's existing compile-time Settings boundary
+  removes the unsupported tracker controls. The change adds no dependency, timer, polling, cache, provider call,
+  decoder, background work or healthy-path network round trip. No budget changes are required: the independently
+  enforced startup ceiling retains 4 bytes, the complete non-translation ceiling retains 3,631 bytes, and the
+  fixed 51,200-byte translation ceiling retains 468 bytes.
 - Exact-current Owner PIN replacement/removal (#1145) was measured on matched production builds at base
   `7fff9db5` and production source `d0fa72a4`. Ordinary Browser startup moves 206,062 → 206,150 gzip bytes (+88), while the
   complete graph moves 890,492 → 892,631 (+2,139). Independently lazy Spanish/Swedish catalogs account for +707,
