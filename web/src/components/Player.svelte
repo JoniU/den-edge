@@ -541,14 +541,7 @@
   let manualChoiceGeneration = 0;
   /** The deliberate season-pack choice, never a raw filename outside this mounted player's memory. */
   let continuityGroup: string | undefined;
-  const authorityGeneration = () =>
-    JSON.stringify([
-      releaseAuthority.profile,
-      releaseAuthority.library,
-      releaseAuthority.household,
-      releaseAuthority.addon,
-      releaseAuthority.source,
-    ]);
+  const authorityGeneration = () => JSON.stringify(releaseAuthority);
   const initialSeason = untrack(() => season);
   // Keep the asynchronous read inert until a session without an explicit filename consumes it. Publication is
   // fenced there; an explicit choice can therefore clear/replace continuity while this authority digest is pending.

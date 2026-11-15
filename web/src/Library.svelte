@@ -3310,13 +3310,13 @@
   {@const after = following}
   <!-- A session names one source: a shared scout goes with the shared subtitles, a library's with its own. -->
   {@const guestSource = !!sharedInstallOf(scout.install)}
-  {@const releaseAuthority = {
-    profile: `${session.identity.kind}:${session.identity.id}`,
-    library: session.identity.libraryKey,
-    household: session.household.identity.libraryKey,
-    addon: scout.install,
-    source: scout.base,
-  }}
+  {@const releaseAuthority = [
+    `${session.identity.kind}:${session.identity.id}`,
+    session.identity.libraryKey,
+    session.household.identity.libraryKey,
+    scout.install,
+    scout.base,
+  ] as const}
   <!-- Keyed by the title alone: the next episode plays in the same player (`playEpisode`), so the video in fullscreen
        — and a Chromecast it is cast to — carries on into it. Authority replacement deliberately remounts it: an
        old source session and its late lookups cannot survive a profile/library/household/add-on change. -->

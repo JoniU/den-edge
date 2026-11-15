@@ -374,9 +374,10 @@ test('a slow start, or an error that is no MediaError, is never "couldn’t play
   }
 });
 
-test('a release that couldn’t play is not the automatic pick again after a reload', async () => {
+test('a decoder exclusion lasts only for the mounted player and retains no filename on reload', async () => {
   const { browser, page } = await openPlayer();
   try {
+    await page.route(`${ORIGIN}/playback/cast`, (route) => route.fulfill({ status: 204 }));
     const remux = await fakeRemux(page);
     await page.goto(`${ORIGIN}/test/player.html`);
     await playsTo(page, 1);
@@ -390,8 +391,13 @@ test('a release that couldn’t play is not the automatic pick again after a rel
     await expect.poll(() => remux.served.length).toBe(2);
     await page.reload();
     await expect.poll(() => remux.asked.length).toBe(3);
-    expect(remux.asked[2].exclude).toContain(A.filename);
-    expect(remux.served[2]).not.toBe(A.filename);
+    expect(remux.asked[2]).not.toHaveProperty('exclude');
+    expect(remux.served[2]).toBe(A.filename);
+    expect(
+      await page.evaluate(() =>
+        Object.keys(sessionStorage).filter((key) => key.startsWith('den.releases.')),
+      ),
+    ).toEqual([]);
   } finally {
     await browser.close();
   }

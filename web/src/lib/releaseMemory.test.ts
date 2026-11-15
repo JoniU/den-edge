@@ -20,14 +20,24 @@ function memoryStore(initial: Record<string, string> = {}): Storage {
   };
 }
 
-const authority = (replace: Partial<ReleaseAuthority> = {}): ReleaseAuthority => ({
-  profile: 'profile:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-  library: 'profile-library-a',
-  household: 'household-a',
-  addon: 'http://scout.test/config-a',
-  source: '/scout/config-a',
-  ...replace,
-});
+type AuthorityFields = {
+  profile: string;
+  library: string | null;
+  household: string | null;
+  addon: string;
+  source: string;
+};
+const authority = (replace: Partial<AuthorityFields> = {}): ReleaseAuthority => {
+  const value: AuthorityFields = {
+    profile: 'profile:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    library: 'profile-library-a',
+    household: 'household-a',
+    addon: 'http://scout.test/config-a',
+    source: '/scout/config-a',
+    ...replace,
+  };
+  return [value.profile, value.library, value.household, value.addon, value.source];
+};
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

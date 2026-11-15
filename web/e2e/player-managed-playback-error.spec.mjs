@@ -419,7 +419,7 @@ test('a retryable explicit TorBox attempt keeps Den subtitles disabled through t
   }
 });
 
-test('an excluded-list Den retry remains pinned to Den Remux', async () => {
+test('a legacy filename exclusion is discarded before a Den Remux retry', async () => {
   const requests = [];
   const { browser, page } = await playerPage((route) => {
     requests.push(route.request().postDataJSON());
@@ -436,15 +436,18 @@ test('an excluded-list Den retry remains pinned to Den Remux', async () => {
       );
     });
     await page.goto(`${ORIGIN}/test/player.html?playback=managed`);
+    await expect
+      .poll(() => page.evaluate(() => sessionStorage.getItem('den.releases.movie:42::')))
+      .toBeNull();
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0]).not.toHaveProperty('exclude');
     await openOptionsPage(page, 'Source');
     await page.getByRole('menuitem', { name: 'Try Den Remux' }).click();
-    await expect.poll(() => requests.length).toBe(3);
+    await expect.poll(() => requests.length).toBe(2);
     expect(requests[1]).toMatchObject({
       directFailed: true,
-      exclude: ['excluded-release.mkv'],
     });
-    expect(requests[2].directFailed).toBe(true);
-    expect(requests[2]).not.toHaveProperty('exclude');
+    expect(requests[1]).not.toHaveProperty('exclude');
   } finally {
     await browser.close();
   }

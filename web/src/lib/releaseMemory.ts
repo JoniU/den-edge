@@ -2,13 +2,15 @@
 // stable season-pack identity, never a release filename. Its storage name is a digest of every authority which may
 // make that identity meaningful, so changing profile, profile library, household or source add-on cannot reuse it.
 
-export interface ReleaseAuthority {
-  profile: string;
-  library: string | null;
-  household: string | null;
-  addon: string;
-  source: string;
-}
+/** Profile, profile library, household, add-on install and source base, in that order. The compact tuple crosses
+ * the always-loaded Library → lazy Player boundary without duplicating those field names in the startup chunk. */
+export type ReleaseAuthority = readonly [
+  profile: string,
+  library: string | null,
+  household: string | null,
+  addon: string,
+  source: string,
+];
 
 export interface SeriesReleaseMemory {
   season: number;
@@ -56,14 +58,7 @@ function store(): Storage | undefined {
   }
 }
 
-const authorityText = (authority: ReleaseAuthority): string =>
-  JSON.stringify([
-    authority.profile,
-    authority.library,
-    authority.household,
-    authority.addon,
-    authority.source,
-  ]);
+const authorityText = (authority: ReleaseAuthority): string => JSON.stringify(authority);
 
 const base64url = (bytes: Uint8Array): string => {
   let binary = '';
