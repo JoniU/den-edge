@@ -48,7 +48,7 @@ export interface CompoundResetPageDeps<Destination> {
   /** The link this browser holds for the library, if any. */
   link(): { libraryKey: string } | null;
   /** Persist `to` as the link in place of `from`, keeping the old state and the marker. */
-  install(from: string, to: string): void;
+  install(from: string, to: string): boolean | Promise<boolean>;
   /** Drop the old library's kept state and this exact marker; false if another reset replaced it meanwhile. */
   release(pending: PendingReset): boolean | Promise<boolean>;
   /** Make the destination live only while `from` still owns this route; false means the caller closes it. */
@@ -220,7 +220,13 @@ export class CompoundResetPage<Destination> {
       destination.close();
       return 'waiting';
     }
-    if (this.deps.link()?.libraryKey !== pending.to) this.deps.install(pending.from, pending.to);
+    if (
+      this.deps.link()?.libraryKey !== pending.to &&
+      !(await this.deps.install(pending.from, pending.to))
+    ) {
+      destination.close();
+      return 'waiting';
+    }
     // Read the install back; the journal is erased only once the link names the new key.
     if (this.deps.link()?.libraryKey !== pending.to) {
       destination.close();

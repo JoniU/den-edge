@@ -131,11 +131,21 @@ test('RoutedLibrary resumes one lost compound reset across reload', async ({
     const marker = JSON.parse(await app.evaluate(() => localStorage.getItem('den.keyReset')));
     expect(marker).toMatchObject({ compound: true });
     expect(edge.profileResetAttempts).toBe(1);
+    const recoveryUrl = app.url();
+    const recoveryState = await appContext.storageState({ indexedDB: true });
+    await appContext.close();
+    appContext = undefined;
+    app = undefined;
     edge.profileResetHoldReplies = false;
 
-    // Reloading destroys every page-owned model. RoutedLibrary must recover from only the exact durable marker and
-    // den-edge journal, finish the one attempt and install the successor without a second PIN or invented restart.
-    await app.reload();
+    // A new browser storage realm starts a new production SharedWorker/Vault from only the exact durable marker and
+    // IndexedDB journal. It must finish the one attempt and install the successor without a PIN or invented restart.
+    appContext = await browser.newContext({ storageState: recoveryState });
+    app = await appContext.newPage();
+    observe(app);
+    await routeGuestEdge(app, edge);
+    await routeProfileResetEdge(app, edge);
+    await app.goto(recoveryUrl);
 
     await expect
       .poll(() => app.evaluate(() => localStorage.getItem('den.keyReset')), { timeout: 60_000 })

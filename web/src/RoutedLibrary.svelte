@@ -1293,7 +1293,7 @@
             return { session: destination, close: () => destination.close() };
           },
           link: () => links.list.find((l) => l.libraryKey === pendingReset?.to) ?? null,
-          install: (from, to) => void links.rekey(from, to, true),
+          install: (from, to) => links.rekey(from, to, true),
           release: async (pending) => {
             if (!(await links.releaseRekeyed(pending.from, pending))) return false;
             pendingReset = null;

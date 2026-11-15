@@ -177,6 +177,7 @@ class World {
         this.events.push('install');
         this.link = to;
         this.die('after-install');
+        return true;
       },
       release: async (pending) => {
         this.events.push('release');
@@ -416,8 +417,9 @@ describe('the page half of a compound key reset', () => {
   it('never erases the journal when the install does not read back', async () => {
     const world = new World(await edgeWorld());
     const page = world.page();
-    // The link refuses to move (storage blocked): the install is not read back as the new key.
+    // The tab's in-memory overlay moves, but storage refused it. That must not be mistaken for a durable readback.
     const original = world.link;
+    let visible = original;
     const failing = new CompoundResetPage<Destination>({
       pending: {
         read: () => world.pending,
@@ -428,10 +430,13 @@ describe('the page half of a compound key reset', () => {
       },
       worker: async () => ({ model: world.model(), close: () => {} }),
       openDestination: async (key) => ({ session: key, close: () => {} }),
-      link: () => ({ libraryKey: original! }),
+      link: () => ({ libraryKey: visible! }),
       current: () => HOUSEHOLD_KEY,
       active: () => true,
-      install: () => {},
+      install: (_from, to) => {
+        visible = to;
+        return false;
+      },
       release: () => {
         world.events.push('release');
         return true;

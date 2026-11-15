@@ -332,6 +332,7 @@ describe.skipIf(!available)(
           link: () => ({ libraryKey: linked }),
           install: (_from, to) => {
             linked = to;
+            return true;
           },
           release: () => {
             pending = null;
