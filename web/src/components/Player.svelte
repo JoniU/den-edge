@@ -128,7 +128,12 @@
     type SkipKind,
     type SkipSegment,
   } from '../lib/skipdb';
-  import { continuationPrefetch, shouldWarmNext } from '../lib/binge';
+  import {
+    continuationPrefetch,
+    reportNextDetailFailure,
+    reportNextPrefetch,
+    shouldWarmNext,
+  } from '../lib/binge';
   import { fetchSourceList, prepareSource } from '../lib/titleSources';
   import type { Routes } from '../lib/routes';
   import { titleAllowed } from '../lib/playGuard';
@@ -4278,7 +4283,7 @@
         nextDetail = episodes.value.find((item) => item.number === asked.episode) ?? null;
       })
       .catch((error: unknown) => {
-        if (!request.signal.aborted) console.warn('The next episode’s details didn’t load.', error);
+        if (!request.signal.aborted) reportNextDetailFailure(error);
       });
   }
 
@@ -4313,15 +4318,11 @@
         to.season,
       );
       if (!continuity) {
-        console.info(
-          `[Den binge] ${JSON.stringify({ event: 'next-prefetch', outcome: upcoming.sources ? 'no_continuity' : 'list_unavailable', season: to.season, episode: to.episode, answer: upcoming.answer?.kind })}`,
-        );
+        reportNextPrefetch(upcoming.sources ? 'no_continuity' : 'list_unavailable');
         return;
       }
       const prepared = await prepareSource(continuity.url, true, undefined, true);
-      console.info(
-        `[Den binge] ${JSON.stringify({ event: 'next-prefetch', outcome: prepared.state, season: to.season, episode: to.episode, continuity: 'binge_group', listedCached: continuity.cached })}`,
-      );
+      reportNextPrefetch(prepared.state);
     });
   }
 

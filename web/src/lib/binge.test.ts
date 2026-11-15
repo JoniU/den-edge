@@ -1,5 +1,42 @@
-import { describe, expect, it } from 'vitest';
-import { continuationPrefetch, shouldWarmNext, WARM_LEAD_SECS } from './binge';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  continuationPrefetch,
+  reportNextDetailFailure,
+  reportNextPrefetch,
+  shouldWarmNext,
+  WARM_LEAD_SECS,
+} from './binge';
+
+describe('binge diagnostics', () => {
+  it('reports a closed prefetch outcome without episode coordinates', () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    reportNextPrefetch('ready');
+
+    expect(info).toHaveBeenCalledOnce();
+    expect(info).toHaveBeenCalledWith('[Den binge] {"event":"next-prefetch","outcome":"ready"}');
+    expect(JSON.stringify(info.mock.calls)).not.toMatch(/season|episode|7349281|6193472/);
+    info.mockRestore();
+  });
+
+  it('classifies a next-detail failure without forwarding its free text', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const freeText = 'S7349281E6193472 failed\nprovider body: private sentinel';
+
+    reportNextDetailFailure(new Error(freeText));
+    reportNextDetailFailure(freeText);
+
+    expect(warn.mock.calls).toEqual([
+      ['[Den binge] {"event":"next-detail","outcome":"failed","errorClass":"error"}'],
+      ['[Den binge] {"event":"next-detail","outcome":"failed","errorClass":"other"}'],
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(freeText);
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(
+      /7349281|6193472|provider body|private sentinel/,
+    );
+    warn.mockRestore();
+  });
+});
 
 describe('shouldWarmNext', () => {
   /**
