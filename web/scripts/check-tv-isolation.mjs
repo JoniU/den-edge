@@ -321,5 +321,7 @@ if (process.argv.includes('--capture')) {
   // short stall in the opening seconds not held against it) and the 60 s start hold bring the graph to 101,467 in
   // CI, in the remux and playback-stats modules; it adds no request, timer or storage key. Allow 256 bytes, since the
   // next 128-byte boundary would retain only 37: 165 retained.
-  if (coreTotalDelta > 101632) throw new Error('Browser total JS/CSS budget exceeded');
+  // Merging the Kid direct-read authority brings the combined graph to 101,667. Its measured consolidation and
+  // rejected lazy alternatives are recorded in AGENTS.md; allow the next 128-byte boundary, retaining 93.
+  if (coreTotalDelta > 101760) throw new Error('Browser total JS/CSS budget exceeded');
 }
