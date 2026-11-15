@@ -631,7 +631,7 @@
   {#if contentReady && settingsMounted}<Settings
       {link}
       {model}
-      {activityModel}
+      activityModel={profileTrackerAuthorityFixture ? activityModel : model}
       {content}
       local={joinPresentationFixture}
       onjoin={joinPresentationFixture ? heldJoin : undefined}
