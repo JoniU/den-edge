@@ -36,6 +36,7 @@
     fixtureQuery.has('wire5-missing') ||
     fixtureQuery.has('profile-reset-pending');
   const joinPresentationFixture = fixtureQuery.has('join-presentation');
+  const profileTrackerAuthorityFixture = fixtureQuery.has('profile-tracker-authority');
   const profileDirectory = (() => {
     if (!profileResetFixture || fixtureQuery.has('wire5-missing')) return null;
     const stored = structuredClone(profileFixture.migrationBase);
@@ -473,7 +474,7 @@
       fixtureJoinPresentation?: typeof joinPresentationControls;
     }
   ).fixtureJoinPresentation = joinPresentationControls;
-  // A second activity identity over the same fixture authority is enough to exercise Settings' live prop handoff:
+  // A second activity identity over the same fixture authority is enough to exercise Settings' import handoff:
   // it has its own retained import scope while the old model's in-flight semantic reply remains real.
   const replacementActivityModel = {
     get overview() {
@@ -482,7 +483,84 @@
     importHistory: primaryModel.importHistory.bind(primaryModel),
     exportHistory: primaryModel.exportHistory.bind(primaryModel),
   } as unknown as LibraryModel;
-  let activityModel = $state.raw<LibraryModel>(primaryModel);
+  let releaseTrackerCommand = () => {};
+  const heldTrackerCommand = new Promise<void>((resolve) => (releaseTrackerCommand = resolve));
+  const trackerCommands = { owner: [] as string[], replacement: [] as string[] };
+  const trackerSubscriptions = { owner: 0, replacement: 0 };
+  const trackerViews = $state({
+    owner: { connected: true, heldRemovals: [] as { type: 'movie' | 'tv'; id: number }[] },
+    replacement: { connected: true, heldRemovals: [{ type: 'movie' as const, id: 550 }] },
+  });
+  const trackerSelectionFailed = $state({ owner: false, replacement: false });
+  const trackerRebinds = { owner: 0, replacement: 0 };
+  const trackerModelFailed = $state({ owner: false, replacement: false });
+  const trackerRetries = { owner: 0, replacement: 0 };
+  const trackerActivityModel = (name: keyof typeof trackerCommands) =>
+    ({
+      get connection() {
+        return trackerModelFailed[name] ? ('failed' as const) : ('ready' as const);
+      },
+      async retry() {
+        trackerRetries[name]++;
+        trackerModelFailed[name] = false;
+        trackerSelectionFailed[name] = false;
+      },
+      get overview() {
+        return primaryModel.overview;
+      },
+      importHistory: primaryModel.importHistory.bind(primaryModel),
+      exportHistory: primaryModel.exportHistory.bind(primaryModel),
+      simkl() {
+        trackerSubscriptions[name]++;
+        let released = false;
+        return {
+          get snapshot() {
+            return trackerModelFailed[name] || trackerSelectionFailed[name]
+              ? {
+                  connection: 'failed' as const,
+                  value: { kind: 'simkl' as const, ...trackerViews[name] },
+                  error: {
+                    code: 'unavailable' as const,
+                    message: 'fixture Owner activity selection failed',
+                    retryable: true,
+                  },
+                }
+              : {
+                  connection: 'ready' as const,
+                  value: { kind: 'simkl' as const, ...trackerViews[name] },
+                };
+          },
+          rebind() {
+            if (!trackerSelectionFailed[name]) return false;
+            trackerRebinds[name]++;
+            trackerSelectionFailed[name] = false;
+            return true;
+          },
+          release() {
+            if (released) return;
+            released = true;
+            trackerSubscriptions[name]--;
+          },
+        };
+      },
+      async connectSimkl() {
+        trackerCommands[name].push('connect');
+      },
+      async disconnectSimkl() {
+        trackerCommands[name].push('disconnect');
+        if (name === 'owner') await heldTrackerCommand;
+        trackerViews[name].connected = false;
+        trackerViews[name].heldRemovals = [];
+      },
+      async approveSimklRemovals() {
+        trackerCommands[name].push('approve');
+      },
+    }) as unknown as LibraryModel;
+  const ownerTrackerModel = trackerActivityModel('owner');
+  const replacementTrackerModel = trackerActivityModel('replacement');
+  let activityModel = $state.raw<LibraryModel>(
+    profileTrackerAuthorityFixture ? ownerTrackerModel : primaryModel,
+  );
   (
     globalThis as {
       fixtureImportScope?: {
@@ -496,6 +574,23 @@
     restore: () => (activityModel = primaryModel),
     release: () => releaseImportReply(),
   };
+  const trackerAuthorityControls = {
+    replace: () => (activityModel = replacementTrackerModel),
+    fail() {
+      trackerModelFailed.replacement = true;
+    },
+    release: () => releaseTrackerCommand(),
+    commands: () => structuredClone(trackerCommands),
+    subscriptions: () => structuredClone(trackerSubscriptions),
+    rebinds: () => structuredClone(trackerRebinds),
+    retries: () => structuredClone(trackerRetries),
+    householdCommands: () => [...library.commandKinds],
+  };
+  (
+    globalThis as typeof globalThis & {
+      fixtureTrackerAuthority?: typeof trackerAuthorityControls;
+    }
+  ).fixtureTrackerAuthority = trackerAuthorityControls;
   const contentServices = createWorkerServiceSession();
   const contentModel = new LibraryModel(contentServices.library, {
     libraryKey: fixtureLibraryKey,
@@ -536,7 +631,7 @@
   {#if contentReady && settingsMounted}<Settings
       {link}
       {model}
-      {activityModel}
+      activityModel={profileTrackerAuthorityFixture ? activityModel : model}
       {content}
       local={joinPresentationFixture}
       onjoin={joinPresentationFixture ? heldJoin : undefined}

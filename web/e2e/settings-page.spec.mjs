@@ -415,6 +415,74 @@ test('retained Settings replaces every household view and sends its next mutatio
   expect(subscriptions.replacement.recovery ?? 0).toBe(0);
 });
 
+test('profile Owner tracker state and mutations use activity authority, never the household log', async ({
+  page,
+}) => {
+  await guardNetwork(page);
+  await page.route('**/lib/*/grants', (route) => route.fulfill({ json: { grants: [] } }));
+  await page.route('**/routes', (route) => route.fulfill({ json: {} }));
+  await page.route('**/version', (route) => route.fulfill({ json: { version: 'test' } }));
+  await page.route('**/config', (route) => route.fulfill({ json: {} }));
+  await routeTmdb(page, (route) => route.fulfill({ json: { images: {}, results: [] } }));
+  await page.goto(`${E2E_ORIGIN}/test/settings.html?profile-tracker-authority`);
+
+  // The household has no tracker row. The connected presentation comes only from Owner's activity library.
+  await expect(page.getByRole('button', { name: /Trakt Unavailable/ })).toBeVisible();
+  await page.getByRole('button', { name: /Trakt Unavailable/ }).click();
+  await expect(page.getByRole('region', { name: 'Trakt' })).toContainText(
+    'Den does not send watch history to Trakt from Web or Apple TV.',
+  );
+  const simkl = page.getByRole('button', { name: /SIMKL Connected/ });
+  await expect(simkl).toBeVisible();
+  await simkl.click();
+  const section = page.getByRole('region', { name: 'SIMKL' });
+  await section.getByRole('button', { name: 'Disconnect' }).click();
+  await section.getByRole('button', { name: 'Disconnect', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => globalThis.fixtureTrackerAuthority.commands()))
+    .toEqual({ owner: ['disconnect'], replacement: [] });
+
+  // Replace only the active Owner activity library while that old mutation is held. Its tracker lease retires and
+  // the preserved disclosure immediately presents the replacement authority; releasing the old answer cannot
+  // republish its state or touch the household log.
+  await page.evaluate(() => globalThis.fixtureTrackerAuthority.replace());
+  const replacementSimkl = page.getByRole('button', { name: /SIMKL 1 removal held/ });
+  await expect(replacementSimkl).toBeEnabled();
+  const replacementSection = page.getByRole('region', { name: 'SIMKL' });
+  await expect(replacementSection).toContainText('Movie 550');
+  await expect(replacementSection).toContainText('Remove 1 title from SIMKL');
+  await expect
+    .poll(() => page.evaluate(() => globalThis.fixtureTrackerAuthority.subscriptions()))
+    .toEqual({ owner: 0, replacement: 1 });
+  await page.evaluate(() => globalThis.fixtureTrackerAuthority.release());
+  await expect(replacementSimkl).toBeVisible();
+  await replacementSection.getByRole('button', { name: 'Disconnect' }).click();
+  await replacementSection.getByRole('button', { name: 'Disconnect', exact: true }).click();
+  await expect(replacementSection).toContainText(
+    'SIMKL connection is unavailable in this deployment.',
+  );
+  await expect
+    .poll(() => page.evaluate(() => globalThis.fixtureTrackerAuthority.commands()))
+    .toEqual({ owner: ['disconnect'], replacement: ['disconnect'] });
+  expect(await page.evaluate(() => globalThis.fixtureTrackerAuthority.householdCommands())).toEqual(
+    [],
+  );
+
+  // This profile has no Web SIMKL client id and its Apple TV route is deliberately unavailable: never loop the
+  // viewer back to TV. Household and activity selector failures are retried independently by the one visible action.
+  await page.evaluate(() => {
+    globalThis.fixtureSettingsAuthority.failConnections();
+    globalThis.fixtureTrackerAuthority.fail();
+  });
+  await expect(page.getByText('Couldn’t load your settings.')).toBeVisible();
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByRole('button', { name: /SIMKL Not connected/ })).toBeVisible();
+  expect(await page.evaluate(() => globalThis.fixtureTrackerAuthority.retries())).toEqual({
+    owner: 0,
+    replacement: 1,
+  });
+});
+
 test('saving a provider key validates it in the content Worker before storing it', async ({
   page,
 }) => {

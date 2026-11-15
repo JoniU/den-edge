@@ -265,6 +265,10 @@ test('Tizen 3 names the supported-browser administration handoffs', async ({ pag
   await contentSection.focus();
   await page.keyboard.press('ArrowDown');
   await expect(connectionsSection).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(`${E2E_ORIGIN}/settings#connections`);
+  await expect(page.getByRole('button', { name: /SIMKL|Trakt/ })).toHaveCount(0);
+  await connectionsSection.focus();
   await page.keyboard.press('ArrowDown');
   await expect(sharingSection).toBeFocused();
   await page.keyboard.press('Enter');

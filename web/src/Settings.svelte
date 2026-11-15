@@ -85,16 +85,23 @@
   } = $props();
 
   type SettingsAuthority = {
+    /** Household control authority: devices, credentials shared by the household, recovery and Owner PIN. */
     model: LibraryModel;
+    /** Exact active Owner activity authority: tracker credentials, commands and delivery review. */
+    activityModel: LibraryModel;
     connections: ReturnType<LibraryModel['connections']>;
     simkl?: ReturnType<LibraryModel['simkl']>;
     recovery?: ReturnType<LibraryModel['recovery']>;
   };
-  const acquireAuthority = (authority: LibraryModel): SettingsAuthority => ({
-    model: authority,
-    connections: authority.connections(),
+  const acquireAuthority = (
+    household: LibraryModel,
+    activity: LibraryModel,
+  ): SettingsAuthority => ({
+    model: household,
+    activityModel: activity,
+    connections: household.connections(),
     ...(!__DEN_TV_LEGACY_JS_CORE__
-      ? { simkl: authority.simkl(), recovery: authority.recovery() }
+      ? { simkl: activity.simkl(), recovery: household.recovery() }
       : {}),
   });
   const releaseAuthority = (authority: SettingsAuthority) =>
@@ -102,15 +109,26 @@
       lease?.release(),
     );
   const joinPresentation = new LibraryJoinPresentationOwner();
-  let authority = $state.raw(untrack(() => acquireAuthority(model)));
-  // A retained Settings page can receive a replacement household authority. Keep every lazy view and every command
-  // on one exact model identity: publish the complete replacement bundle, then retire all of the old subscriptions.
+  let authority = $state.raw(untrack(() => acquireAuthority(model, activityModel)));
+  let authorityGeneration = 0;
+  let retrying = $state(false);
+  let failure = $state<string | null>(null);
+  let saving = $state(false);
+  // A retained Settings page can receive either a replacement household or a replacement Owner activity library.
+  // Publish the complete replacement bundle before retiring every old lease, so tracker presentation and commands
+  // can never fall back to the household control log or remain attached to the previous profile generation.
   $effect(() => {
-    const replacement = model;
-    joinPresentation.replace(replacement);
-    if (authority.model === replacement) return;
+    const replacementHousehold = model;
+    const replacementActivity = activityModel;
+    joinPresentation.replace(replacementHousehold);
+    if (authority.model === replacementHousehold && authority.activityModel === replacementActivity)
+      return;
     const previous = authority;
-    authority = untrack(() => acquireAuthority(replacement));
+    authority = untrack(() => acquireAuthority(replacementHousehold, replacementActivity));
+    authorityGeneration++;
+    retrying = false;
+    failure = null;
+    saving = false;
     releaseAuthority(previous);
   });
   onDestroy(() => {
@@ -129,14 +147,19 @@
     untrack(() => (local ? readLocalInterfaceLanguage() : undefined)),
   );
   const loadError = $derived(
-    authority.model.settings.error ?? authority.connections.snapshot.error,
+    authority.model.settings.error ??
+      authority.connections.snapshot.error ??
+      authority.simkl?.snapshot.error,
   );
   // A failed selector may retain its previous value for diagnosis, but that stale authority must not keep Settings
   // actionable or hide the retry control while a fresh binding is required.
-  const ready = $derived(!!settings && !!effectivePreferences && !!connections && !loadError);
-  let retrying = $state(false);
-  let failure = $state<string | null>(null);
-  let saving = $state(false);
+  const ready = $derived(
+    !!settings &&
+      !!effectivePreferences &&
+      !!connections &&
+      (__DEN_TV_LEGACY_JS_CORE__ || !!simkl) &&
+      !loadError,
+  );
   /** Tells Den's own plugins apart, so they're listed by name rather than by a LAN address. */
   let routes = $state.raw<Routes>({});
   /** Whether /routes has answered (or failed): until then an install on another of the deployment's names is unplaced. */
@@ -174,6 +197,7 @@
     profileTopology || profileTopologyBlocked || (connections?.diagnostics.libraryFormat ?? 0) >= 5,
   );
   async function run(action: () => Promise<unknown>, quiet = false): Promise<boolean> {
+    const generation = authorityGeneration;
     const restoreFocus =
       document.activeElement instanceof HTMLElement &&
       (__DEN_TV__ || keyboardInput() || document.activeElement.matches(':focus-visible'))
@@ -203,14 +227,15 @@
       return true;
     } catch (error) {
       console.warn('den: settings command failed', error);
-      if (!quiet) failure = 'Couldn’t save that. Check your connection and try again.';
+      if (!quiet && generation === authorityGeneration)
+        failure = 'Couldn’t save that. Check your connection and try again.';
       return false;
     } finally {
       // Commit the enabled controls and any preference publication in this task. If this waits for `tick`, a TV
       // remote can observe the newly enabled surface, move to its next control, and then have the continuation below
       // steal focus back to the setting that just saved.
       flushSync(() => {
-        if (!quiet) saving = false;
+        if (!quiet && generation === authorityGeneration) saving = false;
       });
       // Saving temporarily disables the settings surface. Some engines move focus to the document when the active
       // native control becomes disabled, which strands the next keyboard/remote press. Return keyboard users to that
@@ -322,21 +347,29 @@
 
   async function retryLoad() {
     if (retrying) return;
+    const generation = authorityGeneration;
     retrying = true;
     try {
       const current = authority;
-      if (current.model.connection === 'failed') await current.model.retry();
+      const retries: Promise<unknown>[] = [];
+      if (current.model.connection === 'failed') retries.push(current.model.retry());
       else if (current.connections.snapshot.error) current.connections.rebind();
+      if (current.activityModel !== current.model && current.activityModel.connection === 'failed')
+        retries.push(current.activityModel.retry());
+      else if (current.simkl?.snapshot.error) current.simkl.rebind();
+      await Promise.allSettled(retries);
     } catch {
       // The model snapshots keep the exact retryable failure and this surface stays available for another try.
     } finally {
-      retrying = false;
+      if (generation === authorityGeneration) retrying = false;
     }
   }
 
   async function saveSimkl(token: string | null): Promise<boolean> {
     return run(() =>
-      token ? authority.model.connectSimkl(token) : authority.model.disconnectSimkl(),
+      token
+        ? authority.activityModel.connectSimkl(token)
+        : authority.activityModel.disconnectSimkl(),
     );
   }
 
@@ -372,7 +405,7 @@
    */
   async function approveRemovals(): Promise<boolean> {
     const approvalId = simkl?.approvalId;
-    return !!approvalId && run(() => authority.model.approveSimklRemovals(approvalId));
+    return !!approvalId && run(() => authority.activityModel.approveSimklRemovals(approvalId));
   }
 
   // den-edge's assistant connections are asked about as `model`'s member. On a household split into profiles that is
@@ -482,7 +515,7 @@
           </SettingRow>
         </SettingsSection>
       {/if}
-      {#key authority.model}<ConnectionsSection
+      {#key authority}<ConnectionsSection
           {link}
           {content}
           {onjoin}
@@ -503,6 +536,7 @@
           {heldReset}
           {onadoptheld}
           apiKeys={connections!.apiKeys}
+          appleTVTrackerManagement={authority.activityModel === authority.model}
           simklConnected={!!simkl?.connected}
           {saveSimkl}
           heldRemovals={namedRemovals}
