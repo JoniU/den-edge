@@ -449,12 +449,15 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
     try {
       const page = await (await iphone(browser, 'en-US', { airPlay: true })).newPage();
       const airPlayReports = [];
+      // Before the page loads: a timer the page sets on the real clock cannot be cleared through the fake one. The
+      // controls' 3 s hide timer, set while the player starts, then outlived the reveal that leaving AirPlay makes, hid
+      // the controls again under the tap on Close, and left the picture to take it.
+      await page.clock.install();
       const playback = await guestPlayer(page, {
         originalLanguage: 'en',
         hearth: (body) => ({ json: body.directFailed ? remuxAnswer : torboxAnswer }),
         airPlayReports,
       });
-      await page.clock.install();
       await page.evaluate(() => {
         window.holdAirPlayMediaClock();
         window.setAirPlayAvailability('available');
