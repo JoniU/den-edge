@@ -343,11 +343,13 @@
     retrying = true;
     try {
       const current = authority;
-      if (current.model.connection === 'failed') await current.model.retry();
+      const retries: Promise<unknown>[] = [];
+      if (current.model.connection === 'failed') retries.push(current.model.retry());
       else if (current.connections.snapshot.error) current.connections.rebind();
       if (current.activityModel !== current.model && current.activityModel.connection === 'failed')
-        await current.activityModel.retry();
+        retries.push(current.activityModel.retry());
       else if (current.simkl?.snapshot.error) current.simkl.rebind();
+      await Promise.allSettled(retries);
     } catch {
       // The model snapshots keep the exact retryable failure and this surface stays available for another try.
     } finally {
