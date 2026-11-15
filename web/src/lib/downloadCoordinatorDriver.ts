@@ -95,9 +95,13 @@ export class DownloadCoordinatorDriver {
     if (this.#running) return this.#running;
     const running = this.#run(options);
     this.#running = running;
-    void running.finally(() => {
+    const clear = () => {
       if (this.#running === running) this.#running = undefined;
-    });
+    };
+    // `finally` creates a second promise which rejects with `running`. Dropping that promise made an expected
+    // fetch AbortError an unhandled rejection even when the scheduler handled the promise returned from `run`.
+    // Observe both outcomes directly so cleanup cannot manufacture another rejection.
+    void running.then(clear, clear);
     return running;
   }
 

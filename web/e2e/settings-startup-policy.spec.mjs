@@ -51,6 +51,11 @@ test('a saved language and Automatic subtitles read correctly before deferred po
     expect(saved.ok()).toBe(true);
   }
 
+  // A successful response is observed before the command has removed its durable pending-work record. Settings
+  // stays disabled until that cleanup has finished; reloading earlier can make the next Worker correctly ask for
+  // deferred policy to replay the last write, which defeats the startup-only state this test means to exercise.
+  await expect(language).toBeEnabled({ timeout: 30_000 });
+
   // Deferred policy never arrives from here on, in the page or its library Worker: its request is left unanswered.
   await page.route('**/den_core_deferred_bg.wasm', () => {});
   // What the page draws now comes from this browser's own copy; a pull may wait on deferred policy, so none is awaited.

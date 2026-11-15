@@ -128,7 +128,7 @@ async function iphone(browser, locale, { airPlay = false } = {}) {
  */
 async function guestPlayer(
   page,
-  { hearth, originalLanguage, automaticSubtitles = false, airPlayReports },
+  { hearth, originalLanguage, automaticSubtitles = false, playbackSourcePolicy, airPlayReports },
 ) {
   const edge = newEdge();
   await routeGuestEdge(page, edge);
@@ -245,6 +245,24 @@ async function guestPlayer(
     await expect(page.locator('#interface-language select')).toHaveValue('sv');
     await expect(page.locator('html')).toHaveAttribute('lang', 'sv');
   }
+  if (playbackSourcePolicy) {
+    const changes = (response) => new URL(response.url()).pathname.endsWith('/changes');
+    const batch = (response) =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/batch');
+    await Promise.all([
+      page.waitForResponse(changes, { timeout: 30_000 }),
+      page.goto(`${ORIGIN}/settings`),
+    ]);
+    const policy = page.locator('#playback-source-policy select');
+    await expect(policy).toBeEnabled({ timeout: 30_000 });
+    const [saved] = await Promise.all([
+      page.waitForResponse(batch, { timeout: 30_000 }),
+      policy.selectOption(playbackSourcePolicy),
+    ]);
+    expect(saved.ok()).toBe(true);
+    await Promise.all([page.waitForResponse(changes, { timeout: 30_000 }), page.reload()]);
+    await expect(page.locator('#playback-source-policy select')).toHaveValue(playbackSourcePolicy);
+  }
   await page.goto(`${ORIGIN}/movie/${TITLE}`);
   const play = page
     .locator('[data-active="true"]')
@@ -259,12 +277,19 @@ async function guestPlayer(
   return playback;
 }
 
-/** The options' Source page, in Swedish, opened by taps as a finger does; the sheet it is on. */
+/**
+ * The options' Source page, in Swedish, opened by taps as a finger does; the sheet it is on. The page's clock must be
+ * installed before it loads. The controls hide 3 s after their last reveal and then pass taps to the picture; held
+ * from the reveal to the tap on ⋯ they cannot hide in between, however slow the steps are (the open menu holds them
+ * after that).
+ */
 async function swedishSourceSheet(page) {
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1_000);
   await revealControls(page, { tap: true });
   const more = page.getByRole('button', { name: 'Fler uppspelningsalternativ' });
   expect(await tapLandsOnStamp(more)).toBe(true);
   await more.tap();
+  await page.clock.resume();
   const sheet = page.getByRole('menu', { name: 'Fler uppspelningsalternativ' });
   await sheet.getByRole('menuitem', { name: /^Källa, / }).tap();
   return sheet;
@@ -285,6 +310,7 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
     const browser = await webkit.launch();
     try {
       const page = await (await iphone(browser, 'sv-SE')).newPage();
+      await page.clock.install();
       // Hearth with TorBox: TorBox unless the request rules it out, TorBox alone when asked for it alone.
       const playback = await guestPlayer(page, {
         originalLanguage: 'he',
@@ -444,15 +470,87 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
     }
   });
 
-  test('a connected AirPlay target whose TorBox clock does not advance falls back to Den Remux', async () => {
+  test('a stalled AirPlay TorBox stream retries a receiver-safe TorBox release', async () => {
     const browser = await webkit.launch();
     try {
       const page = await (await iphone(browser, 'en-US', { airPlay: true })).newPage();
       const airPlayReports = [];
+      // Before the page loads: a timer the page sets on the real clock cannot be cleared through the fake one. The
+      // controls' 3 s hide timer, set while the player starts, then outlived the reveal that leaving AirPlay makes, hid
+      // the controls again under the tap on Close, and left the picture to take it.
+      await page.clock.install();
       const playback = await guestPlayer(page, {
         originalLanguage: 'en',
-        hearth: (body) => ({ json: body.directFailed ? remuxAnswer : torboxAnswer }),
+        hearth: (body) => {
+          if (body.player === 'airplay' && body.filename)
+            return {
+              status: 409,
+              json: {
+                error: 'direct_unavailable',
+                cause: 'torbox_receiver_unsupported',
+              },
+            };
+          return { json: torboxAnswer };
+        },
         airPlayReports,
+      });
+      await page.evaluate(() => {
+        window.holdAirPlayMediaClock();
+        window.setAirPlayAvailability('available');
+        window.setAirPlayTarget(true);
+      });
+
+      await page.clock.runFor(12_001);
+      await expect.poll(() => playback.length).toBe(3);
+      expect(playback[1]).toMatchObject({
+        player: 'airplay',
+        directOnly: true,
+        filename: 'fixture.mkv',
+      });
+      expect(playback[2]).toMatchObject({ player: 'airplay', directOnly: true });
+      expect(playback[2]).not.toHaveProperty('filename');
+      expect(playback.some((request) => request.directFailed)).toBe(false);
+      await expect(page.locator('.player video')).toHaveAttribute('controls', '');
+      await expect(page.locator('.player nav.web-transport')).toHaveCount(0);
+
+      // The receiver-safe replacement advances, so its own bounded watch keeps it on TorBox.
+      await page.evaluate(() => window.advanceAirPlayMediaClock(1));
+      await page.clock.runFor(12_001);
+      expect(playback).toHaveLength(3);
+
+      await page.evaluate(() => window.setAirPlayTarget(false));
+      await expect(page.getByTestId('playback-source')).toHaveText('TorBox');
+      await page.getByRole('button', { name: 'Close player' }).tap();
+      await expect
+        .poll(() => airPlayReports.find((report) => report.kind === 'airplay'))
+        .toMatchObject({ kind: 'airplay', reached: 'started', delivery: 'direct' });
+    } catch (error) {
+      await savePageTraces();
+      throw error;
+    } finally {
+      contexts.length = 0;
+      await browser.close();
+    }
+  });
+
+  test('a receiver-safe TorBox stream that also stalls falls back once to Den Remux', async () => {
+    const browser = await webkit.launch();
+    try {
+      const page = await (await iphone(browser, 'en-US', { airPlay: true })).newPage();
+      const playback = await guestPlayer(page, {
+        originalLanguage: 'en',
+        hearth: (body) => {
+          if (body.directFailed) return { json: remuxAnswer };
+          if (body.player === 'airplay' && body.filename)
+            return {
+              status: 409,
+              json: {
+                error: 'direct_unavailable',
+                cause: 'torbox_receiver_unsupported',
+              },
+            };
+          return { json: torboxAnswer };
+        },
       });
       await page.clock.install();
       await page.evaluate(() => {
@@ -462,17 +560,84 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
       });
 
       await page.clock.runFor(12_001);
-      await expect.poll(() => playback.length).toBe(2);
-      expect(playback[1]).toMatchObject({ directFailed: true, filename: 'fixture.mkv' });
-      await expect(page.locator('.player video')).toHaveAttribute('controls', '');
-      await expect(page.locator('.player nav.web-transport')).toHaveCount(0);
+      await expect.poll(() => playback.length).toBe(3);
+      await page.clock.runFor(12_001);
+      await expect.poll(() => playback.length).toBe(4);
+      expect(playback[3]).toMatchObject({ directFailed: true, filename: 'fixture.mkv' });
 
       await page.evaluate(() => window.setAirPlayTarget(false));
       await expect(page.getByTestId('playback-source')).toHaveText('Den Remux');
-      await page.getByRole('button', { name: 'Close player' }).tap();
-      await expect
-        .poll(() => airPlayReports.find((report) => report.kind === 'airplay'))
-        .toMatchObject({ kind: 'airplay', reached: 'started', delivery: 'remux' });
+    } catch (error) {
+      await savePageTraces();
+      throw error;
+    } finally {
+      contexts.length = 0;
+      await browser.close();
+    }
+  });
+
+  test('Remember my choice never changes a selected TorBox stream to Den Remux', async () => {
+    const browser = await webkit.launch();
+    try {
+      const page = await (await iphone(browser, 'en-US', { airPlay: true })).newPage();
+      const playback = await guestPlayer(page, {
+        originalLanguage: 'en',
+        playbackSourcePolicy: 'remember',
+        hearth: (body) => {
+          if (body.directFailed) return { json: remuxAnswer };
+          if (body.player === 'airplay' && body.filename)
+            return {
+              status: 409,
+              json: {
+                error: 'direct_unavailable',
+                cause: 'torbox_receiver_unsupported',
+              },
+            };
+          return { json: torboxAnswer };
+        },
+      });
+
+      // Establish an explicit last choice through the real Source menu: TorBox -> Remux -> TorBox.
+      await revealControls(page);
+      await openOptionsPage(page, 'Source');
+      const preferenceBatch = (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname.endsWith('/batch');
+      const [rememberedRemux] = await Promise.all([
+        page.waitForResponse(preferenceBatch, { timeout: 30_000 }),
+        page.getByRole('menuitem', { name: 'Switch to Den Remux' }).tap(),
+      ]);
+      expect(rememberedRemux.ok()).toBe(true);
+      await expect(page.getByTestId('playback-source')).toHaveText('Den Remux', {
+        timeout: 30_000,
+      });
+      await revealControls(page);
+      await openOptionsPage(page, 'Source');
+      const [rememberedTorBox] = await Promise.all([
+        page.waitForResponse(preferenceBatch, { timeout: 30_000 }),
+        page.getByRole('menuitem', { name: 'Switch to TorBox' }).tap(),
+      ]);
+      expect(rememberedTorBox.ok()).toBe(true);
+      await expect(page.getByTestId('playback-source')).toHaveText('TorBox', {
+        timeout: 30_000,
+      });
+      expect(playback).toHaveLength(3);
+
+      await page.clock.install();
+      await page.evaluate(() => {
+        window.holdAirPlayMediaClock();
+        window.setAirPlayAvailability('available');
+        window.setAirPlayTarget(true);
+      });
+      await page.clock.runFor(12_001);
+      await expect.poll(() => playback.length).toBe(5);
+      await page.clock.runFor(12_001);
+      await expect(page.getByTestId('playback-source')).toHaveText('Source');
+      expect(playback).toHaveLength(5);
+      expect(playback.slice(3)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ player: 'airplay', directOnly: true })]),
+      );
+      expect(playback.slice(3).some((request) => request.directFailed)).toBe(false);
     } catch (error) {
       await savePageTraces();
       throw error;
@@ -516,6 +681,8 @@ test.describe('the delivery stamp on an iPhone, through the real app', () => {
     const browser = await webkit.launch();
     try {
       const page = await (await iphone(browser, 'sv-SE')).newPage();
+      // Before the page loads, so the controls' hide timer is on the clock `swedishSourceSheet` holds.
+      await page.clock.install();
       // Hearth with Den Remux only: TorBox alone is refused bare, with no TorBox failure behind it.
       const playback = await guestPlayer(page, {
         originalLanguage: 'he',

@@ -91,6 +91,56 @@ everything the committed code imports is committed too.
 
 ## Bundle budget records
 
+- Optional title-facts recovery (#1270) was measured on matched production builds at base `a819734f` and the
+  final repair: ordinary browser startup moves 203,991 → 203,986 gzip bytes (-5), while the complete graph moves
+  878,272 → 879,947 (+1,675). Independently lazy Spanish/Swedish catalogs account for +68, so the complete
+  non-translation budget graph moves 105,161 → 106,768 (+1,607). The existing lazy Detail JS/CSS accounts for
+  +834 and the existing content-service Worker for +807; unrelated minification changes offset the remainder.
+  Recovery owns partial-lane presentation, focus restoration and exact-title/region/locale/profile cancellation in
+  Detail, while producer validation, selective provider calls and the bounded wire contract must remain in the
+  Worker. Both are already lazy boundaries; splitting either again would add a request during detail failure or
+  Worker startup without removing the complete graph, and EN/ES/SV copy is already catalog-lazy. No dependency,
+  polling, timer, persisted state or healthy-path provider request is added. Allow the smallest 128-byte boundary,
+  106,880, preserving 112 bytes of margin after the previous budget's 55-byte reserve.
+- The truthful Apple TV diagnostics handoff for Den #538 was measured on matched production builds at base
+  `9783e49c` and the final repair: ordinary browser startup moved 204,013 → 203,991 gzip bytes (-22), while the
+  complete graph moved 878,206 → 878,272 (+66). Independently lazy Spanish/Swedish catalogs account for +51, so
+  the complete non-translation graph moves 105,146 → 105,161 (+15) and remains below the existing 105,216 ceiling
+  with 55 bytes of margin. The copy was consolidated to one short sentence after a first draft crossed the budget;
+  no correctness text can be removed without again implying an upload/share route or correlated support id that
+  does not exist. It stays in the existing lazy Settings chunk and existing lazy locale catalogs. Another dynamic
+  import would add a request to render one paragraph and cannot reduce the complete graph. No budget changes are
+  required, and no request, timer, listener, storage, dependency or startup work is added.
+- Canonical provider-variant routing (#1271) was measured on matched production builds at base `320867eb` and the
+  final repair: ordinary browser startup moved 203,925 → 204,013 gzip bytes (+88), while the complete graph moved
+  877,726 → 878,206 (+480); translation catalogs are unchanged at 47,270, so the complete non-translation graph
+  moves 104,666 → 105,146. The existing lazy Detail chunk accounts for +164 bytes, its existing services chunks for
+  +155 net, the lazy Settings navigation for +39, and the eager Library/app shell for +80, with minification changes
+  elsewhere accounting for the remainder. Browser Detail, Home and hover priming reuse the profile-owned,
+  region-and-language-keyed service-directory cache to collapse raw provider variants onto one canonical route;
+  it adds no per-badge request, polling, timer, listener, dependency, persisted state or private diagnostic. A
+  directory miss/failure leaves the truthful raw badge non-routable and retains the existing external JustWatch
+  handoff. LG/webOS and supported Samsung/Tizen compile the same noninteractive badge presentation and do not ask
+  the directory. The normalization and request must stay in the existing lazy Detail/services boundary: moving
+  them eager would spend more startup bytes, while another dynamic import would add a request before the badge can
+  become usable and cannot reduce the complete graph. Home's small eager locale-generation fence must remain beside
+  the existing top-level provider-row readiness state: moving it into lazy HomeCatalogue would duplicate or delay
+  the same directory authority needed by radar rows and their captions. No correctness branch can be removed
+  without restoring an invented variant route, stale-language publication, duplicate request or duplicate badge.
+  The complete-graph ceiling therefore advances from 104,704 to 105,216, the smallest 128-byte boundary that
+  contains the matched build, retaining 70 bytes; the independent startup and translation ceilings remain
+  unchanged.
+- Native guest-administration handoff (#536) was measured on matched production builds at base `5f7d4ac6` and the
+  repair. The ordinary browser startup graph moved 203,915 → 203,925 gzip bytes (+10), while its complete graph
+  moved 877,552 → 877,726 (+174); independently lazy translation catalogs account for +211, so the complete
+  non-translation graph shrinks 104,703 → 104,666 and remains under the existing 104,704 ceiling. On reduced
+  Tizen 3, the complete JS graph moves 2,413,572 → 2,413,984 (+412): the already lazy Settings chunk accounts for
+  +223, the Spanish/Swedish catalogs for +206, and the two startup chunks together move 233,442 → 233,443 (+1).
+  The focusable handoff is compiled only for the deliberately reduced Tizen target; ordinary Browser, LG/webOS,
+  and supported Samsung/Tizen retain their existing full guest-administration surface. It adds no dependency,
+  request, timer, listener, persisted state or secret. The row belongs in the existing lazy Settings surface, and
+  splitting its three short strings or one focusable row behind another dynamic import would add a request at the
+  recovery handoff without reducing the complete graph. No budget changes are required.
 - Kid direct-read authority (#1221) was measured on the current-main merge build before and after consolidating its
   internal admission result from three repeated strings to `boolean | null`: startup moved 203,815 → 203,804 gzip
   bytes (baseline delta 7,419 → 7,408) and the complete non-translation graph moved 101,388 → 101,377 bytes.
@@ -126,6 +176,52 @@ everything the committed code imports is committed too.
   reduce the isolation gate's complete-graph accounting and would add a request before the first session lookup. The
   startup ceiling therefore advances to 7,552 bytes above baseline (83 retained), and the complete non-translation
   ceiling to the next useful 128-byte boundary, 103,040 (169 retained); the translation ceiling is unchanged.
+  Bounding the shared binge console records then moves the matched production build's startup 203,797 → 203,812
+  gzip bytes and complete non-translation graph 101,667 → 101,700, retaining 7 and 60 bytes respectively without
+  another budget change;
+  the existing lazy Player JS/CSS pair itself shrinks by 16 bytes. The helper remains in the Player-only binge
+  module and adds no import, request, timer or listener; another lazy boundary would add a request without reducing
+  the complete graph.
+- Watchlist desired-state Retry (#499) was measured on matched production builds at base `6e5bce2d` and the repair:
+  startup moved 203,801 → 203,799 gzip bytes, while the complete non-translation graph moved 101,684 → 102,327
+  bytes (+643). The existing lazy Watchlist JS/CSS pair accounts for 642 bytes of the delta (4,952 → 5,594); the
+  selected-language failure copy adds 23 gzip bytes across the independently lazy Spanish/Swedish catalogs, and the
+  test fixture/E2E do not ship. The repair reuses the existing failure and `Try again` presentation, stores only the
+  latest refused desired action while that exact card/session remains presented, restores focus after recovery, and
+  adds no dependency, request, polling, timer or healthy-path work. Its UI and authority lifetime must stay beside
+  the already lazy Watchlist surface: moving it eager would spend startup bytes, while another dynamic import would
+  add a request at the moment recovery is needed and cannot reduce the complete graph. No production code or data
+  was available to remove without losing the localized failure, stale-result, focus or retry contract. The ceiling
+  therefore advances from 101,760 to 102,400, the next 128-byte boundary, retaining 73 bytes; the independent
+  startup and translation ceilings remain unchanged.
+- Household-sharing escrow recovery (#1146) was measured on matched production builds at base `e099edbd` and the
+  repair: startup moved 203,801 → 203,870 gzip bytes (+69), while the complete graph moved 875,858 → 876,745
+  and its independently accounted translation catalogs moved 46,557 → 46,684, leaving the non-translation graph
+  829,301 → 830,061 (+760). The existing lazy Settings chunk accounts for +761 bytes and the already shared lazy
+  grants module for +98; the initial app chunk shrinks by 7 and minification changes elsewhere offset the remainder.
+  The repair adds no dependency, polling, timer or healthy-path request: its extra readback and retry occur only
+  after an automatic escrow write fails. The authority lifetime, durable readback, visible recovery and localized
+  notice must stay with the existing lazy Sharing settings, while the grants result contract is shared by that
+  surface and its tests. Moving either behind another dynamic import would add a request on an already-failing
+  recovery path and cannot reduce the complete-graph total; translation copy already uses the lazy locale catalogs.
+  No production branch can be removed without losing a reviewed failure, refusal, stale-authority or retry outcome.
+  The complete-graph ceiling therefore advances from 103,680 to 104,320, the next 128-byte boundary, retaining 49
+  bytes on the matched build; the independent startup and translation ceilings remain unchanged.
+- Subtitle-timing profile localization (#1167) was measured on matched production builds at base `c78408e9` and
+  the rebased repair: startup moved 203,870 → 203,915 gzip bytes (+45), while the complete graph moved 876,745
+  → 877,552 and its independently accounted translation catalogs moved 46,684 → 47,059, leaving the
+  non-translation graph 830,061 → 830,493 (+432). The existing lazy Player chunk accounts for +202 bytes, the
+  existing shared i18n runtime for +104, and the Spanish and Swedish lazy catalogs for +185 and +186 respectively;
+  remaining minification changes account for the balance. The repair adds no dependency, request, polling,
+  persistence, cue-tick, decoder or media-reload work. One formatter is retained only for the current profile
+  language and replaced on language change; result expiry remains one bounded existing timer. Timing copy and
+  locale-number formatting must be available synchronously inside the already lazy Player surface, while Spanish
+  and Swedish copy already lives in their lazy catalogs. Another dynamic import would add a request while the HUD
+  is open and cannot reduce the complete-graph total; moving the code eager would spend startup bytes. No reviewed
+  localization, accessible-live-value, stale-language or falsey-result branch can be removed without losing the
+  contract. The complete-graph ceiling therefore advances from 104,320 to 104,704, the smallest 128-byte boundary
+  that contains the matched build, retaining 1 byte; the independent startup and translation ceilings remain
+  unchanged.
 
 ## Testing
 

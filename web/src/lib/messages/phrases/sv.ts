@@ -269,6 +269,8 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
     'Det gick inte att spara koden. Kontrollera att den här enheten är ansluten till ditt nätverk.',
   'Couldn’t save that. Check that this device is on your network, then confirm again.':
     'Det gick inte att spara. Kontrollera att den här enheten är ansluten till ditt nätverk och bekräfta igen.',
+  'Couldn’t save that. Check that this device is on your network.':
+    'Det gick inte att spara. Kontrollera att den här enheten är ansluten till ditt nätverk.',
   'Couldn’t save that. Check your connection and try again.':
     'Det gick inte att spara. Kontrollera anslutningen och försök igen.',
   'Couldn’t start that download. Try again.': 'Hämtningen kunde inte startas. Försök igen.',
@@ -285,6 +287,8 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'Couldn’t load this title from TMDB.': 'Det gick inte att ladda den här titeln från TMDB.',
   'Couldn’t load your settings.': 'Det gick inte att ladda dina inställningar.',
   'Couldn’t make the file. Please try again.': 'Det gick inte att skapa filen. Försök igen.',
+  'Couldn’t open household sharing. Try again.':
+    'Det gick inte att öppna hushållets delning. Försök igen.',
   'Couldn’t open your library': 'Det gick inte att öppna ditt bibliotek',
   'Couldn’t reach the service directory. Check your connection and try again.':
     'Det gick inte att nå tjänstekatalogen. Kontrollera din anslutning och försök igen.',
@@ -795,8 +799,10 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   rating: 'betyg',
   Ratings: 'Betyg',
   'Ratings shown': 'Betyg visas',
-  'Re-sync audio & video': 'Synkronisera om ljud och video',
-  'Re-sync with audio': 'Synkronisera om med ljud',
+  'Re-sync audio & video': 'Synkronisera om ljud och bild',
+  'Re-sync with audio': 'Synkronisera om med ljudet',
+  'Re-syncing audio & video…': 'Synkroniserar om ljud och bild…',
+  'Re-syncing subtitles with audio…': 'Synkroniserar om undertexter med ljudet…',
   'Ready to play': 'Klar att spela',
   Reality: 'Verkligheten',
   'Recent searches': 'Senaste sökningar',
@@ -880,6 +886,11 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'Self Harm': 'Självskada',
   'Send them this link, or the code to paste under Settings › Sharing.':
     'Skicka den här länken till dem eller koden att klistra in under Inställningar › Delning.',
+  'Manage guests in a supported browser': 'Hantera gäster i en webbläsare som stöds',
+  'Guest administration is not available on this TV':
+    'Gästadministration är inte tillgänglig på den här TV:n',
+  'In Den on a browser linked to this household, open Settings › Sharing to invite, extend, limit, relink, or revoke a guest.':
+    'Öppna Inställningar › Delning i Den i en webbläsare som är länkad till hushållet för att bjuda in, förlänga, begränsa, länka om eller återkalla en gäst.',
   'Serial Killer': 'Seriemördare',
   'Serial Killers': 'Seriemördare',
   Series: 'Serier',
@@ -949,6 +960,9 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   Social: 'Social',
   'Someone shared their Den addons with you. Accepting lets this browser use them to find and play things. You can leave it any time under Settings › Sharing.':
     'Någon delade sina Den-tillägg med dig. Om du accepterar kan den här webbläsaren använda dem för att hitta och spela saker. Du kan lämna det när som helst under Inställningar › Delning.',
+  'Some guest sharing settings may be out of date.':
+    'Vissa inställningar för gästdelning kan vara inaktuella.',
+  'Some title details couldn’t be loaded.': 'Vissa titeldetaljer kunde inte läsas in.',
   'Something went wrong on this page.': 'Något gick fel på den här sidan.',
   'Sort people': 'Sortera folk',
   Sources: 'Källor',
@@ -980,7 +994,10 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   Source: 'Källa',
   'Start over': 'Börja om',
   Stream: 'Ström',
+  'Subtitles could not be re-synced. Your current timing is unchanged.':
+    'Det gick inte att synkronisera om undertexterna. Din nuvarande synkronisering är oförändrad.',
   'Subtitles on or off': 'Undertexter på eller av',
+  'Subtitles re-synced': 'Undertexter har synkroniserats om',
   Unmute: 'Slå på ljudet',
   string: 'sträng',
   'Subtitle timing': 'Timing för undertexter',
@@ -1001,6 +1018,7 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   Telugu: 'Telugu',
   'Terms of Use': 'Användarvillkor',
   Thai: 'Thai',
+  'That didn’t work. Try again in a moment.': 'Det fungerade inte. Försök igen om en stund.',
   'That file has no viewing history in it.': 'Den filen har ingen visningshistorik.',
   'That code collided with another. Make a new one.':
     'Den koden kolliderade med en annan. Skapa en ny.',
@@ -1016,8 +1034,8 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'That PIN didn’t match, or the change couldn’t be saved.':
     'PIN-koden stämde inte, eller så gick det inte att spara ändringen.',
   'That PIN didn’t match.': 'PIN-koden stämde inte.',
-  'The Apple TV’s own diagnostics — plugin health, recent log events, a report to share — are on the TV, under Settings › Advanced › Diagnostics.':
-    'Apple TV:s egen diagnostik – plugin-tillstånd, senaste logghändelser, en rapport att dela – finns på TV:n under Inställningar › Avancerat › Diagnostik.',
+  'Apple TV diagnostics — plugin health, recent log events, and an on-screen report — are under Settings › Advanced › Diagnostics. This on-screen report is not uploaded or linked to a support ID.':
+    'Apple TV-diagnostik – plugin-tillstånd, senaste logghändelser och en rapport på skärmen – finns under Inställningar › Avancerat › Diagnostik. Rapporten på skärmen laddas inte upp eller kopplas till ett support-ID.',
   'The Cloudflare Access service token that lets an Apple TV in another home reach your plugins. Enter it once; it syncs through your library.':
     'Cloudflare Access-tjänsttoken som låter en Apple TV i ett annat hem nå dina plugins. Ange det en gång; det synkroniseras genom ditt bibliotek.',
   'The code’s last four characters': 'Kodens sista fyra tecken',
@@ -1081,6 +1099,7 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   time: 'tid',
   'Time Travel': 'Tidsresor',
   times: 'gånger',
+  'Title details loaded.': 'Titeldetaljerna har lästs in.',
   'Titles will stop playing from your own library, on every device.':
     'Titlar kommer att sluta spelas från ditt eget bibliotek, på alla enheter.',
   tmdb: 'tmdb',

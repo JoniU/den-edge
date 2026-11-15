@@ -7,12 +7,14 @@
   import type { Title } from '../src/lib/library';
   import { createWorkerServiceSession } from '../src/lib/libraryServiceFactory';
   import { isInterfaceLanguage } from '../src/lib/interfaceLanguage';
+  import { setInterfaceLanguage } from '../src/lib/i18n.svelte';
   import { rememberGrant } from '../src/lib/relayFetch';
   import { tabName } from '../src/lib/tabName.svelte';
   import { PlaybackCursor } from '../src/lib/reel';
 
   const query = new URLSearchParams(location.search);
   const startsClosed = query.has('startClosed');
+  const languageControls = query.has('languageControls');
   const originalLanguage = query.get('originalLanguage') ?? undefined;
   const title: Title = {
     // `?series`: an episode, whose season the player can describe the next one from.
@@ -28,11 +30,23 @@
     playbackQuery === 'managed' ? '/den/config/playback' : (playbackQuery ?? undefined);
   const subtitleLanguage = query.get('subtitleLanguage') ?? undefined;
   const requestedInterfaceLanguage = query.get('interfaceLanguage');
-  const interfaceLanguage = isInterfaceLanguage(requestedInterfaceLanguage)
+  const initialInterfaceLanguage = isInterfaceLanguage(requestedInterfaceLanguage)
     ? requestedInterfaceLanguage
-    : undefined;
+    : 'en';
+  let interfaceLanguage = $state(initialInterfaceLanguage);
+
+  function replaceInterfaceLanguage(language: 'en' | 'es' | 'sv') {
+    interfaceLanguage = language;
+    void setInterfaceLanguage(language);
+  }
+  replaceInterfaceLanguage(initialInterfaceLanguage);
   const shownSubtitleLanguages = query.get('shownSubtitles')?.split(',').filter(Boolean);
   const maxSubtitlesPerLanguage = Number(query.get('subtitlesPerLanguage')) || undefined;
+  const playbackSourcePolicy = query.get('sourcePolicy') === 'remember' ? 'remember' : 'best';
+  const preferredPlaybackSource =
+    query.get('preferredSource') === 'torbox' || query.get('preferredSource') === 'den-remux'
+      ? (query.get('preferredSource') as 'torbox' | 'den-remux')
+      : undefined;
   const castPlayMs = Number(query.get('castPlayMs')) || undefined;
   const receiptBoundary = query.has('receiptBoundary');
   const receiptDelayMs = Number(query.get('receiptDelayMs')) || 0;
@@ -107,6 +121,8 @@
     {subtitleLanguage}
     {shownSubtitleLanguages}
     {maxSubtitlesPerLanguage}
+    {playbackSourcePolicy}
+    {preferredPlaybackSource}
     subtitles={[]}
     resume={{ fraction: resumeSeconds ? resumeSeconds / 60 : 0, seconds: resumeSeconds }}
     next={hasNext ? 'S1 · E2' : undefined}
@@ -143,6 +159,16 @@
 {/if}
 {#if startsClosed}
   <button type="button" onclick={() => (open = true)}>Open fixture player</button>
+{/if}
+{#if languageControls}
+  {#each ['en', 'es', 'sv'] as language (language)}
+    <button
+      type="button"
+      data-testid={`interface-language-${language}`}
+      onclick={() => replaceInterfaceLanguage(language as 'en' | 'es' | 'sv')}
+      >Use {language} interface</button
+    >
+  {/each}
 {/if}
 <output data-testid="player-close-count" hidden>{closeCount}</output>
 <output data-testid="receipt-settings-count" hidden>{receiptSettingsCount}</output>

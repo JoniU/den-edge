@@ -31,7 +31,7 @@
   import { hlsConfig } from '../lib/hlsConfig';
   import { retryWithoutHint } from '../lib/ipv4';
   import type { Title } from '../lib/library';
-  import type { InterfaceLanguage } from '../lib/interfaceLanguage';
+  import { interfaceLocale, type InterfaceLanguage } from '../lib/interfaceLanguage';
   import type { Episode as EpisodeDetail } from '../lib/detail';
   import { PLAYBACK_PROGRESS_SAVE_MS, PlaybackProgressReporter } from '../lib/playbackProgress';
   import { playable, withoutRefused, type Playable } from '../lib/playable';
@@ -123,6 +123,12 @@
   import { startPlayback, type PlaybackCause, type PlaybackWant } from '../lib/playback';
   import { directRecovery } from '../lib/playbackRecovery';
   import { checkSubtitleResync, resyncSubtitle } from '../lib/subtitleResync';
+  import {
+    hasSubtitleResyncNotice,
+    scheduleNoticeExpiry,
+    subtitleResyncNoticeText,
+    type SubtitleResyncNotice,
+  } from '../lib/subtitleResyncNotice';
   import type { MenuItem } from '../lib/titleActions';
   import {
     activeAt,
@@ -132,7 +138,14 @@
     type SkipKind,
     type SkipSegment,
   } from '../lib/skipdb';
-  import { bingeGroupFor, BoundedLookup, continuationPrefetch, shouldWarmNext } from '../lib/binge';
+  import {
+    bingeGroupFor,
+    BoundedLookup,
+    continuationPrefetch,
+    reportNextDetailFailure,
+    reportNextPrefetch,
+    shouldWarmNext,
+  } from '../lib/binge';
   import { fetchSourceList, prepareSource, type SourceListResult } from '../lib/titleSources';
   import type { Routes } from '../lib/routes';
   import { titleAllowed } from '../lib/playGuard';
@@ -181,6 +194,8 @@
     shownSubtitleLanguages,
     maxSubtitlesPerLanguage = 3,
     autoSkip = false,
+    playbackSourcePolicy = 'best',
+    preferredPlaybackSource,
     resume,
     next,
     nextEpisode,
@@ -188,6 +203,7 @@
     onprogress,
     onfinalprogress,
     onmanagedplayback,
+    onplaybacksourcepreference,
     playbackReceiptHandoffAsOwner,
     onplaybackreceipthandoff,
     onnext,
@@ -222,6 +238,9 @@
     maxSubtitlesPerLanguage?: number;
     /** Settings › Playback's "Auto-skip intros & credits". A Skip button shows either way. */
     autoSkip?: boolean;
+    /** Best available may cross sources during recovery; remember retains the viewer's last explicit choice. */
+    playbackSourcePolicy?: 'best' | 'remember';
+    preferredPlaybackSource?: 'torbox' | 'den-remux';
     /** Where the library says this was left. */
     resume: { fraction: number; seconds?: number };
     /** The episode after this one, as `S2 · E4`, when there is one. */
@@ -236,6 +255,7 @@
     onfinalprogress: (fraction: number, seconds: number, at: Episode, playing: false) => void;
     /** Establish the household completion-receipt authority before the first managed playback intent crosses Edge. */
     onmanagedplayback?: (signal: AbortSignal) => Promise<PlaybackReceiptPreparation>;
+    onplaybacksourcepreference?: (source: 'torbox' | 'den-remux') => void;
     /** Whether the authorized recovery opens Connections directly or first switches to Owner. */
     playbackReceiptHandoffAsOwner: boolean;
     /** Leaves playback only after handing terminal progress to the host's durable recovery surface. */
@@ -263,6 +283,20 @@
   type Episode = { season?: number; episode?: number };
 
   const REPORT_MS = PLAYBACK_PROGRESS_SAVE_MS;
+  let selectedPlaybackSource = $state<'torbox' | 'den-remux' | undefined>();
+  const rememberedPlaybackSource = $derived(selectedPlaybackSource ?? preferredPlaybackSource);
+
+  const preferredStartDelivery = (): 'ordinary' | 'direct' | 'fallback' =>
+    playbackSourcePolicy !== 'remember' || rememberedPlaybackSource === undefined
+      ? 'ordinary'
+      : rememberedPlaybackSource === 'torbox'
+        ? 'direct'
+        : 'fallback';
+
+  function rememberSource(source: 'torbox' | 'den-remux'): void {
+    selectedPlaybackSource = source;
+    onplaybacksourcepreference?.(source);
+  }
   /** How often a paused viewer's "still here" goes out — comfortably under den-remux's own UNATTENDED_IDLE
    * (60s), with room for a missed beat, so a deliberate pause is told apart from a closed tab. */
   const HEARTBEAT_MS = 20_000;
@@ -402,7 +436,7 @@
     torbox_dolby_vision_unsupported:
       'TorBox can’t stream this Dolby Vision release correctly, and the home player could not prepare it either. Try again or pick another release.',
     torbox_receiver_unsupported:
-      'The Chromecast can’t play this release as TorBox streams it, and the home player could not prepare it either. Try another release.',
+      'The receiver can’t play this release as TorBox streams it, and the home player could not prepare it either. Try another release.',
     torbox_refused:
       'TorBox refused to prepare this stream, and the home player could not prepare it either. Check your TorBox account, then try again.',
     torbox_playlist_unavailable:
@@ -442,6 +476,8 @@
   let airPlaySessionSecs = 0;
   let airPlayProgressTimer: ReturnType<typeof setTimeout> | undefined;
   let airPlayFallbackSession: Session | undefined;
+  /** A TorBox session selected with receiver constraints after the original direct rendition stalled on AirPlay. */
+  let airPlayReceiverSafeSession: Session | undefined;
   const AIRPLAY_DIRECT_PROGRESS_MS = 12_000;
   const AIRPLAY_DIRECT_PROGRESS_SECS = 0.5;
   let webControlsVisible = $state(true);
@@ -1109,37 +1145,35 @@
   /** The resume notice stays longer: it carries Start over. */
   const RESUME_NOTICE_MS = 6_000;
   /** Clear a notice NOTICE_MS after `shown` says it is up; a new text starts the time over. */
-  function fades(shown: () => unknown, clear: () => void, ms = NOTICE_MS) {
+  function fades(shown: () => boolean, clear: () => void, ms = NOTICE_MS) {
     $effect(() => {
-      if (!shown()) return;
-      const timer = setTimeout(clear, ms);
-      return () => clearTimeout(timer);
+      return scheduleNoticeExpiry(shown(), clear, ms);
     });
   }
   fades(
-    () => volumeNotice,
+    () => volumeNotice !== null,
     () => (volumeNotice = null),
   );
   fades(
-    () => resumedAt,
+    () => resumedAt !== null,
     () => (resumedAt = null),
     RESUME_NOTICE_MS,
   );
   fades(
-    () => swapped,
+    () => swapped !== null,
     () => (swapped = null),
   );
   // Only once the switch has landed: "trying another release…" stays until it says where it went.
   fades(
-    () => !switching && autoSwitch,
+    () => !switching && autoSwitch !== null,
     () => (autoSwitch = null),
   );
   fades(
-    () => struggling,
+    () => struggling !== null,
     () => (struggling = null),
   );
   fades(
-    () => unchanged,
+    () => unchanged !== null,
     () => (unchanged = null),
   );
   // A terminal result replaces progress feedback. In particular, a direct URL can be accepted and then fail before
@@ -1223,7 +1257,7 @@
       { audioTrack?: number; subtitleTrack?: number; filename: string } | undefined = chosenRelease
       ? { filename: chosenRelease }
       : undefined,
-    extra: Pick<Want, 'exclude' | 'transcode' | 'fitsOnly' | 'maxBitrate'> = {},
+    extra: Pick<Want, 'exclude' | 'transcode' | 'fitsOnly' | 'maxBitrate' | 'player'> = {},
     replacing?: Session,
     delivery: 'ordinary' | 'refresh' | 'fallback' | 'direct' = 'ordinary',
     retryNotice: string | null = null,
@@ -1673,7 +1707,14 @@
     stallCount = 0;
     stalledMs = 0;
     stallSince = undefined;
-    hold = result.prebuffer ? new PrebufferHold(result.prebuffer, performance.now()) : null;
+    hold = result.prebuffer
+      ? new PrebufferHold(
+          result.prebuffer,
+          performance.now(),
+          result.prebufferLead,
+          result.segments,
+        )
+      : null;
     startsIn = null;
     // For the startup timing line (den-edge#234's "Findings"), logged once this session's first frame arrives.
     // `Date.now()` throughout (`startupAskedAt`'s own clock), never mixed with `performance.now()`'s epoch.
@@ -2034,7 +2075,12 @@
     endSession(current);
     session = null;
     showTransition('Resuming…');
-    void begin({ filename: current.release.filename });
+    void begin(
+      { filename: current.release.filename },
+      {},
+      undefined,
+      current.external ? 'direct' : 'fallback',
+    );
   }
 
   async function letIn(event: SubmitEvent) {
@@ -2050,12 +2096,12 @@
     }
     key = '';
     continueManualSwitch(pending, 'Opening playback…');
-    void begin();
+    void begin(undefined, {}, undefined, preferredStartDelivery());
   }
 
   function tryAgain() {
     showTransition('Retrying playback…');
-    void begin();
+    void begin(undefined, {}, undefined, preferredStartDelivery());
   }
 
   $effect(() => {
@@ -2614,6 +2660,7 @@
       const { ready, seconds } = held.update(
         aheadIn(element.buffered, element.currentTime),
         performance.now(),
+        element.currentTime,
       );
       if (ready) {
         clearInterval(tick);
@@ -3074,6 +3121,7 @@
       } else {
         clearAirPlayProgressWatch();
         airPlayFallbackSession = undefined;
+        airPlayReceiverSafeSession = undefined;
         endAirPlaySession();
         revealWebControls();
       }
@@ -3120,6 +3168,61 @@
       return false;
     clearAirPlayProgressWatch();
     airPlayFallbackSession = current;
+    report();
+    carryPosition();
+
+    // TorBox managed HLS carries HEVC in MPEG-TS. Apple TV accepts that observed stream, but Apple's AirPlay 2 TV
+    // contract requires HEVC in fMP4 and the LG receiver consequently never advances it. Preserve the fast Apple TV
+    // path: only after a real stall ask Hearth again as a receiver. The named release is retained when receiver-safe;
+    // where it is HEVC, Hearth answers `torbox_receiver_unsupported` and the unpinned retry selects an H.264 release.
+    if (airPlayReceiverSafeSession !== current) {
+      playbackRouteLog({
+        event: 'recovery',
+        from: 'torbox',
+        to: 'torbox',
+        stage: played ? 'mid_playback' : 'startup',
+        attempt: directAttempt ?? 'initial',
+      });
+      const receiverDirect = (pick: { filename: string } | undefined) => {
+        replacementRefusal = undefined;
+        return begin(
+          pick,
+          { transcode: 'never', player: 'airplay' },
+          current,
+          'refresh',
+          null,
+          true,
+        ).catch((error: unknown): Failure => {
+          console.warn('AirPlay receiver-safe TorBox recovery got no answer.', error);
+          return 'unreachable';
+        });
+      };
+      let moved = await receiverDirect({ filename: current.release.filename });
+      if (
+        moved !== true &&
+        session === current &&
+        replacementRefusal?.cause === 'torbox_receiver_unsupported'
+      )
+        moved = await receiverDirect(undefined);
+      if (moved === true) {
+        airPlayReceiverSafeSession = session ?? undefined;
+        airPlayFallbackSession = undefined;
+        airPlayFailed = false;
+        airPlayFailReason = undefined;
+        return true;
+      }
+    }
+
+    if (
+      playbackSourcePolicy === 'remember' &&
+      rememberedPlaybackSource === 'torbox' &&
+      session === current
+    ) {
+      airPlayFailed = true;
+      airPlayFailReason = 'media_error';
+      return false;
+    }
+
     playbackRouteLog({
       event: 'recovery',
       from: 'torbox',
@@ -3127,8 +3230,6 @@
       stage: played ? 'mid_playback' : 'startup',
       attempt: directAttempt ?? 'initial',
     });
-    report();
-    carryPosition();
     const moved = await begin(
       { filename: current.release.filename },
       { transcode: 'never' },
@@ -3141,6 +3242,7 @@
       return 'unreachable';
     });
     if (moved === true) {
+      airPlayReceiverSafeSession = undefined;
       airPlayFailed = false;
       airPlayFailReason = undefined;
       return true;
@@ -3155,8 +3257,8 @@
   /**
    * WebKit can finish an AirPlay handoff even when the receiver never starts the direct media URL. The LG then
    * stays on its connected screen and emits no media error back to Safari. Preserve direct delivery for receivers
-   * such as Apple TV that advance it; only a playing target whose clock remains still for the whole bound falls
-   * back to the same release through Den Remux.
+   * such as Apple TV that advance it. A playing target whose clock remains still for the whole bound first gets a
+   * receiver-safe TorBox release; Best Available may then use Remux, while Remember My Choice never crosses sources.
    */
   function watchAirPlayDirectProgress() {
     clearAirPlayProgressWatch();
@@ -3184,7 +3286,12 @@
         Math.abs(element.currentTime - position) > AIRPLAY_DIRECT_PROGRESS_SECS
       )
         return;
-      void recoverAirPlayDirect(current);
+      void recoverAirPlayDirect(current).then((moved) => {
+        if (!moved && session === current) {
+          letGo();
+          failure = 'source';
+        }
+      });
     }, AIRPLAY_DIRECT_PROGRESS_MS);
   }
 
@@ -3796,13 +3903,13 @@
   const subtitleTimingOffset = $derived(subtitleOffset + subtitleResyncOffset);
   let subtitleResyncReady = $state(false);
   let subtitleResyncBusy = $state(false);
-  let subtitleResyncNotice = $state<string | null>(null);
+  let subtitleResyncNotice = $state<SubtitleResyncNotice>(null);
   let subtitleResyncRequest: AbortController | undefined;
   let subtitleSelectionGeneration = 0;
   let subtitleLoadFailure = $state.raw<NonNullable<Session['subtitles']>[number] | null>(null);
   const alignedUrls = new SvelteSet<string>();
   fades(
-    () => subtitleResyncNotice,
+    () => hasSubtitleResyncNotice(subtitleResyncNotice),
     () => (subtitleResyncNotice = null),
   );
 
@@ -3896,7 +4003,7 @@
       await renderTick();
       applySubtitles();
       if (previous && alignedUrls.delete(previous.url)) URL.revokeObjectURL(previous.url);
-      subtitleResyncNotice = `Subtitles re-synced · ${result.offset >= 0 ? '+' : ''}${result.offset.toFixed(1)}s`;
+      subtitleResyncNotice = result.offset;
     } catch {
       if (
         !controller.signal.aborted &&
@@ -3904,8 +4011,7 @@
         subtitleChoice === choice &&
         generation === subtitleSelectionGeneration
       )
-        subtitleResyncNotice =
-          'Subtitles could not be re-synced. Your current timing is unchanged.';
+        subtitleResyncNotice = false;
     } finally {
       clearTransition(pending);
       if (subtitleResyncRequest === controller) {
@@ -4035,6 +4141,33 @@
     subtitleOffset = Math.max(-30, Math.min(30, Math.round((subtitleOffset + change) * 2) / 2));
     avplay?.setSubtitleOffset(subtitleOffset);
     retimeSubtitles();
+  }
+
+  let subtitleOffsetFormatterLanguage: InterfaceLanguage | undefined;
+  let subtitleOffsetFormatter: Intl.NumberFormat | undefined;
+
+  /** Profile-locale output for both the compact HUD and its spoken live value. */
+  function formattedSubtitleOffset(
+    offset = subtitleTimingOffset,
+    unitDisplay: 'compact' | 'spoken' = 'compact',
+  ): string {
+    const language = i18n.language;
+    let formatter = subtitleOffsetFormatter;
+    if (!formatter || subtitleOffsetFormatterLanguage !== language) {
+      formatter = new Intl.NumberFormat(interfaceLocale(language), {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      });
+      subtitleOffsetFormatter = formatter;
+      subtitleOffsetFormatterLanguage = language;
+    }
+    const id =
+      unitDisplay === 'spoken' ? 'player.subtitleOffsetSpoken' : 'player.subtitleOffsetCompact';
+    const english = unitDisplay === 'spoken' ? '{sign}{offset} seconds' : '{sign}{offset}s';
+    return i18n.format(id, english, {
+      sign: offset >= 0 ? '+' : '',
+      offset: formatter.format(offset),
+    });
   }
 
   async function openSubtitleTiming() {
@@ -4394,7 +4527,7 @@
         nextDetail = episodes.value.find((item) => item.number === asked.episode) ?? null;
       })
       .catch((error: unknown) => {
-        if (!request.signal.aborted) console.warn('The next episode’s details didn’t load.', error);
+        if (!request.signal.aborted) reportNextDetailFailure(error);
       });
   }
 
@@ -4432,16 +4565,12 @@
         to.season,
       );
       if (!continuity) {
-        console.info(
-          `[Den binge] ${JSON.stringify({ event: 'next-prefetch', outcome: upcoming.sources ? 'no_continuity' : 'list_unavailable', season: to.season, episode: to.episode, answer: upcoming.answer?.kind })}`,
-        );
+        reportNextPrefetch(upcoming.sources ? 'no_continuity' : 'list_unavailable');
         return;
       }
       const prepared = await prepareSource(continuity.url, true, undefined, true);
       if (ended || generation !== episodeGeneration) return;
-      console.info(
-        `[Den binge] ${JSON.stringify({ event: 'next-prefetch', outcome: prepared.state, season: to.season, episode: to.episode, continuity: 'binge_group', listedCached: continuity.cached })}`,
-      );
+      reportNextPrefetch(prepared.state);
     });
   }
 
@@ -4816,6 +4945,7 @@
         if (moved === true) {
           switchCount += 1;
           lastSwitchReason = 'user';
+          rememberSource(current.external ? 'den-remux' : 'torbox');
           return;
         }
         clearTransition(pending);
@@ -4862,7 +4992,10 @@
         return false;
       })
       .then((moved) => {
-        if (moved === true) return;
+        if (moved === true) {
+          rememberSource(source);
+          return;
+        }
         clearTransition(pending);
         if (!compatibleSubtitles && !session && retry === undefined) {
           subtitleChoice = previousSubtitle;
@@ -5117,6 +5250,7 @@
       airPlaySessionSecs = 0;
       clearAirPlayProgressWatch();
       airPlayFallbackSession = undefined;
+      airPlayReceiverSafeSession = undefined;
       if (airPlayActive) {
         airPlayFunnel = 'started';
         airPlayStartedAt = performance.now();
@@ -5144,7 +5278,7 @@
     lastPosition = undefined;
     remoteTime = remoteDuration = 0;
     remotePaused = true;
-    void begin();
+    void begin(undefined, {}, undefined, preferredStartDelivery());
   }
 
   // An advance names the next episode; anything else about the title is the same.
@@ -5187,8 +5321,17 @@
   /** What playback says as it goes, in the order the TV's stack shows it. */
   const notices = $derived.by(() => {
     const list: Notice[] = [];
-    if (transitionNotice) list.push({ text: transitionNotice, quiet: true, busy: true });
-    if (subtitleResyncNotice) list.push({ text: subtitleResyncNotice, quiet: true });
+    if (transitionNotice)
+      list.push({ text: i18n.phrase(transitionNotice), quiet: true, busy: true });
+    if (hasSubtitleResyncNotice(subtitleResyncNotice))
+      list.push({
+        text: subtitleResyncNoticeText(
+          subtitleResyncNotice,
+          (english) => i18n.phrase(english),
+          (offset) => formattedSubtitleOffset(offset),
+        ),
+        quiet: true,
+      });
     const failed = subtitleLoadFailure;
     if (failed)
       list.push({
@@ -5437,18 +5580,18 @@
   }
 
   function subtitleTimingItems(): MenuItem[] {
-    const offset = `${subtitleTimingOffset >= 0 ? '+' : ''}${subtitleTimingOffset.toFixed(1)}`;
+    const offset = formattedSubtitleOffset();
     return [
       {
         kind: 'item',
-        label: i18n.format('player.adjustSubtitleTiming', 'Adjust subtitle timing ({offset}s)', {
+        label: i18n.format('player.adjustSubtitleTiming', 'Adjust subtitle timing ({offset})', {
           offset,
         }),
         onselect: openSubtitleTiming,
       },
       {
         kind: 'item',
-        label: i18n.format('player.resetSubtitleTiming', 'Reset subtitle timing ({offset}s)', {
+        label: i18n.format('player.resetSubtitleTiming', 'Reset subtitle timing ({offset})', {
           offset,
         }),
         disabled: subtitleOffset === 0,
@@ -5523,11 +5666,9 @@
         items: sourceItems,
       });
     if (current && subtitleChoice !== null)
-      page(
-        'Subtitle timing',
-        `${subtitleTimingOffset >= 0 ? '+' : ''}${subtitleTimingOffset.toFixed(1)} s`,
-        { items: subtitleTimingItems },
-      );
+      page(i18n.text('player.subtitleTiming'), formattedSubtitleOffset(), {
+        items: subtitleTimingItems,
+      });
     if (current)
       items.push({ kind: 'item', label: 'Play from beginning', onselect: playFromBeginning });
     if (desktopTransport)
@@ -5878,7 +6019,7 @@
   });
 
   $effect(() => {
-    untrack(() => void begin());
+    untrack(() => void begin(undefined, {}, undefined, preferredStartDelivery()));
     const focusBeforePlayer = document.activeElement as HTMLElement | null;
     const root = untrack(() => playerRoot);
     let initialFocusFrame: number | undefined;
@@ -6382,29 +6523,32 @@
           <section
             bind:this={subtitleTimingPanel}
             class="tv-subtitle-timing"
-            aria-label="Subtitle timing"
+            aria-label={i18n.text('player.subtitleTiming')}
             role="group"
           >
             {#if webTransport}<button type="button" onclick={() => adjustSubtitleOffset(-0.5)}
-                >Earlier</button
-              >{:else}<span>‹ Earlier</span>{/if}
-            <strong aria-live="polite"
-              >{subtitleTimingOffset >= 0 ? '+' : ''}{subtitleTimingOffset.toFixed(1)}s</strong
+                >{i18n.text('player.subtitleEarlier')}</button
+              >{:else}<span>‹ {i18n.text('player.subtitleEarlier')}</span>{/if}
+            <strong role="status" aria-label={formattedSubtitleOffset(undefined, 'spoken')}
+              >{formattedSubtitleOffset()}</strong
             >
             {#if webTransport}<button type="button" onclick={() => adjustSubtitleOffset(0.5)}
-                >Later</button
-              >{:else}<span>Later ›</span>{/if}
+                >{i18n.text('player.subtitleLater')}</button
+              >{:else}<span>{i18n.text('player.subtitleLater')} ›</span>{/if}
             {#if webTransport}
               <div class="web-timing-actions">
                 <button
                   type="button"
                   disabled={subtitleOffset === 0}
-                  onclick={() => adjustSubtitleOffset(-subtitleOffset)}>Reset</button
+                  onclick={() => adjustSubtitleOffset(-subtitleOffset)}
+                  >{i18n.text('player.subtitleReset')}</button
                 >
-                <button type="button" onclick={() => void closeSubtitleTiming()}>Done</button>
+                <button type="button" onclick={() => void closeSubtitleTiming()}
+                  >{i18n.text('player.subtitleDone')}</button
+                >
               </div>
             {:else}
-              <small>Left or right to adjust · Select to finish</small>
+              <small>{i18n.text('player.subtitleTimingInstructions')}</small>
             {/if}
           </section>
         {/if}

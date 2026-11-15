@@ -1330,6 +1330,40 @@ describe('DownloadCoordinator', () => {
     expect(asked).toEqual([`probe ${first.url}`, `prefetch ${second.url}`]);
   });
 
+  it('does not create an unhandled rejection while clearing an aborted pass', async () => {
+    const shared = testLog([stalledRow()]);
+    const aborted = new DOMException('stopped', 'AbortError');
+    let attempts = 0;
+    const queue = new DownloadCoordinator(
+      shared.log,
+      clock(),
+      {
+        ...effects(),
+        prepare: async () => {
+          attempts++;
+          if (attempts === 1) throw aborted;
+          return { state: 'preparing', progress: 0 };
+        },
+      },
+      { now: () => T0 + MINUTE, monotonicNow: () => 0 },
+    );
+    const driver = new DownloadCoordinatorDriver(queue);
+    const unhandled: unknown[] = [];
+    const observe = (reason: unknown) => {
+      if (reason === aborted) unhandled.push(reason);
+    };
+    process.on('unhandledRejection', observe);
+    try {
+      await expect(driver.run({ now: T0 + MINUTE, observedFor: 0 })).rejects.toBe(aborted);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+      await expect(driver.run({ now: T0 + MINUTE, observedFor: 0 })).resolves.toBe(true);
+    } finally {
+      process.off('unhandledRejection', observe);
+    }
+    expect(attempts).toBe(2);
+  });
+
   it('answers a refresh asked during a pass with a pass of its own, not the one in flight', async () => {
     const shared = testLog([stalledRow()]);
     const asked: string[] = [];

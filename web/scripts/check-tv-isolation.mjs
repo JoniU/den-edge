@@ -151,12 +151,14 @@ if (process.argv.includes('--capture')) {
   // (`sheetQuery`), in the `actions` chunk the poster menus load at startup (3,658 -> 3,723); the rest is the startup
   // phrase map. The player's pages, sections, current values and header are drawn in its lazy chunk instead. That left
   // no margin: raise the absolute/proportional startup caps to the next 128-byte boundary, retaining 108.
-  // Authority-scoped series-release recall adds 68 gzip bytes to startup on matched current-main/head builds
-  // (203,797 -> 203,865): a compact five-value authority tuple and the Player remount key which prevent an old
-  // profile/library/household/add-on source from publishing delayed recall. The digest, retained-memory codec and
-  // source lookup remain in the existing lazy Player chunk. Raise both caps to the next 128-byte boundary, retaining
-  // 83 bytes on this build.
-  if (initialDelta > Math.min(7552, Math.floor(baseline.initialGzip * 0.0385)))
+  // Holding a start for den-remux's media lead adds no startup code, but the lazy Player chunk's new name moves
+  // startup 9 gzip bytes (7,421 -> 7,430 on matched main/head builds) against a main 2 bytes under the proportional
+  // cap. Raise both caps to the next 128-byte boundary, retaining 122.
+  // A profile's explicit playback-source policy adds 326 gzip bytes to startup on matched current-main/head builds
+  // (203,804 -> 204,130). Its menu and AirPlay recovery remain in the existing lazy Settings/Player chunks; only the
+  // profile projection and strict cross-client codec stay in the initial graph so every host sees the same choice.
+  // Allow the next 128-byte boundary, retaining 74 bytes without a dependency, request or background task.
+  if (initialDelta > Math.min(7808, Math.floor(baseline.initialGzip * 0.0398)))
     throw new Error('Browser initial JS/CSS budget exceeded');
   // Complete UI translations are opt-in chunks: neither is fetched on the higher-priority English path. Budget
   // their compressed size separately so adding copy can never disguise growth in application code, while the
@@ -328,10 +330,29 @@ if (process.argv.includes('--capture')) {
   // next 128-byte boundary would retain only 37: 165 retained.
   // Merging the Kid direct-read authority brings the combined graph to 101,667. Its measured consolidation and
   // rejected lazy alternatives are recorded in AGENTS.md; allow the next 128-byte boundary, retaining 93.
-  // Authority-scoped series-release recall adds 1,204 gzip bytes to the complete non-translation graph on matched
-  // current-main/head builds (101,667 -> 102,871), 1,108 in the existing lazy Player chunk and 60 at startup. A new
-  // boundary cannot reduce the gate's complete-graph total and would add a request before the first session lookup;
-  // keep the synchronous authority/remount fence at startup and the implementation with Player. Allow the next
-  // useful 128-byte boundary, retaining 169 bytes for gzip variance.
-  if (coreTotalDelta > 103040) throw new Error('Browser total JS/CSS budget exceeded');
+  // Watchlist desired-state Retry adds 643 gzip bytes to the complete graph while startup shrinks by two bytes.
+  // It stays in the existing lazy Watchlist chunk; another split would add a request after failure without reducing
+  // the complete graph. Allow the next 128-byte boundary, retaining 73 bytes on the matched build.
+  // Holding a start for den-remux's media lead (`prebufferLead`), with a bit-rate countdown and a still-buffer rule
+  // that waits for an overdue segment, adds 247 gzip bytes on a local build, all in the lazy Player chunk; it adds no
+  // request, timer or storage. On top of the Retry above that is about 102,574; allow the next 128-byte boundary.
+  // The same source policy adds 1,039 gzip bytes to the non-translation graph on those matched builds. The 309-byte
+  // recovery stays in Player and the 121-byte control in SettingsNav, both already-lazy boundaries; splitting their
+  // small shared enums again would add loader overhead. Allow the next 128-byte boundary, retaining 60 bytes.
+  // Household-sharing escrow recovery adds 760 gzip bytes to the complete non-translation graph and 69 at startup
+  // on matched current-main/head builds. Its authority fencing, durable readback and Retry stay in the existing lazy
+  // Settings and grants chunks; another split would add a request on the failure path without reducing this total.
+  // Subtitle-timing profile localization then adds 432 bytes on matched c78408e9/head builds. Its synchronous HUD
+  // copy and number formatting stay in the existing lazy Player, while non-English copy is already catalog-lazy;
+  // another split adds a request without reducing this graph. Allow the smallest 128-byte boundary, retaining 1 byte.
+  // Canonical provider-variant routing and locale-owned Home/hover reuse add 480 bytes on matched current-main/head
+  // builds. Detail/services/Settings remain in their existing lazy graph; Home's 80-byte locale-generation fence
+  // stays beside the top-level provider-row readiness it owns, because moving it into lazy HomeCatalogue would
+  // duplicate or delay the same authority used by radar rows/captions. Another split adds a request before a badge
+  // becomes usable. Allow the smallest 128-byte boundary containing the reviewed graph, retaining 70 bytes;
+  // translation catalogs remain unchanged.
+  // Optional title-facts recovery then adds 1,607 bytes on matched a819734f/head builds, split between the existing
+  // lazy Detail and content-service Worker boundaries. Another split adds a request on the failure path or Worker
+  // startup and cannot reduce the complete graph. Allow the smallest 128-byte boundary, retaining 112 bytes.
+  if (coreTotalDelta > 106880) throw new Error('Browser total JS/CSS budget exceeded');
 }

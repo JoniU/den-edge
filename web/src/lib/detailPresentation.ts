@@ -248,11 +248,19 @@ export function parseRatings(body: Record<string, unknown>): Ratings | null {
   const mc = ratings.find((r) => r?.Source === 'Metacritic')?.Value?.replace(/\/100$/, '');
   return {
     imdb: score(body.imdbRating, 10),
-    votes: score(String(body.imdbVotes ?? '').replaceAll(',', ''), Number.MAX_SAFE_INTEGER),
+    votes: (() => {
+      const value = score(
+        String(body.imdbVotes ?? '').replaceAll(',', ''),
+        Number.MAX_SAFE_INTEGER,
+      );
+      return Number.isSafeInteger(value) ? value : undefined;
+    })(),
     rottenTomatoes: score(rt, 100),
     metacritic: score(mc, 100),
     awards:
-      typeof body.Awards === 'string' && !['', 'N/A'].includes(body.Awards)
+      typeof body.Awards === 'string' &&
+      body.Awards.length <= 2_048 &&
+      !['', 'N/A'].includes(body.Awards)
         ? body.Awards
         : undefined,
   };

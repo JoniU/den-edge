@@ -98,7 +98,10 @@ async function mock(page, origin, { home, reach, csp = POLICY, firstFails = fals
   await page.route(
     (url) => url.origin === origin && /^\/test\/[^/]+\.html$/.test(url.pathname),
     async (route) => {
-      const response = await route.fetch();
+      // Fetched from the loopback origin: the browsers resolve `*.localhost` themselves, but `route.fetch` runs in
+      // Node and asks the system resolver, which on some CI runners has no answer for `den.localhost`.
+      const url = new URL(route.request().url());
+      const response = await route.fetch({ url: `${LOCAL}${url.pathname}${url.search}` });
       await route.fulfill({
         response,
         headers: { ...response.headers(), 'content-security-policy': csp },

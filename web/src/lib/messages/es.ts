@@ -30,6 +30,11 @@ export const messages = {
   'settings.automaticFollowsInterface': 'Automático usa el idioma de la interfaz',
   'settings.autoSkip': 'Omitir automáticamente introducciones y créditos',
   'settings.autoplayTrailers': 'Reproducir tráileres automáticamente en los detalles',
+  'settings.playbackSource': 'Fuente de reproducción',
+  'settings.playbackSourceDetail':
+    'Elegir automáticamente o conservar la última fuente seleccionada',
+  'settings.playbackSourceBest': 'La mejor disponible',
+  'settings.playbackSourceRemember': 'Recordar mi elección',
   'settings.original': 'Original',
   'settings.automatic': 'Automático',
   'settings.off': 'Desactivados',
@@ -52,6 +57,13 @@ export const messages = {
   'common.play': 'Reproducir',
   'common.resume': 'Reanudar',
   'common.close': 'Cerrar',
+  'player.subtitleTiming': 'Sincronización de subtítulos',
+  'player.subtitleEarlier': 'Anterior',
+  'player.subtitleLater': 'Más tarde',
+  'player.subtitleReset': 'Reiniciar',
+  'player.subtitleDone': 'Listo',
+  'player.subtitleTimingInstructions':
+    'Izquierda o derecha para ajustar · Seleccionar para terminar',
   'retirement.title': 'Hay que volver a intentar limpiar la biblioteca',
   'retirement.detail':
     'Has cerrado sesión. Den todavía debe eliminar los datos cifrados de la biblioteca guardados en este dispositivo. Puedes salir con seguridad; se volverá a intentar la próxima vez.',

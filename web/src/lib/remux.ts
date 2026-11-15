@@ -125,8 +125,13 @@ export interface Session {
   subtitleSource?: 'den_subtitles';
   /** Bits a second a copy needs to start within 10 s and never run dry; null for a transcode or an unknown one. */
   need?: number | null;
-  /** Seconds to buffer before playing, on the link this browser named, so it then plays through; null or absent: none. */
+  /** Seconds to wait before playing, on the link this browser named, so it then plays through; null or absent: none. */
   prebuffer?: number | null;
+  /**
+   * Seconds of media that wait buys, buffered ahead: what the start is held for (`PrebufferHold`), the wait being only
+   * its countdown. Absent from older den-remux builds, whose hold is on `prebuffer`; null for a transcode.
+   */
+  prebufferLead?: number | null;
   /** Each segment's `[start, bytes]` of a copy: the demand the player weighs its live rate against (`switchPolicy`). */
   segments?: [number, number][] | null;
   /**
@@ -175,7 +180,7 @@ export interface Want {
   /** Bits a second a session may need, away from home (`linkLimit`): den-remux picks a release, or a transcode, that fits. */
   maxBitrate?: number;
   /** The HLS player this page chose (`nativeHls`), for den-remux's session log. */
-  player?: 'native' | 'hls.js' | 'cast';
+  player?: 'native' | 'hls.js' | 'cast' | 'airplay';
   /** TV packaging target, kept separate from the playback engine so Hearth can apply platform workarounds narrowly. */
   platform?: 'webos' | 'tizen';
   /**

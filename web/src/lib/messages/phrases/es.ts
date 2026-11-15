@@ -273,6 +273,8 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
     'No se pudo guardar el código. Comprueba que este dispositivo esté conectado a tu red.',
   'Couldn’t save that. Check that this device is on your network, then confirm again.':
     'No se pudo guardar. Comprueba que este dispositivo esté conectado a tu red y vuelve a confirmar.',
+  'Couldn’t save that. Check that this device is on your network.':
+    'No se pudo guardar. Comprueba que este dispositivo esté conectado a tu red.',
   'Couldn’t save that. Check your connection and try again.':
     'No se pudo guardar. Comprueba la conexión e inténtalo de nuevo.',
   'Couldn’t start that download. Try again.':
@@ -291,6 +293,8 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'Couldn’t load your settings.': 'No se pudo cargar tu configuración.',
   'Couldn’t make the file. Please try again.':
     'No se pudo crear el archivo. Por favor inténtalo de nuevo.',
+  'Couldn’t open household sharing. Try again.':
+    'No se pudo abrir el uso compartido del hogar. Inténtalo de nuevo.',
   'Couldn’t open your library': 'No se pudo abrir tu biblioteca',
   'Couldn’t reach the service directory. Check your connection and try again.':
     'No se pudo acceder al directorio de servicios. Comprueba tu conexión y vuelve a intentarlo.',
@@ -809,8 +813,10 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   rating: 'calificación',
   Ratings: 'Calificaciones',
   'Ratings shown': 'Calificaciones mostradas',
-  'Re-sync audio & video': 'Resincronizar audio y video',
-  'Re-sync with audio': 'Volver a sincronizar con audio',
+  'Re-sync audio & video': 'Resincronizar audio y vídeo',
+  'Re-sync with audio': 'Resincronizar con el audio',
+  'Re-syncing audio & video…': 'Resincronizando audio y vídeo…',
+  'Re-syncing subtitles with audio…': 'Resincronizando los subtítulos con el audio…',
   'Ready to play': 'Listo para reproducir',
   Reality: 'realidad',
   'Recent searches': 'Búsquedas recientes',
@@ -894,6 +900,11 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'Self Harm': 'autolesión',
   'Send them this link, or the code to paste under Settings › Sharing.':
     'Envíeles este enlace o el código para pegarlo en Configuración > Compartir.',
+  'Manage guests in a supported browser': 'Administrar invitados en un navegador compatible',
+  'Guest administration is not available on this TV':
+    'La administración de invitados no está disponible en este televisor',
+  'In Den on a browser linked to this household, open Settings › Sharing to invite, extend, limit, relink, or revoke a guest.':
+    'En Den, en un navegador vinculado a este hogar, abre Ajustes › Compartir para invitar, ampliar, limitar, volver a vincular o revocar a un invitado.',
   'Serial Killer': 'Asesino en serie',
   'Serial Killers': 'Asesinos en serie',
   Series: 'Series',
@@ -963,6 +974,9 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   Social: 'sociales',
   'Someone shared their Den addons with you. Accepting lets this browser use them to find and play things. You can leave it any time under Settings › Sharing.':
     'Alguien compartió sus complementos Den contigo. Aceptar permite que este navegador los use para buscar y reproducir cosas. Puedes dejarlo en cualquier momento en Configuración › Compartir.',
+  'Some guest sharing settings may be out of date.':
+    'Es posible que algunos ajustes para compartir con invitados estén desactualizados.',
+  'Some title details couldn’t be loaded.': 'No se pudieron cargar algunos detalles del título.',
   'Something went wrong on this page.': 'Algo salió mal en esta página.',
   'Sort people': 'ordenar personas',
   Sources: 'Fuentes',
@@ -994,7 +1008,10 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   Source: 'Fuente',
   'Start over': 'Empezar de nuevo',
   Stream: 'Emisión',
+  'Subtitles could not be re-synced. Your current timing is unchanged.':
+    'No se pudieron resincronizar los subtítulos. La sincronización actual no ha cambiado.',
   'Subtitles on or off': 'Activar o desactivar subtítulos',
+  'Subtitles re-synced': 'Subtítulos resincronizados',
   Unmute: 'Activar sonido',
   string: 'cuerda',
   'Subtitle timing': 'Tiempo de subtítulos',
@@ -1015,6 +1032,7 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   Telugu: 'telugu',
   'Terms of Use': 'Términos de uso',
   Thai: 'tailandés',
+  'That didn’t work. Try again in a moment.': 'No funcionó. Inténtalo de nuevo en un momento.',
   'That file has no viewing history in it.': 'Ese archivo no tiene historial de visualización.',
   'That code collided with another. Make a new one.':
     'Ese código coincidió con otro. Crea uno nuevo.',
@@ -1031,8 +1049,8 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   'That PIN didn’t match, or the change couldn’t be saved.':
     'Ese PIN no coincidió o no se pudo guardar el cambio.',
   'That PIN didn’t match.': 'Ese PIN no coincide.',
-  'The Apple TV’s own diagnostics — plugin health, recent log events, a report to share — are on the TV, under Settings › Advanced › Diagnostics.':
-    'Los diagnósticos propios del Apple TV (estado del complemento, eventos de registro recientes, un informe para compartir) se encuentran en el televisor, en Configuración > Avanzado > Diagnóstico.',
+  'Apple TV diagnostics — plugin health, recent log events, and an on-screen report — are under Settings › Advanced › Diagnostics. This on-screen report is not uploaded or linked to a support ID.':
+    'Los diagnósticos del Apple TV (estado del complemento, eventos de registro recientes y un informe en pantalla) están en Configuración > Avanzado > Diagnóstico. Este informe en pantalla no se carga ni se vincula a un ID de soporte.',
   'The Cloudflare Access service token that lets an Apple TV in another home reach your plugins. Enter it once; it syncs through your library.':
     'El token de servicio de acceso de Cloudflare que permite que un Apple TV en otro hogar acceda a sus complementos. Introdúzcalo una vez; se sincroniza a través de su biblioteca.',
   'The code’s last four characters': 'Los últimos cuatro caracteres del código.',
@@ -1095,6 +1113,7 @@ export const sourcePhrases: Readonly<Record<string, string>> = {
   time: 'tiempo',
   'Time Travel': 'Viaje en el tiempo',
   times: 'veces',
+  'Title details loaded.': 'Se cargaron los detalles del título.',
   'Titles will stop playing from your own library, on every device.':
     'Los títulos dejarán de reproducirse desde su propia biblioteca, en todos los dispositivos.',
   tmdb: 'tmdb',

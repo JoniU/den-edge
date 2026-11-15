@@ -39,7 +39,13 @@ const series = {
     results: {
       FI: {
         link: 'https://www.themoviedb.org/tv/9/watch',
-        flatrate: [{ provider_id: 8, provider_name: 'Netflix', logo_path: '/netflix.jpg' }],
+        flatrate: [
+          {
+            provider_id: 1796,
+            provider_name: 'Netflix Standard with Ads',
+            logo_path: '/netflix-ads.jpg',
+          },
+        ],
       },
     },
   },
@@ -60,7 +66,7 @@ const episodes = (n) => ({
       still_path: '/still.jpg',
       runtime: 48,
       air_date: n === 2 ? '2099-06-30' : '2024-01-08',
-      overview: 'This must stay hidden until the episode airs.',
+      overview: 'The investigation reaches a future turning point.',
     },
     // Due two days out: a streaming service may already have released it, so it plays like an aired one.
     ...(n === 2
@@ -90,9 +96,32 @@ const film = (id, name, year) => ({
   release_date: `${year}-01-01`,
   poster_path: '/poster.jpg',
 });
+const providerDirectory = (r, id = 8) =>
+  r.fulfill({
+    json: {
+      results: [
+        {
+          provider_id: id,
+          provider_name: 'Netflix',
+          logo_path: '/netflix.jpg',
+          display_priority: 1,
+        },
+        {
+          provider_id: 1796,
+          provider_name: 'Netflix Standard with Ads',
+          logo_path: '/netflix-ads.jpg',
+          display_priority: 9,
+        },
+      ],
+    },
+  });
 async function setup(
   page,
-  { seasonGate = Promise.resolve(), ratingsGate = Promise.resolve() } = {},
+  {
+    seasonGate = Promise.resolve(),
+    ratingsGate = Promise.resolve(),
+    answerProviderDirectory = providerDirectory,
+  } = {},
 ) {
   await guardNetwork(page);
   const requests = [];
@@ -197,6 +226,8 @@ async function setup(
   await routeTmdb(page, async (r) => {
     const path = new URL(r.request().url()).pathname;
     requests.push(path);
+    if (path.endsWith('/watch/providers/movie') || path.endsWith('/watch/providers/tv'))
+      return answerProviderDirectory(r);
     if (path.includes('/season/')) {
       const n = Number(path.split('/').at(-1));
       if (n === 2) await seasonGate;
@@ -421,15 +452,22 @@ for (const width of [390, 834, 1280])
       const upcoming = active.locator('.episode').filter({ hasText: 'Coming soon' });
       await expect(upcoming.locator('.air-date')).toContainText('2099');
       await expect(upcoming.locator('.episode-play')).toBeDisabled();
-      await expect(upcoming.locator('.overview')).toHaveCount(0);
+      await expect(upcoming.locator('.overview')).toHaveText(
+        'The investigation reaches a future turning point.',
+      );
       const upcomingMenu = upcoming.getByRole('button', {
         name: 'Options for episode 2',
         exact: true,
       });
       await upcomingMenu.click();
-      await expect(upcoming.getByRole('menuitem', { name: 'Mark watched' })).toBeVisible();
+      const markWatched = upcoming.getByRole('menuitem', { name: 'Mark watched' });
+      await expect(markWatched).toBeVisible();
       await expect(upcoming.getByRole('menuitem', { name: 'Sources', exact: true })).toHaveCount(0);
-      await upcomingMenu.click();
+      await markWatched.click();
+      await expect(upcoming.locator('.watched')).toBeVisible();
+      await expect(upcoming.locator('.overview')).toHaveText(
+        'The investigation reaches a future turning point.',
+      );
       // Within a week of its air date the episode still says when it airs, but Sources and Play work.
       const near = active.locator('.episode').filter({ hasText: 'Out early' });
       await expect(near.locator('.air-date')).toBeVisible();
@@ -508,6 +546,63 @@ test('phone promotes Sources only when it replaces unavailable playback', async 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test('provider routing retires an old locale answer and keeps failure badges named', async ({
+  page,
+}) => {
+  let releaseSwedish;
+  const swedishGate = new Promise((resolve) => (releaseSwedish = resolve));
+  let sawSwedish;
+  const swedishStarted = new Promise((resolve) => (sawSwedish = resolve));
+  let releaseSpanish;
+  const spanishGate = new Promise((resolve) => (releaseSpanish = resolve));
+  let sawSpanish;
+  const spanishStarted = new Promise((resolve) => (sawSpanish = resolve));
+  const languages = [];
+  let failDirectory = false;
+  await setup(page, {
+    answerProviderDirectory: async (route) => {
+      const language = new URL(route.request().url()).searchParams.get('language') ?? 'en';
+      languages.push(language);
+      if (failDirectory) return route.fulfill({ status: 503, body: 'directory unavailable' });
+      if (language === 'sv-SE') {
+        sawSwedish();
+        await swedishGate;
+        return providerDirectory(route, 8);
+      }
+      if (language === 'es-ES') {
+        sawSpanish();
+        await spanishGate;
+        return providerDirectory(route, 9);
+      }
+      return route.fulfill({ status: 503, body: 'directory unavailable' });
+    },
+  });
+  await page.addInitScript(() => history.replaceState(null, '', '/tv/9?language=sv'));
+  await page.goto(`${E2E_ORIGIN}/test/detail-parity.html?language=sv`);
+  await swedishStarted;
+  await page.evaluate(async () => {
+    const { setInterfaceLanguage } = await import('/src/lib/i18n.svelte.ts');
+    await setInterfaceLanguage('es');
+  });
+  const active = page.locator('[data-active="true"]');
+  releaseSwedish();
+  await spanishStarted;
+  await expect(active.locator('a.provider[href="/service/8-fi-netflix"]')).toHaveCount(0);
+  releaseSpanish();
+  await expect(active.locator('a.provider[href="/service/9-fi-netflix"]')).toBeVisible();
+  await expect(active.locator('a.provider[href="/service/8-fi-netflix"]')).toHaveCount(0);
+  expect(languages.filter((language) => language === 'sv-SE')).toHaveLength(2);
+  expect(languages.filter((language) => language === 'es-ES')).toHaveLength(2);
+
+  failDirectory = true;
+  await page.goto(`${E2E_ORIGIN}/test/detail-parity.html?language=sv`);
+  await expect(
+    active.getByRole('img', { name: 'Netflix Standard with Ads', exact: true }),
+  ).toBeVisible();
+  await expect(active.locator('a.provider')).toHaveCount(0);
+  await expect(active.locator('a.attribution')).toBeVisible();
+});
+
 test('season requests cannot overwrite a newer selection and retained detail and person filters survive history', async () => {
   const browser = await chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
@@ -527,6 +622,9 @@ test('season requests cannot overwrite a newer selection and retained detail and
     await expect(active().getByText('Season 1 premiere', { exact: true })).toBeVisible();
     await active().getByRole('tab', { name: 'Season 2', exact: true }).click();
     await expect(active().getByText('Season 2 premiere', { exact: true })).toBeVisible();
+    await expect(
+      active().locator('.episode').filter({ hasText: 'Coming soon' }).locator('.overview'),
+    ).toHaveText('The investigation reaches a future turning point.');
     expect(requests.filter((p) => p.endsWith('/season/2'))).toHaveLength(1);
     await expect(
       active().getByRole('heading', { name: 'More like this', exact: true }).getByRole('link'),
@@ -1198,4 +1296,180 @@ test('a direct episode player URL starts its exact episode and selected release'
   } finally {
     await browser.close();
   }
+});
+
+test('optional title facts retain ready detail and retry only the failed lane', async ({
+  page,
+}) => {
+  const requests = [];
+  page.on('request', (request) => requests.push(new URL(request.url()).pathname));
+  await setup(page);
+  let factsCalls = 0;
+  let studiosCalls = 0;
+  let releaseRetry;
+  const retryGate = new Promise((resolve) => (releaseRetry = resolve));
+  await page.route('**/atlas/index/studios/series/9.json*', async (route) => {
+    studiosCalls++;
+    await route.fulfill({ status: 404, json: { error: 'not_found' } });
+  });
+  await page.route('**/atlas/index/title/series/9.json*', async (route) => {
+    factsCalls++;
+    if (factsCalls === 1)
+      return route.fulfill({ status: 503, json: { error: 'temporarily_unavailable' } });
+    await retryGate;
+    await route.fulfill({
+      json: {
+        type: 'series',
+        id: 9,
+        indexed: true,
+        networks: [{ id: 'Q907311', name: 'Netflix', titles: 100 }],
+      },
+    });
+  });
+
+  await page.addInitScript(() => history.replaceState(null, '', '/tv/9?language=sv'));
+  await page.goto(`${E2E_ORIGIN}/test/detail-parity.html?language=sv`);
+  const active = page.locator('[data-active="true"]');
+  await expect(active.locator('h1')).toHaveText('The Series');
+  await expect(active.getByText('IMDb', { exact: true })).toBeVisible();
+  const alert = active.getByRole('alert').filter({
+    hasText: 'Vissa titeldetaljer kunde inte läsas in.',
+  });
+  await expect(alert).toBeVisible();
+  const retry = alert.getByRole('button', { name: 'Försök igen' });
+
+  const unrelated = (path) =>
+    path.includes('/external_ids') ||
+    path.includes('/ratings/') ||
+    path.includes('/warnings/') ||
+    path.includes('/index/studios/');
+  const unrelatedBefore = requests.filter(unrelated).length;
+  await retry.focus();
+  await retry.click();
+  await expect.poll(() => factsCalls).toBe(2);
+  await expect(retry).toBeDisabled();
+  await expect(active.getByText('IMDb', { exact: true })).toBeVisible();
+  releaseRetry();
+
+  const recovered = active.getByRole('status').filter({ hasText: 'Titeldetaljerna har lästs in.' });
+  await expect(recovered).toBeVisible();
+  await expect(recovered).toBeFocused();
+  await expect(alert).toHaveCount(0);
+  await expect(
+    active.locator('.production').first().getByRole('link', { name: 'Netflix' }),
+  ).toHaveAttribute('href', '/search?c=network-Q907311');
+  expect(studiosCalls).toBe(1);
+  expect(requests.filter(unrelated)).toHaveLength(unrelatedBefore);
+});
+
+test('terminal and ready-empty optional title facts stay quiet', async ({ page }) => {
+  await setup(page);
+  let factsCalls = 0;
+  await page.route('**/atlas/index/title/series/9.json*', async (route) => {
+    factsCalls++;
+    await route.fulfill({ status: 403, json: { error: 'forbidden' } });
+  });
+  await page.route('**/atlas/index/studios/series/9.json*', (route) =>
+    route.fulfill({ json: { studios: [] } }),
+  );
+  let movieFactsCalls = 0;
+  await page.route('**/atlas/index/title/movie/42.json*', (route) => {
+    movieFactsCalls++;
+    return route.fulfill({ json: { type: 'movie', id: 42, indexed: true } });
+  });
+
+  await page.addInitScript(() => history.replaceState(null, '', '/tv/9'));
+  await page.goto(`${E2E_ORIGIN}/test/detail-parity.html`);
+  const active = page.locator('[data-active="true"]');
+  await expect(active.locator('h1')).toHaveText('The Series');
+  await expect.poll(() => factsCalls).toBe(1);
+  await expect(active.getByText('IMDb', { exact: true })).toBeVisible();
+  await expect(active.getByRole('alert')).toHaveCount(0);
+  await page.evaluate(() => {
+    history.pushState(null, '', '/movie/42');
+    dispatchEvent(new PopStateEvent('popstate'));
+  });
+  const replacement = page.locator('[data-active="true"]');
+  await expect(replacement.locator('h1')).toHaveText('A Film');
+  await expect.poll(() => movieFactsCalls).toBe(1);
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  await expect(replacement.getByRole('alert')).toHaveCount(0);
+});
+
+test('a failed title-facts retry restores focus and a later refusal stays quiet', async ({
+  page,
+}) => {
+  await setup(page);
+  let factsCalls = 0;
+  await page.route('**/atlas/index/title/series/9.json*', (route) => {
+    factsCalls++;
+    return route.fulfill({
+      status: factsCalls < 3 ? 503 : 403,
+      json: { error: factsCalls < 3 ? 'temporarily_unavailable' : 'forbidden' },
+    });
+  });
+
+  await page.addInitScript(() => history.replaceState(null, '', '/tv/9'));
+  await page.goto(`${E2E_ORIGIN}/test/detail-parity.html`);
+  const active = page.locator('[data-active="true"]');
+  const alert = active
+    .getByRole('alert')
+    .filter({ hasText: 'Some title details couldn’t be loaded.' });
+  const retry = alert.getByRole('button', { name: 'Try again' });
+  await retry.focus();
+  await retry.press('Enter');
+  await expect.poll(() => factsCalls).toBe(2);
+  await expect(retry).toBeFocused();
+  await expect(retry).toBeEnabled();
+  await retry.press('Enter');
+  await expect.poll(() => factsCalls).toBe(3);
+  await expect(alert).toHaveCount(0);
+  await expect(active.getByRole('status').filter({ hasText: 'Title details loaded.' })).toHaveCount(
+    0,
+  );
+  await expect(active.locator('h1')).toBeFocused();
+});
+
+test('a held title-facts retry cannot publish or steal focus after title replacement', async ({
+  page,
+}) => {
+  await setup(page);
+  let seriesFactsCalls = 0;
+  let releaseRetry;
+  const retryGate = new Promise((resolve) => (releaseRetry = resolve));
+  await page.route('**/atlas/index/title/series/9.json*', async (route) => {
+    seriesFactsCalls++;
+    if (seriesFactsCalls === 1)
+      return route.fulfill({ status: 503, json: { error: 'temporarily_unavailable' } });
+    await retryGate;
+    await route.fulfill({
+      json: { type: 'series', id: 9, indexed: true, labels: { moods: ['Old title'] } },
+    });
+  });
+  await page.route('**/atlas/index/title/movie/42.json*', (route) =>
+    route.fulfill({ json: { type: 'movie', id: 42, indexed: true } }),
+  );
+
+  await page.addInitScript(() => history.replaceState(null, '', '/tv/9'));
+  await page.goto(`${E2E_ORIGIN}/test/detail-parity.html`);
+  const current = () => page.locator('[data-active="true"]');
+  const retry = current().getByRole('alert').getByRole('button', { name: 'Try again' });
+  await retry.focus();
+  await retry.click();
+  await expect.poll(() => seriesFactsCalls).toBe(2);
+  await page.evaluate(() => {
+    history.pushState(null, '', '/movie/42');
+    dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(current().locator('h1')).toHaveText('A Film');
+  const watchlist = current().getByRole('button', { name: 'Watchlist', exact: true });
+  await watchlist.focus();
+  releaseRetry();
+  await expect(current().getByRole('alert')).toHaveCount(0);
+  await expect(
+    current().getByRole('status').filter({ hasText: 'Title details loaded.' }),
+  ).toHaveCount(0);
+  await expect(watchlist).toBeFocused();
 });
