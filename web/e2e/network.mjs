@@ -101,8 +101,9 @@ export async function guardNetwork(target, origin = E2E_ORIGIN) {
       });
     if (url.origin === origin && /\/atlas\/airing$/.test(url.pathname))
       return route.fulfill({ json: airingBatch(route.request(), () => null) });
-    // A series poster's fade looks up the series' IMDb id and asks scout's stream list for one episode
-    // (`availability.svelte.ts`). Unless a spec answers, a fixture series has neither, and nothing fades.
+    // A series poster's fade resolves the series' IMDb id before batching its episode through `/availability`
+    // (`availability.svelte.ts`). Unless a spec answers the lookup, a fixture series asks nothing and never fades.
+    // Other journeys may still open a series stream list; none exists unless their spec answers it.
     const seriesProbe =
       /^\/tmdb\/3\/tv\/\d+\/external_ids$/.test(url.pathname) ||
       /\/stream\/series\/[^/]+\.json$/.test(url.pathname);

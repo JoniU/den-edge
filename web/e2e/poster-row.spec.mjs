@@ -266,11 +266,9 @@ test('scrolling back over a shelf asks scout nothing it answered, though another
   await page.close();
 });
 
-// Familjen Andersson (TMDB tv 233351, IMDb tt28784095) gets an empty stream list from every source. Its poster asks
-// scout's list for S1E1 — the list only, never a play link — and fades; a series scout lists sources for does not.
-test('a series with nothing to play fades, from one stream-list search of the episode it asks about', async ({
-  browser,
-}) => {
+// Familjen Andersson (TMDB tv 233351, IMDb tt28784095) has no stream for S1E1. Its poster asks that resolved episode
+// in the same availability batches as other posters and fades; a series with a confirmed stream does not.
+test('series posters batch their resolved episodes through availability', async ({ browser }) => {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   await guardNetwork(page);
   await routePosterArt(page);
@@ -284,17 +282,23 @@ test('a series with nothing to play fades, from one stream-list search of the ep
       json: { id, imdb_id: id === 233351 ? 'tt28784095' : id === 1399 ? 'tt0944947' : null },
     });
   });
-  await page.route('**/scout/availability', (route) =>
-    route.fulfill({ json: { availability: {} } }),
-  );
-  const lists = [];
-  await page.route('**/scout/stream/**', (route) => {
-    const url = new URL(route.request().url());
-    lists.push(decodeURIComponent(url.pathname));
+  const batches = [];
+  await page.route('**/scout/availability', (route) => {
+    const ids = route.request().postDataJSON().ids;
+    batches.push(ids);
     return route.fulfill({
-      json: url.pathname.includes('tt0944947')
-        ? { streams: [{ url: '/scout/p/ticket', title: 'Winter.Is.Coming.1080p.mkv' }] }
-        : { streams: [], den: { answerKind: 'empty', coverage: { sources: [] } } },
+      json: {
+        availability: Object.fromEntries(
+          ids.map((id) => [
+            id,
+            id === 'tt28784095:1:1'
+              ? 'unavailable'
+              : id === 'tt0944947:1:1'
+                ? 'available'
+                : 'unknown',
+          ]),
+        ),
+      },
     });
   });
   await page.goto(`${E2E_ORIGIN}/test/poster-row.html?availability`);
@@ -303,10 +307,12 @@ test('a series with nothing to play fades, from one stream-list search of the ep
   const card = (name) => row.locator('.card').filter({ hasText: name });
   await expect(card('Familjen Andersson')).toHaveClass(/\bfaded\b/);
   await expect(card('Playable series')).not.toHaveClass(/\bfaded\b/);
-  expect(lists.sort()).toEqual([
-    '/scout/stream/series/tt0944947:1:1.json',
-    '/scout/stream/series/tt28784095:1:1.json',
-  ]);
+  expect(
+    batches
+      .flat()
+      .filter((id) => id.includes(':'))
+      .sort(),
+  ).toEqual(['tt0944947:1:1', 'tt28784095:1:1']);
   await page.close();
 });
 
