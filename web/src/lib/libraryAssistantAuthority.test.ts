@@ -79,6 +79,7 @@ function device(shared: Library, randoms: string[], overrides: Partial<Assistant
     libraryId: fixed.library,
     device: DEVICE,
     settings: (name) => shared.rows.get(name),
+    acknowledgedSettings: (name) => shared.rows.get(name),
     refresh: async () => {},
     command: async (command, operationId, stamp) => {
       commands.push({ command, operationId, stamp });
@@ -418,6 +419,29 @@ test('Settings lists every grant from the row, and a revoked one joins this devi
   await device(shared, []).authority.revoke(GRANT);
   expect((await authority.grants()).grants[0]?.state).toBe('revoked');
   expect(records()!.revoked).toEqual([GRANT]);
+});
+
+test('durable revocation readback is not fooled by this device’s local refusal after a partial patch', async () => {
+  const shared = await consented();
+  let patches = 0;
+  let fail = true;
+  const { authority } = device(shared, [], {
+    patch: async (name, changes) => {
+      if (fail && ++patches === 2) throw new Error('offline between durable rows');
+      shared.patch(name, changes);
+      return [];
+    },
+  });
+
+  await expect(authority.revoke(GRANT)).rejects.toThrow('offline between durable rows');
+  // Enforcement/UI correctly joins the private refusal, but that is not household-wide durable proof.
+  expect((await authority.grants()).plays[0]?.state).toBe('revoked');
+  expect(await authority.revocationReadback(GRANT)).toBe('unverified');
+
+  fail = false;
+  expect(await authority.revoke(GRANT)).toBe('revoked');
+  expect(await authority.revocationReadback(GRANT)).toBe('revoked');
+  expect(await authority.revocationReadback('00000000000000000000000000000000')).toBe('absent');
 });
 
 test('a key reset carries no drop-box key, and every grant, read and play record revoked', async () => {

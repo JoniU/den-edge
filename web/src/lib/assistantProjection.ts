@@ -15,15 +15,14 @@ export type ProjectionBuilt = { answer: string } | { error: string };
 
 /** den-core's answer to an `assistant_projection` request. In this thread only where no Worker can be started. */
 export async function buildProjection(request: string): Promise<string> {
-  if (typeof Worker === 'undefined') {
+  if (__DEN_TV_LEGACY_JS_CORE__ || typeof Worker === 'undefined') {
     await ensureAssistantPolicy();
     return assistantAnswer(request);
   }
   let worker: Worker;
   try {
-    worker = new Worker(new URL('./assistantProjectionWorker.ts', import.meta.url), {
-      type: 'module',
-    });
+    const { projectionWorker } = await import('./assistantProjectionWorkerClient');
+    worker = projectionWorker();
   } catch (error) {
     console.warn('den: no Worker could be started for the assistant projection', error);
     await ensureAssistantPolicy();

@@ -421,6 +421,7 @@ export class LibraryLogAuthority {
         return clock.device;
       },
       settings: (name) => this.#log.settings(name),
+      acknowledgedSettings: (name) => this.#log.acknowledgedSettings(name),
       refresh: async () => void (await this.#log.refresh()),
       command: async (command, operationId, stamp) => {
         this.#asOf = stamp;
@@ -797,6 +798,11 @@ export class LibraryLogAuthority {
         return this.#libraryMetadata(query.titles);
       case 'assistant.grants':
         return { kind: 'assistant.grants', ...(await this.#assistant.grants()) };
+      case 'assistant.revocation-readback':
+        return {
+          kind: 'assistant.revocation-readback',
+          outcome: await this.#assistant.revocationReadback(query.grant),
+        };
       case 'assistant.connection':
         return {
           kind: 'assistant.connection',

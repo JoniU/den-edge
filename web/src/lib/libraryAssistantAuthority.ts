@@ -114,6 +114,8 @@ export interface AssistantPort {
   /** This device's stamp device id (16 hex). */
   readonly device: string;
   settings(name: string): SettingsRow | undefined;
+  /** The row last authenticated from den-edge, excluding this device's durable unsent projection. */
+  acknowledgedSettings(name: string): SettingsRow | undefined;
   /** Read the library log to its head. */
   refresh(): Promise<void>;
   /**
@@ -457,6 +459,37 @@ export class LibraryAssistantAuthority {
       .map((g) => g.grant);
     if (revoked.some((id) => !records.revoked.includes(id))) await this.#remember({ revoked });
     return listed;
+  }
+
+  /**
+   * Prove consent rollback from the refreshed durable rows alone. `grants()` intentionally joins this device's
+   * private refusal journal, which is correct for enforcement/UI but could mask a partial household write here.
+   */
+  async revocationReadback(grant: string): Promise<'revoked' | 'absent' | 'unverified'> {
+    await ensureAssistantPolicy();
+    await this.port.refresh();
+    let found = false;
+    for (const name of GRANT_ROWS) {
+      const row = this.port.acknowledgedSettings(name);
+      if (!row?.values[grant]?.value) continue;
+      found = true;
+      // Ask policy about each durable row independently. A revoked grant row deliberately makes the ordinary
+      // combined Settings view treat its matching read/play rows as revoked too; rollback proof instead needs to
+      // establish that every row itself was durably patched before the assistant can be allowed to retry.
+      const listed = assistantPolicy<AssistantGrantList>({
+        op: 'assistant_grants',
+        grants: name === GRANTS_ROW ? row : undefined,
+        read: name === READ_ROW ? row : undefined,
+        play: name === PLAY_ROW ? row : undefined,
+        localRevoked: [],
+        now: this.port.now(),
+      });
+      const matching = [...listed.grants, ...listed.reads, ...listed.plays].find(
+        (item) => item.grant === grant,
+      );
+      if (matching?.state !== 'revoked') return 'unverified';
+    }
+    return found ? 'revoked' : 'absent';
   }
 
   /**
