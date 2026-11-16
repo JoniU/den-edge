@@ -486,13 +486,14 @@ test('an old LAN proof cannot bless a same-id replacement generation', async () 
         load(3, 'Replacement'),
       );
     await expect.poll(() => lanGates.length).toBe(2);
+    const publicPlaylist = page.waitForRequest(
+      (request) => request.url() === `${MEDIA}${PATH}/master.m3u8`,
+    );
     lanGates[0].succeed();
     await page.waitForTimeout(0);
     lanGates[1].fail();
+    await publicPlaylist;
     await playingPast(page, 1);
-    await expect(
-      page.frameLocator('iframe[title="Den Cast player"]').locator('video'),
-    ).toHaveJSProperty('currentSrc', `${MEDIA}${PATH}/master.m3u8`);
   } finally {
     await browser.close();
   }
