@@ -367,14 +367,12 @@
     // trigger, so the menu's own key handler is not in the event path. Own that dismissal in capture too: a player
     // or another containing surface must see the same key as consumed rather than close itself as well.
     if (event instanceof KeyboardEvent && !SCROLL_KEYS.has(event.key)) {
-      if (!__DEN_TV__ && event.key === 'Escape') {
-        event.preventDefault();
-        close();
-      }
-      return;
+      if (__DEN_TV__ || event.key !== 'Escape') return;
+      event.preventDefault();
+    } else {
+      const target = event.target;
+      if (target instanceof Node && (menu?.contains(target) || trigger?.contains(target))) return;
     }
-    const target = event.target;
-    if (target instanceof Node && (menu?.contains(target) || trigger?.contains(target))) return;
     close();
   }
 
