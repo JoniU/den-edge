@@ -564,12 +564,15 @@
       fixtureJoinPresentation?: typeof joinPresentationControls;
     }
   ).fixtureJoinPresentation = joinPresentationControls;
-  // A second activity identity over the same fixture authority is enough to exercise Settings' import handoff:
-  // it has its own retained import scope while the old model's in-flight semantic reply remains real.
+  // A second activity identity over the same fixture authority exercises Settings' import handoff: it has its own
+  // retained import scope while the old model's in-flight semantic reply remains real. Keep the complete Settings
+  // activity contract, including the tracker selector that the authority bundle acquires atomically; omitting it
+  // would make the test double throw during replacement instead of exercising a ready production-model handoff.
   const replacementActivityModel = {
     get overview() {
       return primaryModel.overview;
     },
+    simkl: primaryModel.simkl.bind(primaryModel),
     importHistory: primaryModel.importHistory.bind(primaryModel),
     exportHistory: primaryModel.exportHistory.bind(primaryModel),
   } as unknown as LibraryModel;
