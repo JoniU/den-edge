@@ -14,6 +14,7 @@ import {
   watchPlayback,
   type PlaybackStats,
   type ReportEvent,
+  type Stall,
 } from './playbackStats';
 
 const noLive = { bandwidthEstimateKbps: null, droppedFrames: null, totalFrames: null };
@@ -146,8 +147,9 @@ describe('watchPlayback', () => {
   it('counts a picture that stops for longer, with the buffer where it stopped', () => {
     const stalls = play(20, (t) => t <= 8 || t >= 14);
     expect(stalls).toHaveLength(1);
-    // The count last moved at 8 s, with 22 s of the 30 buffered ahead then; it was noticed at 11 s.
-    expect(stalls[0]).toMatchObject({ at: 8, kind: 'frozen', videoAhead: 22, audioAhead: 22 });
+    // The count last moved at 8 s, with 22 s of the 30 buffered ahead then; its position stays local.
+    expect(stalls[0]).toMatchObject({ kind: 'frozen', videoAhead: 22, audioAhead: 22 });
+    expect(stalls[0]).not.toHaveProperty('at');
     expect(stalls[0]!.ms).toBe(3_000);
   });
 });
@@ -209,23 +211,22 @@ describe('PlaybackRecorder', () => {
 
   it('does not hold a short stall in the opening seconds against the link, but every other stall', () => {
     const recorder = new PlaybackRecorder('hls.js', 'x');
-    const at = (s: number) => ({
-      at: s,
+    const stall = () => ({
       kind: 'wait' as const,
       videoAhead: null,
       audioAhead: null,
       ...noRequests,
     });
-    recorder.stalled(0, at(2), true);
+    recorder.stalled(0, stall(), true, 2);
     recorder.resumed(1_400);
     expect(recorder.linkStalls(), 'early and 1.4 s').toBe(0);
-    recorder.stalled(2_000, at(4), true);
+    recorder.stalled(2_000, stall(), true, 4);
     recorder.resumed(4_500);
     expect(recorder.linkStalls(), 'early but 2.5 s').toBe(1);
-    recorder.stalled(10_000, at(120), false);
+    recorder.stalled(10_000, stall(), false, 120);
     recorder.resumed(10_100);
     expect(recorder.linkStalls(), 'short but mid-play').toBe(2);
-    recorder.stalled(20_000, at(5), true);
+    recorder.stalled(20_000, stall(), true, 5);
     expect(recorder.linkStalls(), 'early and still under way').toBe(3);
     expect(recorder.liveStalls(20_000).stallCount, 'the report counts every one').toBe(4);
   });
@@ -243,7 +244,6 @@ describe('PlaybackRecorder', () => {
     for (let i = 0; i < MAX_STALLS + 5; i++) {
       expect(
         recorder.stalled(i * 1_000, {
-          at: i,
           kind: 'wait',
           videoAhead: 0,
           audioAhead: 9,
@@ -252,7 +252,6 @@ describe('PlaybackRecorder', () => {
       ).toBe(true);
       expect(
         recorder.stalled(i * 1_000 + 1, {
-          at: i,
           kind: 'wait',
           videoAhead: 0,
           audioAhead: 9,
@@ -262,7 +261,6 @@ describe('PlaybackRecorder', () => {
       recorder.resumed(i * 1_000 + 400);
     }
     recorder.stalled(99_000, {
-      at: 99,
       kind: 'frozen',
       videoAhead: 0,
       audioAhead: 4,
@@ -271,7 +269,6 @@ describe('PlaybackRecorder', () => {
     const stats = recorder.snapshot('stall', 99_250, noLive);
     expect(stats.stalls).toHaveLength(MAX_STALLS);
     expect(stats.stalls[0]).toEqual({
-      at: 0,
       ms: 400,
       kind: 'wait',
       videoAhead: 0,
@@ -299,7 +296,7 @@ describe('reportBody', () => {
   const full = () => {
     const recorder = new PlaybackRecorder('hls.js', 'Chrome 141 / Windows');
     for (let i = 0; i < MAX_STALLS; i++) {
-      recorder.stalled(i, { at: i, kind: 'wait', videoAhead: 0, audioAhead: 1, ...noRequests });
+      recorder.stalled(i, { kind: 'wait', videoAhead: 0, audioAhead: 1, ...noRequests }, false, i);
       recorder.resumed(i + 1);
     }
     for (let i = 0; i < MAX_ERRORS; i++) recorder.error(`error ${'x'.repeat(60)} ${i}`, false);
@@ -320,9 +317,10 @@ describe('reportBody', () => {
     const text = reportBody(0, 'm', full(), 1_500);
     expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(1_500);
     const { stats } = JSON.parse(text) as {
-      stats: { stalls: { at: number }[]; errors: { details: string }[] };
+      stats: { stalls: Stall[]; errors: { details: string }[] };
     };
-    expect(stats.stalls[0]?.at, 'the first stall is the last to go').toBe(0);
+    expect(stats.stalls[0]?.ms, 'the first stall is the last to go').toBe(1);
+    expect(JSON.stringify(stats.stalls)).not.toMatch(/"at":/);
     expect(stats.errors.every((e, i) => e.details.endsWith(` ${i}`))).toBe(true);
     expect(stats.stalls.length).toBeLessThan(MAX_STALLS);
   });

@@ -32,8 +32,6 @@ const STALL_DETAILS = new Set(['bufferStalledError', 'bufferSeekOverHole', 'buff
 export type ReportEvent = 'stall' | 'hidden' | 'end';
 
 export interface Stall {
-  /** Media seconds where playback stopped. */
-  at: number;
   /** How long until it played again; null when it hadn't by the time of the report. */
   ms: number | null;
   /** `wait`: the element waited for data. `frozen`: the clock (the audio) ran on, and no new video frame came. */
@@ -131,7 +129,10 @@ export class PlaybackRecorder {
   private stalls: Stall[] = [];
   private stallCount = 0;
   private stalledMs = 0;
-  private open: { stall: Stall; since: number; early: boolean } | undefined;
+  /** The exact playhead is used only to recognize local recovery and is never copied into a report. */
+  private open:
+    | { stall: Stall; since: number; early: boolean; playhead: number | null }
+    | undefined;
   /** Stalls in the opening seconds that ended within EARLY_STALL_MS (`linkStalls`). */
   private earlyShort = 0;
   private errors: PlaybackStats['errors'] = [];
@@ -171,12 +172,17 @@ export class PlaybackRecorder {
    * Playback stopped at `now`; `early`: within EARLY_PLAYED_SECONDS of playing. False when it was already stopped:
    * one stall, however many signals say so.
    */
-  stalled(now: number, stall: Omit<Stall, 'ms'>, early = false): boolean {
+  stalled(
+    now: number,
+    stall: Omit<Stall, 'ms'>,
+    early = false,
+    playhead: number | null = null,
+  ): boolean {
     if (this.open) return false;
     this.stallCount += 1;
     const entry: Stall = { ...stall, ms: null };
     if (this.stalls.length < MAX_STALLS) this.stalls.push(entry);
-    this.open = { stall: entry, since: now, early };
+    this.open = { stall: entry, since: now, early, playhead };
     return true;
   }
 
@@ -189,8 +195,8 @@ export class PlaybackRecorder {
   }
 
   /** The stall under way, if any. */
-  get stalling(): Stall | undefined {
-    return this.open?.stall;
+  get stalling(): (Pick<Stall, 'kind'> & { playhead: number | null }) | undefined {
+    return this.open && { kind: this.open.stall.kind, playhead: this.open.playhead };
   }
 
   /** `stallCount` and `stalledMs` so far, counting a stall still under way through `now` — for a one-shot
@@ -508,9 +514,9 @@ export function watchPlayback(options: WatchOptions): Watcher {
     buffered = ahead(video.currentTime),
   ) => {
     if (stopped || !started || video.seeking) return;
-    const stalled = { at: tenth(at), kind, ...buffered, ...requests() };
+    const stalled = { kind, ...buffered, ...requests() };
     const early = playedSecondsOf(video.played) < EARLY_PLAYED_SECONDS;
-    if (recorder.stalled(now(), stalled, early)) schedule.stall();
+    if (recorder.stalled(now(), stalled, early, at)) schedule.stall();
   };
 
   const on = <K extends keyof HTMLMediaElementEventMap>(type: K, listener: () => void) =>
@@ -550,7 +556,13 @@ export function watchPlayback(options: WatchOptions): Watcher {
         recorder.idleLow(since);
     }
     const open = recorder.stalling;
-    if (open?.kind === 'wait' && !video.paused && time > open.at + 0.2) recorder.resumed(now());
+    if (
+      open?.kind === 'wait' &&
+      open.playhead !== null &&
+      !video.paused &&
+      time > open.playhead + 0.2
+    )
+      recorder.resumed(now());
     const count = video.getVideoPlaybackQuality?.().totalVideoFrames;
     if (count === undefined) return;
     if (count !== frames.count) {
