@@ -373,7 +373,7 @@
           const timeline = (target.__denScrollRestoreTimeline ??= []);
           timeline.push({
             at: performance.now(),
-            route: location.pathname + location.search,
+            route: address(),
             requested: { x: current.x, y: current.y },
             resulting: { x: window.scrollX, y: window.scrollY },
             max: {
