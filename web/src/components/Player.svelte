@@ -297,17 +297,21 @@
       (
         window as unknown as {
           denTestNextEpisodeComposition?: (value: {
+            title: { type: Title['type']; id: number };
             season?: number;
             episode?: number;
             availability?: typeof nextAvailability;
             next?: typeof nextEpisode;
+            seasons?: number[];
           }) => void;
         }
       ).denTestNextEpisodeComposition?.({
+        title: { type: title.type, id: title.id },
         season,
         episode,
         availability: nextAvailability,
         next: nextEpisode,
+        seasons: seasons?.map(({ number }) => number),
       });
     });
   }

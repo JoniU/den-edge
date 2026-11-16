@@ -627,6 +627,15 @@
     playbackIntent += 1;
     playing = target;
   }
+  if (import.meta.env.DEN_E2E) {
+    (window as unknown as { denTestReplacePlayingTitle?: () => void }).denTestReplacePlayingTitle =
+      () => playerAddress({ title: { type: 'movie', id: 1001, title: 'Film 1001' } }, true);
+    onDestroy(
+      () =>
+        delete (window as unknown as { denTestReplacePlayingTitle?: unknown })
+          .denTestReplacePlayingTitle,
+    );
+  }
 
   /** Feedback after a "Play on TV" press (den-edge#235): drives `session.notify` on its own; fed live positions
    * below, as the library pull sees them. The parent keys this whole tree by `session`, so it is fixed for this
@@ -3441,7 +3450,8 @@
   ] as const}
   <!-- Keyed by the title alone: the next episode plays in the same player (`playEpisode`), so the video in fullscreen
        — and a Chromecast it is cast to — carries on into it. Authority replacement deliberately remounts it: an
-       old source session and its late lookups cannot survive a profile/library/household/add-on change. -->
+       old source session and its late lookups cannot survive a profile/library/household/add-on change. A different
+       title also renders before the ordinary effect clears its predecessor's episode list, so that prop is gated. -->
   {#key `${titleKey(target.title)}:${JSON.stringify(releaseAuthority)}`}
     <PlayerScreen.current
       title={target.title}
@@ -3483,7 +3493,7 @@
       onplaybackreceipthandoff={requestPlaybackReceiptHandoff}
       onnext={after ? () => void advance(after) : undefined}
       onnextretry={() => findFollowing(target)}
-      seasons={playingSeasons}
+      seasons={playingSeasonsOf === titleKey(target.title) ? playingSeasons : undefined}
       episodeProgress={(season, episode) =>
         // The open page's rows are keyed by season and episode alone, so they are this series' only while its page
         // is the one open under the player; another series' page would lend its own progress.

@@ -489,6 +489,44 @@ test('episode replacement never composes the prior episode’s following state',
   }
 });
 
+test('title replacement never composes the prior series’ episode state', async () => {
+  const { browser, page, asked } = await open(chromium);
+  try {
+    await page.evaluate(() => {
+      window.__nextEpisodeCompositions = [];
+      window.denTestNextEpisodeComposition = (value) =>
+        window.__nextEpisodeCompositions.push(JSON.parse(JSON.stringify(value)));
+    });
+    await playFirstEpisode(page);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          window.__nextEpisodeCompositions.some(
+            (value) => value.title.type === 'tv' && value.seasons?.length,
+          ),
+        ),
+      )
+      .toBe(true);
+
+    await page.evaluate(() => window.denTestReplacePlayingTitle());
+    await expect(player(page)).toHaveAttribute('aria-label', `Film ${FILM}`);
+    await expect.poll(() => asked.playback.map(itemOf)).toEqual(['e1', 'film']);
+    const film = await page.evaluate(() =>
+      window.__nextEpisodeCompositions.filter(
+        (value) => value.title.type === 'movie' && value.title.id === 1001,
+      ),
+    );
+    expect(film.length).toBeGreaterThan(0);
+    for (const composition of film) {
+      expect(composition).not.toHaveProperty('seasons');
+      expect(composition).not.toHaveProperty('availability');
+      expect(composition).not.toHaveProperty('next');
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
 test('a late next-episode answer is adopted only while the ended player still owns it', async () => {
   const { browser, page, asked } = await open(chromium, {
     libraryQuery: ['next-metadata-recovery'],
