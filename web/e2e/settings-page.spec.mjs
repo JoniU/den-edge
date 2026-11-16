@@ -599,6 +599,7 @@ test('a held retired preference save cannot publish language or restore focus in
 
   const language = page.locator('#interface-language select');
   const replacementFocus = page.locator('#playback-source-policy select');
+  const documentLanguage = await page.locator('html').getAttribute('lang');
   await expect(language).toBeEnabled();
   await language.focus();
   // Establish keyboard modality before the save captures its focus origin; otherwise there is intentionally no
@@ -620,7 +621,7 @@ test('a held retired preference save cannot publish language or restore focus in
     .poll(() => page.evaluate(() => globalThis.fixtureSettingsAuthority.preferenceCommands()))
     .toEqual({ primary: ['language:sv'], replacement: [] });
   await expect(replacementFocus).toBeFocused();
-  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  expect(await page.locator('html').getAttribute('lang')).toBe(documentLanguage);
   expect(
     await page.evaluate(() => globalThis.fixtureSettingsAuthority.presentationLanguages()),
   ).toEqual([]);
