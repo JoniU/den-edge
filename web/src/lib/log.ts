@@ -2460,18 +2460,23 @@ export class LibraryLog {
             settled = true;
             settleAdoption(value);
           };
-          // Start the first read before mutation policy is ready. `pass` may fill private acknowledged/fact state,
-          // but it cannot publish, replay or send retained work until both the complete overlay is projected and the
-          // foreground scheduler adopts this exact pass. Closing a speculative/superseded service cancels the latter.
+          const openingRequest = new AbortController();
+          // Start the first request before mutation policy is ready. Its response cannot update protocol, facts,
+          // cursors, visible state, or retained delivery until both the complete overlay is projected and the
+          // foreground scheduler adopts this exact pass. Closing a speculative/superseded service aborts the request.
           const result = log.pass(
             Promise.all([overlayReady, adopted]).then(
               ([projected, foreground]) => projected && foreground,
             ),
+            openingRequest.signal,
           );
           log.openingPass = {
             result,
             adopt: () => settle(true),
-            cancel: () => settle(false),
+            cancel: () => {
+              settle(false);
+              openingRequest.abort(new DOMException('Cached open was superseded', 'AbortError'));
+            },
           };
           void result.catch(() => undefined);
         }
@@ -2485,6 +2490,8 @@ export class LibraryLog {
           overlay?.publish();
         } catch (error) {
           overlay?.refuse();
+          log.openingPass?.cancel();
+          log.openingPass = undefined;
           throw error;
         }
         return log;
@@ -2869,9 +2876,11 @@ export class LibraryLog {
     const opening = this.openingPass;
     if (opening) {
       opening.adopt();
-      const result = await opening.result;
-      if (this.openingPass === opening) this.openingPass = undefined;
-      return result.changed;
+      try {
+        return (await opening.result).changed;
+      } finally {
+        if (this.openingPass === opening) this.openingPass = undefined;
+      }
     }
     if (waitSeconds > 0) await this.awaitChange(waitSeconds, stopWaiting);
     return (await this.pass()).changed;
@@ -2902,6 +2911,7 @@ export class LibraryLog {
   /** One `refresh` pass: whether it changed what this browser holds, and whether it read the log to its head. */
   private async pass(
     beforePublication?: Promise<boolean>,
+    openingSignal?: AbortSignal,
   ): Promise<{ changed: boolean; reachedHead: boolean }> {
     // Nothing else writes a library kept only here but another tab, whose rows each save takes up (`takeKept`).
     if (this.offline) return { changed: false, reachedHead: false };
@@ -2913,7 +2923,10 @@ export class LibraryLog {
         for (;;) {
           const res = await this.send(
             `/lib/${this.keys.id}/changes?since=${this.head}&limit=1000`,
-            { headers: this.headers() },
+            { headers: this.headers(), ...(openingSignal ? { signal: openingSignal } : {}) },
+            // An opening response belongs to no foreground authority yet. Observe its protocol minimum only after
+            // the same adoption barrier as its rows, generation and cursor.
+            beforePublication === undefined,
           );
           // A cached opening read may finish before its retained overlay or foreground owner exists. Do not mutate
           // any visible/log authority from that response until both boundaries accept it. A superseded open cancels
@@ -2922,6 +2935,7 @@ export class LibraryLog {
             await res.body?.cancel();
             return null;
           }
+          if (beforePublication) await this.observeProtocol(res);
           if (res.status === 410) this.moved = true;
           if (res.status === 404) {
             // Only the first 404 has rows den-edge acknowledged to put back; an empty relay answers it every time.

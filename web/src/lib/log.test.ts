@@ -1087,9 +1087,9 @@ describe('LibraryLog', () => {
     await vi.waitFor(() => expect(posts).toBe(1));
     log.close();
     refuseWrites = false;
-    // The retained op and its rider must be projected after this newer remote row is read, in their original order.
-    // Its older field stamp deliberately loses to the retained add even though its transport sequence is newer.
-    await server.append(row(2, { status: { value: 'none', at: at(500) } }));
+    // The retained op and its rider must be replayed after this newer remote row is read, in their original order.
+    // The remote field stamp is newer, so replay cannot let the older retained add overwrite it.
+    await server.append(row(2, { status: { value: 'none', at: at(2000) } }));
     await server.append(row(3));
 
     let release!: () => void;
@@ -1119,6 +1119,8 @@ describe('LibraryLog', () => {
       expect(changes, 'the first foreground refresh shares the opening pass').toBe(2);
       expect(posts, 'the previously refused op and rider are sent together once').toBe(2);
       expect(reopened.pendingActions).toBe(0);
+      expect(reopened.title({ type: 'movie', id: 2 })?.status.value).toBe('none');
+      expect(reopened.settings('assistant-applied')).toMatchObject({ values });
       expect(reopened.title({ type: 'movie', id: 3 })).toBeDefined();
 
       await reopened.refresh();
@@ -1138,6 +1140,7 @@ describe('LibraryLog', () => {
     let refuseWrites = false;
     let reads = 0;
     let posts = 0;
+    let bodyCancelled = false;
     let pulled!: () => void;
     const openingPull = new Promise<void>((resolve) => (pulled = resolve));
     const connection: typeof fetch = async (input, init) => {
@@ -1146,7 +1149,82 @@ describe('LibraryLog', () => {
         if (refuseWrites) throw new TypeError('offline');
       } else if (String(input).includes('/changes?')) {
         reads++;
-        if (reads === 2) pulled();
+        if (reads === 2) {
+          pulled();
+          const response = await server.fetchImpl(input, init);
+          const bytes = new TextEncoder().encode(await response.text());
+          const headers = new Headers(response.headers);
+          headers.set('x-den-wire-min', '9');
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(bytes);
+              },
+              cancel() {
+                bodyCancelled = true;
+              },
+            }),
+            { status: response.status, headers },
+          );
+        }
+      }
+      return server.fetchImpl(input, init);
+    };
+    const first = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    refuseWrites = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await first.write(row(2));
+    await vi.waitFor(() => expect(posts).toBe(1));
+    first.close();
+    refuseWrites = false;
+    await server.append(row(3));
+    const facts = (await LibraryFactStore.open(LIBRARY_KEY, vault))!;
+    const manifestBefore = await facts.manifest();
+
+    const speculative = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    await openingPull;
+    expect(speculative.pendingActions).toBe(1);
+    expect(speculative.currentGeneration).toBe('generation-1');
+    expect(speculative.wireMinimum).toBeLessThan(9);
+    expect(speculative.upgradeRequired).toBeNull();
+    expect(speculative.title({ type: 'movie', id: 3 })).toBeUndefined();
+    expect(await facts.manifest()).toEqual(manifestBefore);
+    speculative.close();
+    await vi.waitFor(() => expect(bodyCancelled).toBe(true));
+    expect(speculative.currentGeneration).toBe('generation-1');
+    expect(speculative.wireMinimum).toBeLessThan(9);
+    expect(speculative.upgradeRequired).toBeNull();
+    expect(speculative.title({ type: 'movie', id: 3 })).toBeUndefined();
+    expect(await facts.manifest()).toEqual(manifestBefore);
+    expect(posts, 'close refuses publication/replay before foreground adoption').toBe(1);
+    warn.mockRestore();
+  });
+
+  it('aborts an opening pull still waiting for response when the cached log closes', async () => {
+    const server = await edge([row(1)], [], 'generation-1');
+    const { vault } = memoryVault();
+    let refuseWrites = false;
+    let reads = 0;
+    let posts = 0;
+    let aborted = false;
+    let pulled!: () => void;
+    const openingPull = new Promise<void>((resolve) => (pulled = resolve));
+    const connection: typeof fetch = async (input, init) => {
+      if (init?.method === 'POST') {
+        posts++;
+        if (refuseWrites) throw new TypeError('offline');
+      } else if (String(input).includes('/changes?') && ++reads === 2) {
+        pulled();
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => {
+              aborted = true;
+              reject(init.signal?.reason);
+            },
+            { once: true },
+          );
+        });
       }
       return server.fetchImpl(input, init);
     };
@@ -1160,11 +1238,10 @@ describe('LibraryLog', () => {
 
     const speculative = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
     await openingPull;
-    expect(speculative.pendingActions).toBe(1);
     speculative.close();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(posts, 'close refuses publication/replay before foreground adoption').toBe(1);
+    await vi.waitFor(() => expect(aborted).toBe(true));
+    expect(speculative.pendingActions).toBe(1);
+    expect(posts).toBe(1);
     warn.mockRestore();
   });
 
@@ -1174,11 +1251,29 @@ describe('LibraryLog', () => {
     let refuseWrites = false;
     let reads = 0;
     let posts = 0;
+    let bodyCancelled = false;
     const connection: typeof fetch = async (input, init) => {
       if (init?.method === 'POST') {
         posts++;
         if (refuseWrites) throw new TypeError('offline');
-      } else if (String(input).includes('/changes?')) reads++;
+      } else if (String(input).includes('/changes?')) {
+        reads++;
+        if (reads === 2) {
+          const response = await server.fetchImpl(input, init);
+          const bytes = new TextEncoder().encode(await response.text());
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(bytes);
+              },
+              cancel() {
+                bodyCancelled = true;
+              },
+            }),
+            { status: response.status, headers: response.headers },
+          );
+        }
+      }
       return server.fetchImpl(input, init);
     };
     const first = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
@@ -1189,15 +1284,16 @@ describe('LibraryLog', () => {
     first.close();
     refuseWrites = false;
 
-    const policy = vi
-      .spyOn(syncLoader, 'ensureDeferredSyncPolicy')
-      .mockRejectedValue(new Error('policy unavailable'));
+    let rejectPolicy!: (error: Error) => void;
+    const heldPolicy = new Promise<void>((_resolve, reject) => (rejectPolicy = reject));
+    const policy = vi.spyOn(syncLoader, 'ensureDeferredSyncPolicy').mockReturnValue(heldPolicy);
     const readsBefore = reads;
     try {
-      await expect(LibraryLog.open(LIBRARY_KEY, connection, undefined, vault)).rejects.toThrow(
-        'policy unavailable',
-      );
+      const opening = LibraryLog.open(LIBRARY_KEY, connection, undefined, vault);
       await vi.waitFor(() => expect(reads).toBe(readsBefore + 1));
+      rejectPolicy(new Error('policy unavailable'));
+      await expect(opening).rejects.toThrow('policy unavailable');
+      await vi.waitFor(() => expect(bodyCancelled).toBe(true));
       expect(posts, 'a successful pull cannot replay after its overlay was refused').toBe(1);
     } finally {
       policy.mockRestore();
