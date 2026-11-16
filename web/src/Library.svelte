@@ -33,8 +33,10 @@
   } from './lib/catalog';
   import { householdQueue, sendToTV, tvListening, type PlayRequest } from './lib/inbox';
   import { playGuard } from './lib/playGuard';
+  import { episodeProgress } from './lib/detailPresentation';
   import { PlayOnTvTracker } from './lib/playOnTv.svelte';
   import {
+    airedSeasons,
     episodeAfter,
     isAired,
     titleKey,
@@ -1714,6 +1716,12 @@
   let followingOwner = $state<Target | null>(null);
   let followingGeneration = 0;
   let followingWait: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * The playing series' seasons and how much of each has aired, for the player's episode list. Kept across an advance
+   * within the series, so the list neither blinks out nor asks for its season again.
+   */
+  let playingSeasons = $state.raw<{ number: number; aired: number }[]>();
+  let playingSeasonsOf: string | undefined;
 
   function publishFollowing(target: Target, generation: number): boolean {
     if (playing !== target || followingGeneration !== generation) return false;
@@ -1721,16 +1729,18 @@
     if (!shape) return false;
     clearTimeout(followingWait);
     const at = { season: target.season!, episode: target.episode! };
-    const next = episodeAfter(at, shape);
-    if (!next) {
-      following = { kind: 'finale' };
-      return true;
-    }
     // Atlas's dates first: an episode out before TMDB's broadcast slot is next in line the day it is out.
     const aired = airedThrough(
       shape.lastAired,
       untrack(() => airings.get(target.title.id)),
     );
+    playingSeasons = airedSeasons(shape, aired);
+    playingSeasonsOf = titleKey(target.title);
+    const next = episodeAfter(at, shape);
+    if (!next) {
+      following = { kind: 'finale' };
+      return true;
+    }
     following = isAired(next, aired)
       ? { kind: 'ready', target: { title: target.title, ...next } }
       : { kind: 'unreleased' };
@@ -1766,6 +1776,7 @@
     clearTimeout(followingWait);
     following = null;
     followingOwner = null;
+    if (!target || playingSeasonsOf !== titleKey(target.title)) playingSeasons = undefined;
     if (!target || target.season === undefined || target.episode === undefined) return;
     untrack(() => findFollowing(target));
     return () => clearTimeout(followingWait);
@@ -3472,6 +3483,14 @@
       onplaybackreceipthandoff={requestPlaybackReceiptHandoff}
       onnext={after ? () => void advance(after) : undefined}
       onnextretry={() => findFollowing(target)}
+      seasons={playingSeasons}
+      episodeProgress={(season, episode) =>
+        // The open page's rows are keyed by season and episode alone, so they are this series' only while its page
+        // is the one open under the player; another series' page would lend its own progress.
+        page?.type === target.title.type && page.id === target.title.id
+          ? episodeProgress(pageEpisodes.get(`${season}:${episode}`), pageRow)
+          : 0}
+      onepisode={(at) => void advance({ title: target.title, ...at })}
       oncontrols={(controls) => (tvControls = controls)}
       onclose={closePlayer}
     />
