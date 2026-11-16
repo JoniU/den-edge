@@ -485,9 +485,12 @@
           />
         {/if}
       </div>
-    {:else}
+    {/if}
+    {#if !__DEN_TV_LEGACY_JS_CORE__ && prefs}
+      <PlaybackSection {prefs} {disabled} save={savePrefs} />
+    {/if}
+    {#if ready}
       {#if !__DEN_TV_LEGACY_JS_CORE__}
-        <PlaybackSection prefs={prefs!} {disabled} save={savePrefs} />
         {#key authority.model}<ContentSection
             prefs={prefs!}
             {content}
