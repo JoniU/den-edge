@@ -730,6 +730,8 @@ for (const [engine, browserType] of engines) {
         await expect(rows.nth(1)).toHaveAttribute('aria-disabled', 'true');
         await expect(rows.nth(1)).toContainText('Upcoming');
         await expect.poll(footAboveTrigger).toBeUndefined();
+        // A shorter season keeps the list's size: it doesn't resize under the pointer.
+        expect((await menu.boundingBox()).height).toBeCloseTo(box.height, 0);
         await rows.nth(1).click({ force: true });
         await expect(page.getByTestId('player-picked-episodes')).toHaveText('');
 

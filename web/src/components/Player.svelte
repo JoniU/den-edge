@@ -8976,14 +8976,18 @@
   }
 
   /* Episodes: wider than the options, since each row carries a still and two lines of synopsis. Its season chips stay
-     at the top while the episodes scroll under them. */
+     at the top while the episodes scroll under them. One height for every season, so switching seasons doesn't resize
+     the list under the pointer; a short season leaves room below. ActionMenu's inline max-height still caps it to the
+     room beside its trigger. */
   :global(div.menu:not(.sheet):has(.episode-list)) {
     width: 420px;
     max-width: calc(100vw - 16px);
+    height: min(600px, calc(100dvh - 16px));
     max-height: min(600px, calc(100dvh - 16px));
   }
 
   :global(div.menu.sheet:has(.episode-list)) {
+    height: 72dvh;
     max-height: 72dvh;
   }
 
