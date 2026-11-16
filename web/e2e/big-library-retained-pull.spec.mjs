@@ -106,14 +106,7 @@ async function retainOfflineEdit(context, edge) {
   const title = row.getByRole('link', { name: 'Film 300000' }).first();
   await expect(title).toBeVisible({ timeout: 30_000 });
 
-  let refusedBatch = false;
-  page.on('requestfailed', (request) => {
-    if (
-      request.method() === 'POST' &&
-      /\/lib\/[^/]+\/batch$/.test(request.url())
-    )
-      refusedBatch = true;
-  });
+  const batchesBefore = edge.libraryRequests.filter(({ action }) => action === 'batch').length;
   await context.setOffline(true);
   try {
     await title.hover();
@@ -130,9 +123,16 @@ async function retainOfflineEdit(context, edge) {
     ).toBeVisible({
       timeout: 30_000,
     });
-    await expect
-      .poll(() => refusedBatch, { message: 'the edit remains unsent' })
-      .toBe(true);
+    await expect(
+      page.getByText(
+        'Saved on this device. Waiting to sync—keep this browser’s data until it reconnects.',
+        { exact: true },
+      ),
+    ).toBeVisible({ timeout: 30_000 });
+    expect(
+      edge.libraryRequests.filter(({ action }) => action === 'batch').length,
+      'offline edit never reached den-edge',
+    ).toBe(batchesBefore);
   } finally {
     await page.close();
     await context.setOffline(false);
