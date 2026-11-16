@@ -90,7 +90,7 @@ async function measureFirstPull(context, edge, { holdDeferred = false } = {}) {
   return measured;
 }
 
-/** Make one real semantic edit while offline; its production write path keeps it for the next open. */
+/** Make one real semantic edit while its batch route is offline; production keeps it for the next open. */
 async function retainOfflineEdit(context, edge) {
   const page = await context.newPage();
   await routeBigHousehold(page, edge);
@@ -100,7 +100,7 @@ async function retainOfflineEdit(context, edge) {
   await expect(title).toBeVisible({ timeout: 30_000 });
 
   const batchesBefore = edge.libraryRequests.filter(({ action }) => action === 'batch').length;
-  await context.setOffline(true);
+  await page.route(/\/lib\/[^/]+\/batch$/, (route) => route.abort('internetdisconnected'));
   try {
     await title.hover();
     await row.getByRole('button', { name: 'Actions for Film 300000' }).first().click();
@@ -117,7 +117,6 @@ async function retainOfflineEdit(context, edge) {
     ).toBe(batchesBefore);
   } finally {
     await page.close();
-    await context.setOffline(false);
   }
 }
 
