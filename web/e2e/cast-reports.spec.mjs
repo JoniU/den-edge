@@ -464,7 +464,7 @@ test('an old LAN proof cannot bless a same-id replacement generation', async () 
       castOrigin: CAST,
       media: {
         url: `${MEDIA}${PATH}/master.m3u8`,
-        lanUrl: 'https://lan.test:8449/remux/master.m3u8',
+        lanUrl: `https://lan.test:8449${PATH}/master.m3u8`,
         mode: 'browser',
         title,
       },
