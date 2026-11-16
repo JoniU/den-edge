@@ -2,7 +2,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const workflow = readFileSync(resolve(import.meta.dirname, '../../.github/workflows/ci.yml'), 'utf8');
+const workflow = readFileSync(
+  resolve(import.meta.dirname, '../../.github/workflows/ci.yml'),
+  'utf8',
+);
 
 describe('TV CI independence', () => {
   it('reports both TV behavior paths before enforcing an executed isolation result', () => {
@@ -24,7 +27,9 @@ describe('TV CI independence', () => {
     expect(isolationStep).toContain('continue-on-error: true');
 
     const gateStep = workflow.slice(gate, workflow.indexOf('- name:', gate + 1));
-    expect(gateStep).toContain("if: ${{ !cancelled() && steps.tv_isolation.outcome != 'skipped' }}");
+    expect(gateStep).toContain(
+      "if: ${{ !cancelled() && steps.tv_isolation.outcome != 'skipped' }}",
+    );
     expect(gateStep).toContain('TV_ISOLATION: ${{ steps.tv_isolation.outcome }}');
     expect(gateStep).toContain('test "$TV_ISOLATION" = success');
   });
