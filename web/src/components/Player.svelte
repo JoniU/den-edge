@@ -7362,17 +7362,9 @@
         !current && progress >= WATCHED ? i18n.phrase('Watched') : undefined,
         item.runtime ? `${item.runtime} min` : undefined,
       ].filter(Boolean)}
-      <svelte:element
-        this={menuItem.kind === 'link' ? 'a' : 'button'}
-        href={menuItem.kind === 'link' ? menuItem.href : undefined}
-        type={menuItem.kind === 'link' ? undefined : 'button'}
-        role="menuitem"
-        tabindex="0"
-        class="item episode-row"
-        aria-current={current || undefined}
-        aria-disabled={menuItem.disabled || undefined}
-        onclick={(event: MouseEvent) => run(menuItem, event)}
-      >
+      <!-- An explicit link or button rather than `<svelte:element>`: its runtime would join the shared startup chunk
+           every page loads, for a list that only exists inside the player. -->
+      {#snippet rowContent()}
         <span class="episode-still">
           {#if item.stillPath}<img
               class="episode-image"
@@ -7390,7 +7382,27 @@
           {#if meta.length}<small>{meta.join(' · ')}</small>{/if}
           {#if item.overview}<span class="episode-overview">{cleanedOverview(item)}</span>{/if}
         </span>
-      </svelte:element>
+      {/snippet}
+      {#if menuItem.kind === 'link'}
+        <a
+          href={menuItem.href}
+          role="menuitem"
+          tabindex="0"
+          class="item episode-row"
+          aria-current={current || undefined}
+          onclick={(event: MouseEvent) => run(menuItem, event)}>{@render rowContent()}</a
+        >
+      {:else}
+        <button
+          type="button"
+          role="menuitem"
+          tabindex="0"
+          class="item episode-row"
+          aria-current={current || undefined}
+          aria-disabled={menuItem.disabled || undefined}
+          onclick={(event: MouseEvent) => run(menuItem, event)}>{@render rowContent()}</button
+        >
+      {/if}
     {/each}
   </div>
 {/snippet}
