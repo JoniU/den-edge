@@ -131,8 +131,7 @@ export class PlaybackRecorder {
   private stalledMs = 0;
   /** The exact playhead is used only to recognize local recovery and is never copied into a report. */
   private open:
-    | { stall: Stall; since: number; early: boolean; playhead: number | null }
-    | undefined;
+    { stall: Stall; since: number; early: boolean; playhead: number | null } | undefined;
   /** Stalls in the opening seconds that ended within EARLY_STALL_MS (`linkStalls`). */
   private earlyShort = 0;
   private errors: PlaybackStats['errors'] = [];

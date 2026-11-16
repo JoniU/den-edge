@@ -313,6 +313,38 @@ describe('reportBody', () => {
     expect(body.stats).toMatchObject({ event: 'stall', engine: 'hls.js' });
   });
 
+  it('keeps the exact playhead local while retaining bounded stall evidence', () => {
+    const recorder = new PlaybackRecorder('hls.js', 'Chrome 141 / Windows');
+    recorder.stalled(
+      1_000,
+      {
+        kind: 'wait',
+        videoAhead: 8.4,
+        audioAhead: 7.2,
+        loading: false,
+        idleMs: 321,
+      },
+      false,
+      7_349_281.5,
+    );
+    recorder.resumed(2_250);
+
+    const text = reportBody(0, 'playback stats (stall)', recorder.snapshot('stall', 2_250, noLive));
+    const body = JSON.parse(text) as { stats: PlaybackStats };
+    expect(body.stats.stalls).toEqual([
+      {
+        kind: 'wait',
+        videoAhead: 8.4,
+        audioAhead: 7.2,
+        loading: false,
+        idleMs: 321,
+        ms: 1_250,
+      },
+    ]);
+    expect(text).not.toContain('7349281');
+    expect(body.stats.stalls[0]).not.toHaveProperty('at');
+  });
+
   it('stays under the byte cap by dropping the latest stalls and errors first', () => {
     const text = reportBody(0, 'm', full(), 1_500);
     expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(1_500);
