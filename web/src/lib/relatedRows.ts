@@ -10,13 +10,11 @@ import type { MediaType, Title } from './library';
 import { fansId, likeId, personHref, searchHref } from './route';
 import type { Browsable, TitleFacts } from './titleFacts';
 import type { ContentServiceClientPort } from './contentServiceClient';
+import type { ContentRelatedQuery } from './contentServiceProtocol';
 import type { ParameterMessageId } from './messages/parameters';
 
 /** Titles a page adds: a screenful and a bit, the size TMDB's own pages come in. */
 const CHUNK = 20;
-/** How many plot neighbours atlas is asked for once the closer ones and TMDB's recommendations run out (its cap). */
-const NEIGHBOURS = 50;
-
 const keyOf = (t: { type: string; id: number }) => `${t.type}:${t.id}`;
 
 type Ref = { type: MediaType; id: number };
@@ -111,56 +109,46 @@ export function moreLikeThisRow(
   let recommendedPage = 1;
   let queue: Ref[] | undefined;
 
+  async function related(query: ContentRelatedQuery, signal?: AbortSignal) {
+    try {
+      return (await content.query({ kind: 'atlas.related', query }, signal)).answer;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+    }
+  }
+
   /**
    * The titles an atlas list names: its `ids`, of the seed's type, or — for a mixed row, where the answer has one —
    * its `mixed` list, each with its own type.
    */
   async function idsFrom(source: 'similar' | 'neighbours', signal?: AbortSignal): Promise<Ref[]> {
-    try {
-      const result = await content.query(
-        {
-          kind: 'atlas.related',
-          query: {
-            operation: 'list',
-            source,
-            title: { type: self.type, id: self.id },
-            mixed,
-            limit: source === 'neighbours' ? NEIGHBOURS : similarLimit,
-          },
-        },
-        signal,
-      );
-      return result.answer.state === 'ready' && result.answer.value.operation === 'refs'
-        ? result.answer.value.refs
-        : [];
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      return [];
-    }
+    const answer = await related(
+      {
+        operation: 'list',
+        source,
+        title: { type: self.type, id: self.id },
+        mixed,
+        limit: source === 'neighbours' ? 50 : similarLimit,
+      },
+      signal,
+    );
+    return answer?.state === 'ready' && answer.value.operation === 'refs' ? answer.value.refs : [];
   }
 
   /** The one requested seed's row, or null when this Atlas does not implement the affinity contract. */
   async function suggested(signal?: AbortSignal): Promise<Ref[] | null> {
-    try {
-      const result = await content.query(
-        {
-          kind: 'atlas.related',
-          query: {
-            operation: 'suggest',
-            title: { type: self.type, id: self.id },
-            mixed,
-            limit: similarLimit,
-          },
-        },
-        signal,
-      );
-      return result.answer.state === 'ready' && result.answer.value.operation === 'refs'
-        ? result.answer.value.refs
-        : null;
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      return null;
-    }
+    const answer = await related(
+      {
+        operation: 'suggest',
+        title: { type: self.type, id: self.id },
+        mixed,
+        limit: similarLimit,
+      },
+      signal,
+    );
+    return answer?.state === 'ready' && answer.value.operation === 'refs'
+      ? answer.value.refs
+      : null;
   }
 
   /**
@@ -168,30 +156,22 @@ export function moreLikeThisRow(
    * route (the POST's ids are read instead), `undefined` once the row has nothing left.
    */
   async function drawCards(signal?: AbortSignal): Promise<Title[] | null | undefined> {
-    try {
-      const result = await content.query(
-        {
-          kind: 'atlas.related',
-          query: {
-            operation: 'cards',
-            title: { type: self.type, id: self.id },
-            skip: cardsSkip,
-            limit: CHUNK,
-          },
-        },
-        signal,
-      );
-      if (result.answer.state !== 'ready' || result.answer.value.operation !== 'cards')
-        return cardsSkip === 0 ? null : undefined;
-      const { refs, titles } = result.answer.value;
-      if (refs.length === 0) return undefined;
-      cardsSkip += refs.length;
-      const wanted = refs.filter((ref) => !seen.has(keyOf(ref)));
-      return drawRefs(wanted, titles, content, signal);
-    } catch (error) {
-      if (signal?.aborted) throw error;
+    const answer = await related(
+      {
+        operation: 'cards',
+        title: { type: self.type, id: self.id },
+        skip: cardsSkip,
+        limit: CHUNK,
+      },
+      signal,
+    );
+    if (answer?.state !== 'ready' || answer.value.operation !== 'cards')
       return cardsSkip === 0 ? null : undefined;
-    }
+    const { refs, titles } = answer.value;
+    if (refs.length === 0) return undefined;
+    cardsSkip += refs.length;
+    const wanted = refs.filter((ref) => !seen.has(keyOf(ref)));
+    return drawRefs(wanted, titles, content, signal);
   }
 
   /** The next chunk of a queued atlas source, drawn; `undefined` once it has none left to give. */
@@ -291,9 +271,6 @@ export function moreLikeThisRow(
   };
 }
 
-/** How many pages `firstScreen` reads while looking for a title that survives the hide rules (`BrowseRow`'s burst). */
-const SEARCH_PAGES = 3;
-
 /**
  * A row only once it has something to show. Reads pages until one holds a title `keep` admits, and answers with the
  * row served from what it read, so the loader is not asked for them again; null when there is nothing. A row nobody
@@ -305,7 +282,7 @@ export async function firstScreen(
   keep: (title: Title) => boolean,
 ): Promise<RowDef | null> {
   const read: Title[][] = [];
-  for (let page = 1; page <= SEARCH_PAGES; page++) {
+  for (let page = 1; page <= 3; page++) {
     let titles: Title[];
     try {
       titles = await row.load(page);

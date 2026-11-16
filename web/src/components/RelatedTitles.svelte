@@ -62,8 +62,6 @@
     shown: (t: Title) => boolean;
   } = $props();
 
-  /** You might also like's row id (`moreLikeThisRow`). */
-  const SUGGESTED = 'you-might-also-like';
   /** Each shown row with its build: a rebuilt row keeps its id, and must still start its own loader afresh. */
   // Row definitions are replaced as complete builds and never mutated. Avoid deep proxies around every loader and
   // filter while the detail page constructs its below-fold placeholders.
@@ -158,7 +156,6 @@
               options,
             )
           : withPosters(languageRow(regionalLanguage, self, content), options);
-    let live = true;
     // Every title the rows above You might also like have shown — the franchise, other versions and More like this —
     // so it offers none of them again.
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- read by loaders only, never rendered.
@@ -190,19 +187,15 @@
     // stops either loader from being called by component construction alone.
     const build = ++builds;
     const controller = new AbortController();
-    const current = () => live && builds === build && rowsFor === key;
+    const current = () => !controller.signal.aborted;
     const placeVersions = (other: RowDef | null, upper: RowDef | null) => {
       const next = rows.filter(({ row }) => row.id !== 'other-versions');
       if (other)
-        next.splice(upper ? next.findIndex(({ row }) => row.id === upper.id) + 1 : 0, 0, {
-          build,
-          row: other,
-        });
+        next.splice(upper && next[0]?.row.id === upper.id ? 1 : 0, 0, { build, row: other });
       rows = next;
     };
     retryVersions = undefined;
-    let releaseDiscovery!: (start: boolean) => void;
-    let discoveryDecided = false;
+    let releaseDiscovery: ((start: boolean) => void) | undefined;
     const discoveryGate = new Promise<boolean>((resolve) => (releaseDiscovery = resolve));
     const franchise = discoveryGate.then((start) =>
       start
@@ -221,9 +214,8 @@
       .then((start) => (start ? loadVersions() : null))
       .catch(() => null);
     const decideDiscovery = (start: boolean) => {
-      if (discoveryDecided) return;
-      discoveryDecided = true;
-      releaseDiscovery(start);
+      releaseDiscovery?.(start);
+      releaseDiscovery = undefined;
     };
     const settledDiscovery = Promise.all([franchise, versionsAnswer]).then(() => undefined);
     const pendingDiscovery = {
@@ -292,20 +284,18 @@
         : []),
       ...(regional ? [regional] : []),
     ].map((row, index) => tracked(row, index === 0));
-    const retry = async () => {
-      if (!current() || retryVersions !== retry) return;
-      retryVersions = undefined;
-      const answer = await loadVersions().catch(() => null);
+    void versionsAnswer.then(async (first) => {
+      if (first !== undefined) return;
+      let answer: RowDef | null | undefined;
+      do {
+        await new Promise<void>((resolve) => (retryVersions = resolve));
+        if (!current()) return;
+        retryVersions = undefined;
+        answer = await loadVersions().catch(() => null);
+      } while (current() && answer === undefined);
       if (!current()) return;
-      if (answer === undefined) {
-        retryVersions = retry;
-        return;
-      }
       const upper = await franchise;
       if (current()) placeVersions(answer, upper);
-    };
-    void versionsAnswer.then((answer) => {
-      if (current() && answer === undefined) retryVersions = retry;
     });
     if (rebuild) {
       void Promise.all([
@@ -321,16 +311,15 @@
           .map((row) => ({ build, row }));
         // A transient Atlas failure is not evidence that an already authoritative row became empty. Keep that row
         // until this exact lane answers successfully; Retry below reuses the current title/franchise authority.
-        if (version === undefined) {
-          const keptVersions = rows.find(({ row }) => row.id === 'other-versions');
-          if (keptVersions) {
-            const at = upper ? next.findIndex(({ row }) => row.id === upper.id) + 1 : 0;
-            next.splice(at, 0, keptVersions);
-          }
-        }
+        const keptVersions =
+          version === undefined && rows.find(({ row }) => row.id === 'other-versions');
+        if (keptVersions)
+          next.splice(upper && next[0]?.row.id === upper.id ? 1 : 0, 0, keptVersions);
         // A rebuild with no atlas has none to suggest: the suggestions already shown for this title stay, under
         // More like this, rather than shrinking the page under the viewer.
-        const kept = affinity ? undefined : rows.find(({ row }) => row.id === SUGGESTED);
+        const kept = affinity
+          ? undefined
+          : rows.find(({ row }) => row.id === 'you-might-also-like');
         if (kept) next.splice(next.findIndex(({ row }) => row.id === similar.id) + 1, 0, kept);
         rows = next;
       });
@@ -345,9 +334,9 @@
       });
     }
     return () => {
-      live = false;
       controller.abort();
-      if (retryVersions === retry) retryVersions = undefined;
+      retryVersions?.();
+      retryVersions = undefined;
       pendingDiscovery.cancel();
     };
   });
