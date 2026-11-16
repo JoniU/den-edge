@@ -93,6 +93,19 @@ const position = (page, row) =>
     x: Math.round(region.querySelector('.track').scrollLeft),
   }));
 
+async function withRestoreDiagnostics(page, restore) {
+  try {
+    await restore();
+  } catch (error) {
+    const timeline = await page.evaluate(() => globalThis.__denScrollRestoreTimeline ?? []);
+    await test.info().attach('router-scroll-restore-timeline', {
+      body: JSON.stringify(timeline, null, 2),
+      contentType: 'application/json',
+    });
+    throw error;
+  }
+}
+
 /** Scroll to a row, along it, and read where the page and the row are. */
 async function scrollAlong(page, row) {
   // Rows are rebuilt as late answers arrive, so retry across a replaced element.
@@ -173,7 +186,7 @@ async function detailRestores(browser) {
     TITLE,
   );
   await expect(page.getByRole('heading', { level: 1, name: 'The Title' })).toBeVisible();
-  await backRestoresRow(page, 'More like this');
+  await withRestoreDiagnostics(page, () => backRestoresRow(page, 'More like this'));
   await page.close();
 }
 
@@ -191,7 +204,7 @@ async function browseRestores(browser, start = '/') {
     await expect(rows.nth(4)).toBeAttached({ timeout: 1000 });
   }).toPass();
   const name = await rows.nth(4).getAttribute('aria-label');
-  await backRestoresRow(page, name);
+  await withRestoreDiagnostics(page, () => backRestoresRow(page, name));
   await page.close();
 }
 
