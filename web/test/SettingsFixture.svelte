@@ -23,6 +23,8 @@
   import type { JoinLibrary } from '../src/lib/browserHousehold';
   import profileFixture from '../src/vendor/den-core/profiles-v1.json';
   import { validateStoredProfileDirectory } from '../src/lib/profileDirectory';
+  import type { ProfilePreferences } from '../src/lib/profilePreferences.svelte';
+  import type { ProfilePolicy } from '../src/lib/profilePolicy';
   import '../src/app.css';
 
   const at = [1, 0, 'test'] as unknown as Stamp;
@@ -38,6 +40,7 @@
   const joinPresentationFixture = fixtureQuery.has('join-presentation');
   const profileTrackerAuthorityFixture = fixtureQuery.has('profile-tracker-authority');
   const importAuthorityReplacementFixture = fixtureQuery.has('hold-import-reply');
+  const playbackAuthorityFixture = fixtureQuery.has('playback-authority-replacement');
   const profileDirectory = (() => {
     if (!profileResetFixture || fixtureQuery.has('wire5-missing')) return null;
     const stored = structuredClone(profileFixture.migrationBase);
@@ -51,6 +54,7 @@
     fixtureQuery.has('recovery-authority-replacement') ||
     fixtureQuery.has('assistant-authority-replacement') ||
     fixtureQuery.has('pin-authority-replacement') ||
+    playbackAuthorityFixture ||
     joinPresentationFixture;
   let releaseRecoveryWrite = () => {};
   const recoveryWriteGate = fixtureQuery.has('recovery-authority-replacement')
@@ -264,6 +268,30 @@
       })
     : undefined;
   let model = $state.raw<LibraryModel>(primaryModel);
+  const preferenceCommands = { primary: [] as string[], replacement: [] as string[] };
+  const profilePreferences = (
+    name: keyof typeof preferenceCommands,
+    owner: LibraryModel,
+    interfaceLanguage: 'en' | 'sv',
+  ) =>
+    ({
+      get value() {
+        const value = owner.settings.value?.preferences;
+        return value ? { ...structuredClone(value), interfaceLanguage } : undefined;
+      },
+      policy: {} as ProfilePolicy,
+      async patch(changes) {
+        preferenceCommands[name].push(changes.playbackSourcePolicy ?? 'other');
+      },
+      close() {},
+    }) satisfies ProfilePreferences;
+  const primaryPreferences = profilePreferences('primary', primaryModel, 'en');
+  const replacementPreferences = replacementLibrary
+    ? profilePreferences('replacement', replacementLibrary.model, 'sv')
+    : null;
+  let activePreferences = $state.raw<ProfilePreferences | null>(
+    playbackAuthorityFixture ? primaryPreferences : null,
+  );
   let settingsMounted = $state(true);
   const recoveryAuthorityControls = {
     replace() {
@@ -292,6 +320,8 @@
   ).fixtureRecoveryAuthority = recoveryAuthorityControls;
   let heldConnections: ReturnType<typeof library.holdNextSelection> | undefined;
   let heldSimkl: ReturnType<typeof library.holdNextSelection> | undefined;
+  let heldReplacementConnections: ReturnType<typeof library.holdNextSelection> | undefined;
+  let heldReplacementSimkl: ReturnType<typeof library.holdNextSelection> | undefined;
   let heldAuthorityPublication: Promise<void> | undefined;
   let heldAssistantGrants: ReturnType<typeof library.holdNextAssistantGrants> | undefined;
   const authorityReplacementControls = {
@@ -346,6 +376,21 @@
           }),
         );
       model = replacementLibrary.model;
+    },
+    async replacePlaybackHeld() {
+      if (!replacementLibrary || !replacementPreferences) return;
+      heldReplacementConnections = replacementLibrary.holdNextSelection('connections');
+      heldReplacementSimkl = replacementLibrary.holdNextSelection('simkl');
+      activePreferences = replacementPreferences;
+      model = replacementLibrary.model;
+      await Promise.all([heldReplacementConnections.started, heldReplacementSimkl.started]);
+    },
+    releasePlaybackReplacement() {
+      heldReplacementConnections?.release();
+      heldReplacementSimkl?.release();
+    },
+    preferenceCommands() {
+      return structuredClone(preferenceCommands);
     },
     releasePinReply() {
       releasePinReply();
@@ -635,6 +680,7 @@
       activityModel={profileTrackerAuthorityFixture || importAuthorityReplacementFixture
         ? activityModel
         : model}
+      preferences={activePreferences}
       {content}
       local={joinPresentationFixture}
       onjoin={joinPresentationFixture ? heldJoin : undefined}

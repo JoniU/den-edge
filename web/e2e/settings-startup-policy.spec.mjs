@@ -63,6 +63,14 @@ test('a saved language and Automatic subtitles read correctly before deferred po
   const startupSubtitles = page.locator('#subtitle-language select');
   const startupLanguage = page.locator('#interface-language select');
   await expect(page.locator('.settings-load[role="status"]')).toBeVisible({ timeout: 30_000 });
+  const playbackInputs = page.locator('#playback select, #playback input');
+  await expect(playbackInputs).toHaveCount(6);
+  await expect
+    .poll(() => playbackInputs.evaluateAll((inputs) => inputs.every((input) => input.disabled)))
+    .toBe(true);
+  await expect(
+    page.locator('#content, #connections, #sharing, #assistants, #import, #advanced'),
+  ).toHaveCount(0);
   await expect(startupSubtitles).toHaveValue('__automatic', {
     timeout: 30_000,
   });

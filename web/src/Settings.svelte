@@ -89,6 +89,8 @@
     model: LibraryModel;
     /** Exact active Owner activity authority: tracker credentials, commands and delivery review. */
     activityModel: LibraryModel;
+    /** Exact active profile preference writer; null means the household settings log owns preferences. */
+    preferences: ProfilePreferences | null;
     connections: ReturnType<LibraryModel['connections']>;
     simkl?: ReturnType<LibraryModel['simkl']>;
     recovery?: ReturnType<LibraryModel['recovery']>;
@@ -96,9 +98,11 @@
   const acquireAuthority = (
     household: LibraryModel,
     activity: LibraryModel,
+    profilePreferences: ProfilePreferences | null,
   ): SettingsAuthority => ({
     model: household,
     activityModel: activity,
+    preferences: profilePreferences,
     connections: household.connections(),
     ...(!__DEN_TV_LEGACY_JS_CORE__
       ? { simkl: activity.simkl(), recovery: household.recovery() }
@@ -109,7 +113,7 @@
       lease?.release(),
     );
   const joinPresentation = new LibraryJoinPresentationOwner();
-  let authority = $state.raw(untrack(() => acquireAuthority(model, activityModel)));
+  let authority = $state.raw(untrack(() => acquireAuthority(model, activityModel, preferences)));
   let authorityGeneration = 0;
   let retrying = $state(false);
   let failure = $state<string | null>(null);
@@ -120,11 +124,18 @@
   $effect(() => {
     const replacementHousehold = model;
     const replacementActivity = activityModel;
+    const replacementPreferences = preferences;
     joinPresentation.replace(replacementHousehold);
-    if (authority.model === replacementHousehold && authority.activityModel === replacementActivity)
+    if (
+      authority.model === replacementHousehold &&
+      authority.activityModel === replacementActivity &&
+      authority.preferences === replacementPreferences
+    )
       return;
     const previous = authority;
-    authority = untrack(() => acquireAuthority(replacementHousehold, replacementActivity));
+    authority = untrack(() =>
+      acquireAuthority(replacementHousehold, replacementActivity, replacementPreferences),
+    );
     authorityGeneration++;
     retrying = false;
     failure = null;
@@ -142,7 +153,14 @@
     const view = authority.recovery?.snapshot.value;
     return view ? structuredClone(view) : undefined;
   });
-  const effectivePreferences = $derived(preferences ? preferences.value : settings?.preferences);
+  const exactAuthority = $derived(
+    authority.model === model &&
+      authority.activityModel === activityModel &&
+      authority.preferences === preferences,
+  );
+  const effectivePreferences = $derived(
+    authority.preferences ? authority.preferences.value : settings?.preferences,
+  );
   let localInterfaceLanguage = $state(
     untrack(() => (local ? readLocalInterfaceLanguage() : undefined)),
   );
@@ -154,7 +172,8 @@
   // A failed selector may retain its previous value for diagnosis, but that stale authority must not keep Settings
   // actionable or hide the retry control while a fresh binding is required.
   const ready = $derived(
-    !!settings &&
+    exactAuthority &&
+      !!settings &&
       !!effectivePreferences &&
       !!connections &&
       (__DEN_TV_LEGACY_JS_CORE__ || !!simkl) &&
@@ -256,7 +275,8 @@
   }
 
   async function patchPreferences(changes: PreferenceChanges): Promise<void> {
-    if (!preferences) {
+    const profilePreferences = authority.preferences;
+    if (!profilePreferences) {
       const language = changes.interfaceLanguage;
       await authority.model.patchPreferences(changes);
       if (language) {
@@ -274,13 +294,18 @@
     // profile's policy lives in the directory) and stays on the control log.
     const { maturityCeiling, ...personal } = changes;
     if ('maturityCeiling' in changes) await authority.model.patchPreferences({ maturityCeiling });
-    if (Object.keys(personal).length) await preferences.patch(personal);
+    if (Object.keys(personal).length) await profilePreferences.patch(personal);
     if (changes.interfaceLanguage) {
       rememberFreshPresentationLanguage(changes.interfaceLanguage);
       oninterfacelanguage?.(changes.interfaceLanguage);
     }
   }
-  const savePrefs = (changes: PreferenceChanges) => void run(() => patchPreferences(changes));
+  const savePrefs = (changes: PreferenceChanges) => {
+    // A native disabled control cannot emit user changes, but keep the command boundary authoritative too: a queued
+    // event from the exact frame in which model/activity/profile props changed must not cross into either authority.
+    if (!ready) return;
+    void run(() => patchPreferences(changes));
+  };
   async function saveParentalPin(
     current: string | null,
     pin: string | null,
@@ -447,13 +472,13 @@
     items: Parameters<LibraryModel['importHistory']>[0],
     operationId: string,
   ) {
-    const { result } = await activityModel.importHistory(items, operationId);
+    const { result } = await authority.activityModel.importHistory(items, operationId);
     if (result.kind !== 'history.import') throw new Error('wrong history import response');
     return result;
   }
 
   async function exportHistory() {
-    const { result } = await activityModel.exportHistory();
+    const { result } = await authority.activityModel.exportHistory();
     if (result.kind !== 'history.export') throw new Error('wrong history export response');
     return result;
   }
@@ -593,9 +618,9 @@
         {/key}
         <ImportSection
           {ready}
-          scope={activityModel}
+          scope={authority.activityModel}
           {content}
-          watched={activityModel.overview.value?.watched ?? []}
+          watched={authority.activityModel.overview.value?.watched ?? []}
           {importHistory}
           {exportHistory}
         />
