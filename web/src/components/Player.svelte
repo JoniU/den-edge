@@ -5390,9 +5390,7 @@
     else if (awaitingNext && nextAvailability === 'failed')
       list.push({
         text: i18n.phrase('Couldn’t check for the next episode.'),
-        action: onnextretry
-          ? { label: i18n.phrase('Try again'), run: onnextretry }
-          : undefined,
+        action: onnextretry ? { label: i18n.phrase('Try again'), run: onnextretry } : undefined,
         urgent: true,
       });
     else if (awaitingNext && nextAvailability === 'unreleased')

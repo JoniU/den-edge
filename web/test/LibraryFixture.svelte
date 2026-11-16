@@ -618,6 +618,7 @@
           failOnce: () => void;
           hold: () => void;
           release: () => void;
+          finale: () => void;
           requests: () => number;
         };
       }
@@ -633,6 +634,12 @@
       release: () => {
         releaseHeld();
         held = undefined;
+      },
+      finale: () => {
+        session.shapes.set(titleKey({ type: 'tv', id: 2002 }), {
+          counts: new Map([[1, 1]]),
+          lastAired: { season: 1, episode: 1 },
+        });
       },
       requests: () => requests,
     };

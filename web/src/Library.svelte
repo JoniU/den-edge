@@ -1714,38 +1714,48 @@
   let followingGeneration = 0;
   let followingWait: ReturnType<typeof setTimeout> | undefined;
 
+  function publishFollowing(target: Target, generation: number): boolean {
+    if (playing !== target || followingGeneration !== generation) return false;
+    const shape = session.shapes.get(titleKey(target.title));
+    if (!shape) return false;
+    clearTimeout(followingWait);
+    const at = { season: target.season!, episode: target.episode! };
+    const next = episodeAfter(at, shape);
+    if (!next) {
+      following = { kind: 'finale' };
+      return true;
+    }
+    // Atlas's dates first: an episode out before TMDB's broadcast slot is next in line the day it is out.
+    const aired = airedThrough(
+      shape.lastAired,
+      untrack(() => airings.get(target.title.id)),
+    );
+    following = isAired(next, aired)
+      ? { kind: 'ready', target: { title: target.title, ...next } }
+      : { kind: 'unreleased' };
+    return true;
+  }
+
   function findFollowing(target: Target): void {
     const generation = ++followingGeneration;
     clearTimeout(followingWait);
+    if (publishFollowing(target, generation)) return;
     following = { kind: 'loading' };
     // A library-provider request can remain in flight while its Worker reconnects. The request may still complete,
     // but the ended player must acquire an actionable state instead of announcing an unbounded wait.
     followingWait = setTimeout(() => {
-      if (playing === target && followingGeneration === generation)
-        following = { kind: 'failed' };
+      if (playing === target && followingGeneration === generation) following = { kind: 'failed' };
     }, 10_000);
-    void (async () => {
-      if (!session.shapes.has(titleKey(target.title)))
-        await promoteLibraryTitle(session, target.title);
-      if (playing !== target || followingGeneration !== generation) return;
-      clearTimeout(followingWait);
-      const shape = session.shapes.get(titleKey(target.title));
-      if (!shape) {
+    void promoteLibraryTitle(session, target.title).then(() => {
+      if (
+        !publishFollowing(target, generation) &&
+        playing === target &&
+        followingGeneration === generation
+      ) {
+        clearTimeout(followingWait);
         following = { kind: 'failed' };
-        return;
       }
-      const at = { season: target.season!, episode: target.episode! };
-      const next = episodeAfter(at, shape);
-      if (!next) {
-        following = { kind: 'finale' };
-        return;
-      }
-      // Atlas's dates first: an episode out before TMDB's broadcast slot is next in line the day it is out.
-      const aired = airedThrough(shape.lastAired, untrack(() => airings.get(target.title.id)));
-      following = isAired(next, aired)
-        ? { kind: 'ready', target: { title: target.title, ...next } }
-        : { kind: 'unreleased' };
-    })();
+    });
   }
 
   $effect(() => {
