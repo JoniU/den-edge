@@ -282,24 +282,25 @@
   // The production fixture records the props at Svelte's pre-effect boundary. That catches a previous episode's
   // following state crossing the render before Library's ordinary effect retires it; a post-render assertion is too
   // late to observe that ownership violation.
-  $effect.pre(() => {
-    if (!import.meta.env.DEN_E2E) return;
-    (
-      window as unknown as {
-        denTestNextEpisodeComposition?: (value: {
-          season?: number;
-          episode?: number;
-          availability?: typeof nextAvailability;
-          next?: typeof nextEpisode;
-        }) => void;
-      }
-    ).denTestNextEpisodeComposition?.({
-      season,
-      episode,
-      availability: nextAvailability,
-      next: nextEpisode,
+  if (import.meta.env.DEN_E2E) {
+    $effect.pre(() => {
+      (
+        window as unknown as {
+          denTestNextEpisodeComposition?: (value: {
+            season?: number;
+            episode?: number;
+            availability?: typeof nextAvailability;
+            next?: typeof nextEpisode;
+          }) => void;
+        }
+      ).denTestNextEpisodeComposition?.({
+        season,
+        episode,
+        availability: nextAvailability,
+        next: nextEpisode,
+      });
     });
-  });
+  }
 
   function advanceLink(event: MouseEvent) {
     if (!onnext) return;
