@@ -612,10 +612,10 @@ test.describe('the playback scenario matrix', () => {
     const { page, seen } = await household({ iphone: true, blockCastAutoplay: true });
     await play(page);
     const notice = page.getByRole('status').filter({
-      hasText: 'Playback needs another tap on this device.',
+      hasText: 'Select Play on the video to continue.',
     });
     await expect(notice).toBeVisible();
-    await page.getByRole('button', { name: 'Play', exact: true }).click();
+    await castFrame(page).getByRole('button', { name: 'Play', exact: true }).click();
     // Away from home, as every flow here: the session plays in the cast frame, on the public listener's origin.
     await playingPast(castFrame(page).locator('video'), 2);
     expect(

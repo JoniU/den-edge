@@ -68,7 +68,7 @@ export const ENGLISH_MESSAGES = {
   'common.play': 'Play',
   'common.resume': 'Resume',
   'common.close': 'Close',
-  'player.autoplayBlocked': 'Playback needs another tap on this device.',
+  'player.autoplayBlocked': 'Select Play on the video to continue.',
   'player.subtitleTiming': 'Subtitle timing',
   'player.subtitleEarlier': 'Earlier',
   'player.subtitleLater': 'Later',

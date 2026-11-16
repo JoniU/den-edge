@@ -183,6 +183,7 @@ declare global {
 const video = document.querySelector('video')!;
 const statusPill = document.querySelector<HTMLElement>('#status')!;
 const castButton = document.querySelector<HTMLButtonElement>('#cast')!;
+const localPlayButton = document.querySelector<HTMLButtonElement>('#play-local')!;
 /** The receiver models the player names (`castCapabilities`); the viewer's pick is kept on this origin. */
 const PROFILES = ['legacy', 'gen3', 'ultra', 'google-tv-hd', 'google-tv-4k', 'streamer'];
 const kept = keptProfile();
@@ -274,7 +275,7 @@ function hearReceiverEvents(session: CastSession | null | undefined): void {
     // The codes of the receiver's player error, for den-edge's cast report: numbers only.
     if (event.event === 'error') {
       const shaka = (event.error as { shakaErrorCode?: unknown } | null)?.shakaErrorCode;
-      tell('den-receiver-error', {
+      tellFor(playingLoad, 'den-receiver-error', {
         ...(Number.isInteger(event.detailedErrorCode) ? { code: event.detailedErrorCode } : {}),
         ...(Number.isInteger(shaka) ? { shaka } : {}),
       });
@@ -290,7 +291,7 @@ function hearReceiverEvents(session: CastSession | null | undefined): void {
       !replacingCast
     ) {
       castStarted = false;
-      fail('Chromecast could not continue playback');
+      if (playingLoad) failFor(playingLoad, 'Chromecast could not continue playback');
     }
   });
 }
@@ -310,6 +311,7 @@ const COPY: Record<Exclude<InterfaceLanguage, 'en'>, Record<string, string>> = {
     'Chromecast could not continue playback': 'Chromecast no pudo continuar la reproducción',
     'Playback failed': 'La reproducción falló',
     'Invalid media URL': 'URL multimedia no válida',
+    Play: 'Reproducir',
   },
   sv: {
     'Cast to a TV': 'Casta till en tv',
@@ -323,6 +325,7 @@ const COPY: Record<Exclude<InterfaceLanguage, 'en'>, Record<string, string>> = {
     'Chromecast could not continue playback': 'Chromecast kunde inte fortsätta uppspelningen',
     'Playback failed': 'Uppspelningen misslyckades',
     'Invalid media URL': 'Ogiltig medie-URL',
+    Play: 'Spela',
   },
 };
 const text = (english: string): string =>
@@ -331,6 +334,8 @@ function applyInterfaceLanguage(language: unknown): void {
   if (language !== 'en' && language !== 'es' && language !== 'sv') return;
   interfaceLanguage = language;
   document.documentElement.lang = language;
+  localPlayButton.textContent = text('Play');
+  localPlayButton.setAttribute('aria-label', text('Play'));
   renderButton();
 }
 
@@ -394,6 +399,10 @@ function translateStatus(source: string): string {
 const parents = parentOrigins(import.meta.env.VITE_DEN_PARENT_ORIGINS ?? DEFAULT_PARENT_ORIGINS);
 let parentOrigin: string | undefined;
 let current: LoadMessage | undefined;
+/** The exact load whose media currently owns local/receiver events, even while a replacement is pending. */
+let playingLoad: LoadMessage | undefined;
+/** The exact local load waiting for a gesture in this document. */
+let blockedLocalLoad: LoadMessage | undefined;
 let hls: Hls | undefined;
 let castContext: CastContext | undefined;
 let remotePlayer: RemotePlayer | undefined;
@@ -407,8 +416,8 @@ let replacingCast = false;
  * must not end `replacingCast` before that media's own INTERRUPTED arrives: read as a stop, it ended the session.
  */
 let loadInFlight = false;
-let castSubtitleAppliedId: string | undefined;
-let measuredId: string | undefined;
+let castSubtitleAppliedLoad: LoadMessage | undefined;
+let measuredLoad: LoadMessage | undefined;
 /** What this page's video reports to den-remux (`watchPlayback`); stopped before hls.js is destroyed. */
 let watcher: Watcher | undefined;
 /** The connection as this page's segments see it (`resumingLoader`); one per hls.js instance. */
@@ -427,7 +436,7 @@ let naturallyFinished = false;
 /** How long a measured load waits for the player to say play on, before it plays on regardless. */
 const CONTINUE_WAIT_MS = 5_000;
 /** The measured load waiting for the player's `den-continue`. */
-let waiting: { id: string; resolve: () => void } | undefined;
+let waiting: { load: LoadMessage; resolve: () => void } | undefined;
 /** The loads whose home-network address answered: they play from it, in this browser and on a Cast receiver alike. */
 const onLan = new Set<string>();
 
@@ -457,6 +466,33 @@ function tell(type: string, fields: Record<string, unknown> = {}): void {
   );
 }
 
+function tellFor(
+  load: LoadMessage | undefined,
+  type: string,
+  fields: Record<string, unknown> = {},
+): void {
+  if (!parentOrigin || !load) return;
+  window.parent.postMessage(
+    { type, id: load.id, generation: load.generation, ...fields },
+    parentOrigin,
+  );
+}
+
+const ownsCurrent = (load: LoadMessage | undefined): load is LoadMessage => current === load;
+
+function clearLocalPlay(load?: LoadMessage): void {
+  if (load && blockedLocalLoad !== load) return;
+  blockedLocalLoad = undefined;
+  localPlayButton.hidden = true;
+}
+
+function offerLocalPlay(load: LoadMessage): void {
+  if (!ownsCurrent(load)) return;
+  blockedLocalLoad = load;
+  localPlayButton.hidden = false;
+  localPlayButton.focus({ preventScroll: true });
+}
+
 /** A message about the Cast button itself, which the player needs before anything is loaded here. */
 function say(type: string, fields: Record<string, unknown> = {}): void {
   if (!parentOrigin) return;
@@ -478,20 +514,25 @@ window.addEventListener(
   { passive: true },
 );
 
-/** Tell den-remux why the session couldn't play — its log sees nothing of it otherwise — and then the player. */
-function fail(message: string, code = 0, owner: PlayingMedia | undefined = playing): void {
+function failFor(
+  load: LoadMessage,
+  message: string,
+  code = 0,
+  owner: PlayingMedia | undefined = playing,
+): void {
   const lifecycle = denLifecycleMedia(owner);
   if (lifecycle) {
     watcher?.spent();
     sendReport(reportUrlOf(lifecycle), reportBody(code, message));
   }
-  tell('den-error', { message: translateStatus(message) });
+  tellFor(load, 'den-error', { message: translateStatus(message) });
 }
 
 /** End the session this page played, so it stops holding den-remux and the media listener open. */
 function endPlaying(): void {
   const ended = playing;
   playing = undefined;
+  playingLoad = undefined;
   endMedia(ended);
 }
 
@@ -542,6 +583,7 @@ function announceDevices(): void {
 
 /** Stop this page's hls.js and the connection it was watching. */
 function stopLocal(): void {
+  clearLocalPlay();
   watcher?.stop();
   watcher = undefined;
   hls?.destroy();
@@ -557,7 +599,7 @@ function stopLocal(): void {
  * player outside asked to let this browser's address back in (it may have changed, and only that page can say so),
  * and playback carried on from the same second when the segments come back.
  */
-function watchLink(connection: Link): void {
+function watchLink(connection: Link, load: LoadMessage): void {
   const show = () => {
     const buffered = video.buffered;
     const ahead = buffered.length ? buffered.end(buffered.length - 1) - video.currentTime : 0;
@@ -566,7 +608,7 @@ function watchLink(connection: Link): void {
     else if ((!connection.down || ahead >= 0.5) && shown) setStatus('');
   };
   connection.beforeRetry = () => {
-    tell('den-reconnect');
+    tellFor(load, 'den-reconnect');
     return Promise.resolve();
   };
   connection.subscribe((down) => {
@@ -576,8 +618,11 @@ function watchLink(connection: Link): void {
   });
 }
 
-async function loadLocal(media: Media, url: string): Promise<void> {
+async function loadLocal(load: LoadMessage, url: string): Promise<void> {
   stopLocal();
+  if (!ownsCurrent(load)) return;
+  const media = load.media;
+  playingLoad = load;
   video.removeAttribute('src');
   playing = {
     url,
@@ -611,7 +656,7 @@ async function loadLocal(media: Media, url: string): Promise<void> {
   } else if (Hls.isSupported()) {
     // The same tolerance as the player outside: a release den-remux converts answers its first segment late.
     const connection = (link = new Link());
-    watchLink(connection);
+    watchLink(connection, load);
     hls = new Hls(hlsConfig(start > 0 ? start : undefined, 'receiver', connection));
     watcher = watchPlayback({
       video,
@@ -646,10 +691,11 @@ async function loadLocal(media: Media, url: string): Promise<void> {
       ) {
         clearInterval(linkWatch);
         setStatus('');
-        tell('den-lost', { currentTime: video.currentTime });
+        tellFor(load, 'den-lost', { currentTime: video.currentTime });
         return;
       }
-      fail(`hls.js ${data.type} ${data.details}`);
+      if (ownsCurrent(load)) setStatus('Playback failed');
+      failFor(load, `hls.js ${data.type} ${data.details}`, 0, loading);
     });
     hls.on(Hls.Events.MANIFEST_PARSED, () =>
       applySubtitle(media.subtitleLanguage, media.subtitleIndex),
@@ -659,11 +705,11 @@ async function loadLocal(media: Media, url: string): Promise<void> {
   } else {
     const message = 'This browser cannot play HLS';
     setStatus(message);
-    fail(message);
+    failFor(load, message, 0, loading);
     return;
   }
   describeToSystem(media);
-  await playLocal(current);
+  await playLocal(load);
 }
 
 /**
@@ -675,14 +721,20 @@ async function playLocal(load: LoadMessage | null): Promise<void> {
   try {
     await video.play();
     if (current !== load) return;
+    clearLocalPlay(load);
     setStatus(PLAYING_HERE);
-    tell('den-playing');
+    tellFor(load, 'den-playing');
   } catch (error) {
     if (current !== load) return;
-    // The parent player's chrome covers the frame's native transport. Name only the browser's explicit autoplay
-    // refusal so it can offer another, immediate user gesture; decoder/network failures keep their existing path.
-    if (error instanceof DOMException && error.name === 'NotAllowedError')
-      tell('den-autoplay-blocked');
+    if (error instanceof DOMException && error.name === 'NotAllowedError') {
+      // Only a gesture in this cross-origin document can satisfy WebKit. Keep repeat refusals recoverable.
+      offerLocalPlay(load);
+      tellFor(load, 'den-autoplay-blocked');
+      return;
+    }
+    clearLocalPlay(load);
+    setStatus('Playback failed');
+    failFor(load, 'Playback failed');
   }
 }
 
@@ -753,14 +805,15 @@ function applySubtitle(language: string | null | undefined, subtitleIndex?: numb
   );
 }
 
-async function measure(media: Media, id: string): Promise<boolean> {
-  if (!media.measure || !media.speed || measuredId === id) return false;
-  measuredId = id;
+async function measure(load: LoadMessage): Promise<boolean> {
+  const { media } = load;
+  if (!media.measure || !media.speed || measuredLoad === load) return false;
+  measuredLoad = load;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const maxBitrate = usableLinkLimit(await signedLinkLimit(media.speed));
-    if (current?.id !== id) return false;
+    if (!ownsCurrent(load)) return false;
     if (maxBitrate) {
-      tell('den-speed', { maxBitrate });
+      tellFor(load, 'den-speed', { maxBitrate });
       return true;
     }
   }
@@ -823,14 +876,15 @@ function applyCastSubtitle(language: string | null | undefined, subtitleIndex?: 
   return true;
 }
 
-async function loadCast(): Promise<void> {
-  const id = current?.id;
+async function loadCast(load: LoadMessage | undefined = current): Promise<void> {
+  if (!load) return;
+  const id = load.id;
   const session = castContext?.getCurrentSession();
-  const media = current?.media;
+  const media = load.media;
   const chrome = window.chrome?.cast;
-  if (!id || !session || !media || !chrome) return;
+  if (!session || !chrome) return;
   if (media.mode !== 'cast') {
-    tell('den-cast-request', asking());
+    tellFor(load, 'den-cast-request', asking());
     return;
   }
   const url = playUrl(id, media);
@@ -883,6 +937,7 @@ async function loadCast(): Promise<void> {
     // the previous media, even though `current` already describes the requested replacement.
     const replaced = playing;
     playing = requested;
+    playingLoad = load;
     // The receiver plays a session of its own now. A Den Remux session played before it (this page's video, or the
     // receiver's previous media) would hold its den-remux slot until it idled out: nothing else ends it, and casting
     // over, the player asks for a new session rather than resuming that one. A TorBox stream is left alone: its
@@ -895,28 +950,32 @@ async function loadCast(): Promise<void> {
       if (!castStarted) stopLocal();
       endMedia(replaced);
     }
-    if (current?.id !== id) {
-      void loadCast();
+    if (!ownsCurrent(load)) {
+      void loadCast(current);
       return;
     }
     castStarted = true;
-    castSubtitleAppliedId = applyCastSubtitle(media.subtitleLanguage, media.subtitleIndex)
-      ? current?.id
+    castSubtitleAppliedLoad = applyCastSubtitle(media.subtitleLanguage, media.subtitleIndex)
+      ? load
       : undefined;
     setStatus(castingTo(session.getCastDevice?.().friendlyName));
     video.pause();
-    tell('den-cast', { state: 'playing', profile: asking().profile, device: deviceName() });
+    tellFor(load, 'den-cast', {
+      state: 'playing',
+      profile: asking().profile,
+      device: deviceName(),
+    });
   } catch {
     replacingCast = false;
-    if (current?.id !== id) {
-      void loadCast();
+    if (!ownsCurrent(load)) {
+      void loadCast(current);
       return;
     }
     castStarted = false;
     // The Cast session is kept: the player decides what is tried next, and only Stop casting ends it.
     const message = 'Chromecast could not load this release';
     setStatus(message);
-    fail(message, 0, requested);
+    failFor(load, message, 0, requested);
   }
 }
 
@@ -924,11 +983,11 @@ async function loadCast(): Promise<void> {
  * Wait for the player to say play on after a measure (`den-continue`), or to replace this load with a session that
  * fits the link. A player that says neither within CONTINUE_WAIT_MS is played on regardless.
  */
-function continued(id: string): Promise<void> {
+function continued(load: LoadMessage): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, CONTINUE_WAIT_MS);
     waiting = {
-      id,
+      load,
       resolve: () => {
         clearTimeout(timer);
         resolve();
@@ -946,25 +1005,25 @@ async function open(message: LoadMessage): Promise<void> {
     (message.media.mode === 'cast' && message.media.lanProven === true && message.media.lanUrl)
   ) {
     onLan.add(message.id);
-    if (current?.id === message.id) tell('den-lan');
+    if (ownsCurrent(message)) tellFor(message, 'den-lan');
   }
   // Home first: on home Wi-Fi the router never loops a request for the public address back in, so only the
   // home-network address can play. Anywhere else this fails fast and the public address is used as before.
   if (!onLan.has(message.id) && (await lanReachable(message.media.lanUrl))) {
     onLan.add(message.id);
     // A link limit the player remembered from away doesn't belong here.
-    if (current?.id === message.id) tell('den-lan');
+    if (ownsCurrent(message)) tellFor(message, 'den-lan');
   }
-  if (current?.id !== message.id) return;
+  if (!ownsCurrent(message)) return;
   // No home upload sits between this browser and den-remux on the LAN, so there is no link to measure.
-  const measured = onLan.has(message.id) ? false : await measure(message.media, message.id);
-  if (measured) await continued(message.id);
-  if (current?.id !== message.id) return;
+  const measured = onLan.has(message.id) ? false : await measure(message);
+  if (measured) await continued(message);
+  if (!ownsCurrent(message)) return;
   // A receiver already chosen (the player's offer, `den-choose`) takes the load; asked for in browser mode, `loadCast`
   // has the player ask again for what this receiver plays.
-  if (message.media.mode === 'cast' || castContext?.getCurrentSession()) await loadCast();
-  else await loadLocal(message.media, playUrl(message.id, message.media));
-  if (current?.id === message.id)
+  if (message.media.mode === 'cast' || castContext?.getCurrentSession()) await loadCast(message);
+  else await loadLocal(message, playUrl(message.id, message.media));
+  if (ownsCurrent(message))
     applySubtitle(message.media.subtitleLanguage, message.media.subtitleIndex);
 }
 
@@ -989,7 +1048,7 @@ function initializeCast(): boolean {
     if (!castStarted || !remotePlayer) return;
     lastPosition = Math.max(0, remotePlayer.currentTime);
     lastDuration = Math.max(0, remotePlayer.duration);
-    tell('den-progress', {
+    tellFor(playingLoad, 'den-progress', {
       currentTime: remotePlayer.currentTime,
       duration: remotePlayer.duration,
       paused: remotePlayer.isPaused,
@@ -999,11 +1058,11 @@ function initializeCast(): boolean {
     if (remotePlayer.playerState !== 'IDLE') {
       if (!loadInFlight) replacingCast = false;
       if (
-        current &&
-        castSubtitleAppliedId !== current.id &&
-        applyCastSubtitle(current.media.subtitleLanguage, current.media.subtitleIndex)
+        playingLoad &&
+        castSubtitleAppliedLoad !== playingLoad &&
+        applyCastSubtitle(playingLoad.media.subtitleLanguage, playingLoad.media.subtitleIndex)
       )
-        castSubtitleAppliedId = current.id;
+        castSubtitleAppliedLoad = playingLoad;
       return;
     }
     const reason = castContext?.getCurrentSession()?.getMediaSession()?.idleReason;
@@ -1017,13 +1076,13 @@ function initializeCast(): boolean {
     castStarted = false;
     if (action === 'finished') {
       naturallyFinished = true;
-      tell('den-ended');
+      tellFor(playingLoad, 'den-ended');
     } else if (action === 'error') {
-      fail('Chromecast could not continue playback');
+      if (playingLoad) failFor(playingLoad, 'Chromecast could not continue playback');
     } else {
       // CANCELLED means the media was stopped; an unrelated sender's LOAD is merely disconnected from.
       castContext?.endCurrentSession(reason !== 'INTERRUPTED');
-      tell('den-cast', { state: 'stopped', reason });
+      tellFor(playingLoad, 'den-cast', { state: 'stopped', reason });
     }
   });
   castContext.setOptions({
@@ -1053,7 +1112,7 @@ function initializeCast(): boolean {
       console.info(`[Den cast] ${JSON.stringify({ event: 'receiver-session-ended' })}`);
       castStarted = false;
       replacingCast = false;
-      tell('den-cast', { state: 'stopped', reason: 'SESSION_ENDED' });
+      tellFor(playingLoad, 'den-cast', { state: 'stopped', reason: 'SESSION_ENDED' });
     }
   });
   return true;
@@ -1128,6 +1187,14 @@ castButton.addEventListener('focus', () =>
 castButton.addEventListener('blur', () => say('den-cast-focus', { focused: false }));
 castButton.addEventListener('pointerenter', () => say('den-cast-hover', { hover: true }));
 castButton.addEventListener('pointerleave', () => say('den-cast-hover', { hover: false }));
+
+localPlayButton.addEventListener('click', (event) => {
+  const load = blockedLocalLoad;
+  // A script-generated click is not the missing activation. `playLocal` reaches video.play() synchronously from this
+  // trusted handler, before its first await, and retains the exact load across the resulting promise.
+  if (!event.isTrusted || !load || !ownsCurrent(load)) return;
+  void playLocal(load);
+});
 // As the player's control bar this page is one button: Tab moves on to the player's next control, not to the end of
 // the player, where the frame sits in its document.
 castButton.addEventListener('keydown', (event) => {
@@ -1204,7 +1271,7 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
   parentOrigin = event.origin;
   if (current?.id === message.id && current.generation === message.generation) {
     const previousSubtitle = current.media.subtitleTrack?.url;
-    current = message as LoadMessage;
+    current.media = message.media;
     if (
       castStarted &&
       current.media.subtitleLanguage &&
@@ -1215,14 +1282,18 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
       return;
     }
     applySubtitle(current.media.subtitleLanguage, current.media.subtitleIndex);
-    castSubtitleAppliedId = undefined;
+    castSubtitleAppliedLoad = undefined;
     if (
       castStarted &&
       applyCastSubtitle(current.media.subtitleLanguage, current.media.subtitleIndex)
     )
-      castSubtitleAppliedId = current.id;
+      castSubtitleAppliedLoad = current;
     return;
   }
+  clearLocalPlay();
+  const held = waiting;
+  waiting = undefined;
+  held?.resolve();
   current = message as LoadMessage;
   document.title = current.media.title;
   setStatus('');
@@ -1236,10 +1307,16 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
   const message = event.data as {
     type?: string;
     id?: string;
+    generation?: number;
     language?: unknown;
     track?: Media['subtitleTrack'];
   };
-  if (message.type !== 'den-subtitle' || message.id !== current.id) return;
+  if (
+    message.type !== 'den-subtitle' ||
+    message.id !== current.id ||
+    message.generation !== current.generation
+  )
+    return;
   const previousSubtitle = current.media.subtitleTrack?.url;
   current.media.subtitleLanguage = typeof message.language === 'string' ? message.language : null;
   current.media.subtitleTrack = validSubtitleTrack(message.track) ? message.track : undefined;
@@ -1253,9 +1330,9 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
     return;
   }
   applySubtitle(current.media.subtitleLanguage, current.media.subtitleIndex);
-  castSubtitleAppliedId = undefined;
+  castSubtitleAppliedLoad = undefined;
   if (castStarted && applyCastSubtitle(current.media.subtitleLanguage, current.media.subtitleIndex))
-    castSubtitleAppliedId = current.id;
+    castSubtitleAppliedLoad = current;
 });
 
 /** The player asks whether a receiver is on the network, with nothing to load yet. */
@@ -1304,7 +1381,7 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
     if (castStarted && remotePlayer && remoteController && remotePlayer.isPaused !== pause)
       remoteController.playOrPause();
     else if (!castStarted && pause) video.pause();
-    else if (!castStarted && video.paused) void playLocal(current);
+    else if (!castStarted && !blockedLocalLoad && video.paused) void playLocal(current);
   } else if (message.type === 'den-volume') {
     if (!castStarted || !remotePlayer || !remoteController) return;
     if (typeof message.level === 'number' && message.level >= 0 && message.level <= 1) {
@@ -1335,9 +1412,15 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
 /** The player kept the measured session: play it. */
 window.addEventListener('message', (event: MessageEvent<unknown>) => {
   if (!authorizedParent(event)) return;
-  const message = event.data as { type?: string; id?: string };
+  const message = event.data as { type?: string; id?: string; generation?: number };
   const held = waiting;
-  if (message.type !== 'den-continue' || !held || message.id !== held.id) return;
+  if (
+    message.type !== 'den-continue' ||
+    !held ||
+    message.id !== held.load.id ||
+    message.generation !== held.load.generation
+  )
+    return;
   waiting = undefined;
   held.resolve();
 });
@@ -1354,8 +1437,18 @@ window.addEventListener('pagehide', () => {
 /** The outside player's Skip button: move this page's video, or the receiver it is casting to, to `time`. */
 window.addEventListener('message', (event: MessageEvent<unknown>) => {
   if (!authorizedParent(event) || !current) return;
-  const message = event.data as { type?: string; id?: string; time?: unknown };
-  if (message.type !== 'den-seek' || message.id !== current.id) return;
+  const message = event.data as {
+    type?: string;
+    id?: string;
+    generation?: number;
+    time?: unknown;
+  };
+  if (
+    message.type !== 'den-seek' ||
+    message.id !== current.id ||
+    message.generation !== current.generation
+  )
+    return;
   if (typeof message.time !== 'number' || !Number.isFinite(message.time) || message.time < 0)
     return;
   if (castStarted && remotePlayer && remoteController) {
@@ -1369,7 +1462,7 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
 video.addEventListener('timeupdate', () => {
   lastPosition = Math.max(0, video.currentTime);
   if (Number.isFinite(video.duration)) lastDuration = Math.max(0, video.duration);
-  tell('den-progress', {
+  tellFor(playingLoad, 'den-progress', {
     currentTime: video.currentTime,
     duration: Number.isFinite(video.duration) ? video.duration : undefined,
     paused: video.paused,
@@ -1377,8 +1470,10 @@ video.addEventListener('timeupdate', () => {
 });
 video.addEventListener('ended', () => {
   naturallyFinished = true;
-  tell('den-ended');
+  tellFor(playingLoad, 'den-ended');
 });
-video.addEventListener('error', () =>
-  fail(video.error?.message || 'Playback failed', video.error?.code ?? 0),
-);
+video.addEventListener('error', () => {
+  clearLocalPlay(playingLoad);
+  if (playingLoad)
+    failFor(playingLoad, video.error?.message || 'Playback failed', video.error?.code ?? 0);
+});

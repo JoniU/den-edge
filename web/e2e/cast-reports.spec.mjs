@@ -132,18 +132,28 @@ async function open({ grants = [], managed, blockAutoplay = false } = {}) {
     ignoreHTTPSErrors: true,
   });
   if (blockAutoplay)
-    await context.addInitScript((castOrigin) => {
-      if (location.origin !== castOrigin) return;
-      const play = HTMLMediaElement.prototype.play;
-      let first = true;
-      HTMLMediaElement.prototype.play = function () {
-        if (first) {
-          first = false;
-          return Promise.reject(new DOMException('Autoplay is blocked', 'NotAllowedError'));
-        }
-        return play.call(this);
-      };
-    }, CAST);
+    await context.addInitScript(
+      ({ castOrigin, blockAutoplay }) => {
+        if (location.origin !== castOrigin) return;
+        const play = HTMLMediaElement.prototype.play;
+        let blocked = 0;
+        window.__denPlayActivation = [];
+        HTMLMediaElement.prototype.play = function () {
+          window.__denPlayActivation.push(navigator.userActivation?.isActive ?? null);
+          if (blockAutoplay === 'held' && blocked++ === 0)
+            return new Promise((_resolve, reject) => {
+              window.__rejectHeldPlay = reject;
+            });
+          if (blocked++ === 0 || (blockAutoplay === 'repeat' && blocked === 2)) {
+            return Promise.reject(new DOMException('Autoplay is blocked', 'NotAllowedError'));
+          }
+          if (blockAutoplay === 'error')
+            return Promise.reject(new DOMException('Playback failed', 'NotSupportedError'));
+          return play.call(this);
+        };
+      },
+      { castOrigin: CAST, blockAutoplay },
+    );
   const page = await context.newPage();
   await guardNetwork(page);
   await routeTmdb(page, (r) => r.fulfill({ json: { imdb_id: 'tt42' } }));
@@ -321,15 +331,19 @@ test('a blocked cast-page autoplay asks for another tap without rejecting the re
   const managed = [];
   const { browser, page } = await open({ managed, blockAutoplay: true });
   try {
-    const notice = 'Playback needs another tap on this device.';
+    const notice = 'Select Play on the video to continue.';
     await expect(page.getByRole('status').filter({ hasText: notice })).toBeVisible();
     await expect(page.getByText('This browser couldn’t play this release.')).toHaveCount(0);
     expect(managed).toHaveLength(1);
 
-    await page.getByRole('button', { name: 'Play', exact: true }).click();
+    const frame = page.frameLocator('iframe[title="Den Cast player"]');
+    await frame.getByRole('button', { name: 'Play', exact: true }).click();
     await playingPast(page, 1);
     await expect(page.getByText(notice)).toHaveCount(0);
     expect(managed).toHaveLength(1);
+    expect(await frame.locator('body').evaluate(() => window.__denPlayActivation.at(-1))).toBe(
+      true,
+    );
 
     // The same playlist URL is not enough authority: a delayed refusal from an older load generation is ignored.
     await page
@@ -342,6 +356,73 @@ test('a blocked cast-page autoplay asks for another tap without rejecting the re
         parentOrigin: ORIGIN,
       });
     await expect(page.getByText(notice)).toHaveCount(0);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a repeated autoplay refusal keeps the cast-frame recovery available', async () => {
+  const managed = [];
+  const { browser, page } = await open({ managed, blockAutoplay: 'repeat' });
+  try {
+    const play = page
+      .frameLocator('iframe[title="Den Cast player"]')
+      .getByRole('button', { name: 'Play', exact: true });
+    await expect(play).toBeVisible();
+    await play.click();
+    await expect(play).toBeVisible();
+    expect(managed).toHaveLength(1);
+    await play.click();
+    await playingPast(page, 1);
+    expect(managed).toHaveLength(1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a held old load cannot publish under a same-id replacement generation', async () => {
+  const { browser, page } = await open({ blockAutoplay: 'held' });
+  try {
+    const frame = page.frameLocator('iframe[title="Den Cast player"]');
+    await expect
+      .poll(() => frame.locator('body').evaluate(() => !!window.__rejectHeldPlay))
+      .toBe(true);
+    await page.locator('iframe[title="Den Cast player"]').evaluate(
+      (iframe, replacement) => {
+        iframe.contentWindow.postMessage(replacement, replacement.castOrigin);
+      },
+      {
+        type: 'den-load',
+        id: `${MEDIA}${PATH}/master.m3u8`,
+        generation: 2,
+        castOrigin: CAST,
+        media: {
+          url: `${MEDIA}${PATH}/master.m3u8`,
+          mode: 'browser',
+          title: 'Replacement',
+        },
+      },
+    );
+    await frame
+      .locator('body')
+      .evaluate(() =>
+        window.__rejectHeldPlay(new DOMException('Autoplay is blocked', 'NotAllowedError')),
+      );
+    await expect(frame.getByRole('button', { name: 'Play', exact: true })).toBeHidden();
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a non-autoplay retry failure leaves recovery and enters the existing failure path', async () => {
+  const { browser, page } = await open({ blockAutoplay: 'error' });
+  try {
+    const frame = page.frameLocator('iframe[title="Den Cast player"]');
+    const play = frame.getByRole('button', { name: 'Play', exact: true });
+    await expect(play).toBeVisible();
+    await play.click();
+    await expect(play).toBeHidden();
+    await expect(page.getByText('This browser couldn’t play this release.')).toBeVisible();
   } finally {
     await browser.close();
   }

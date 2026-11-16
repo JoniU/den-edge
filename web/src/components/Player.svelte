@@ -2768,22 +2768,6 @@
     );
   }
 
-  /** Give the blocked cast-page load a fresh gesture without letting an old notice control its replacement. */
-  function playInCastFrame(blocked: { id: string; generation: number }): void {
-    const current = session;
-    if (
-      castPlayBlocked !== blocked ||
-      !current?.castOrigin ||
-      current.playlist !== blocked.id ||
-      castLoadGeneration !== blocked.generation
-    )
-      return;
-    readyCastFrame(current.castOrigin)?.postMessage(
-      { type: 'den-play', id: blocked.id, generation: blocked.generation },
-      current.castOrigin,
-    );
-  }
-
   // The iframe origin stays the same when Hearth replaces a failed managed URL with Remux, so it does not reload.
   // Send each replacement explicitly; the frame's den-ready message remains the retry for its initial page load.
   $effect(() => {
@@ -2981,7 +2965,11 @@
           restartForRecovery('Preparing Chromecast…', releaseAfterMeasure(chosenRelease));
         } else
           readyCastFrame(current.castOrigin)?.postMessage(
-            { type: 'den-continue', id: current.playlist },
+            {
+              type: 'den-continue',
+              id: current.playlist,
+              generation: castLoadGeneration,
+            },
             current.castOrigin,
           );
       }
@@ -3039,6 +3027,7 @@
       endCastSession();
       finished();
     } else if (message.type === 'den-error') {
+      castPlayBlocked = null;
       casting = false;
       endCastSession();
       castFailed = true;
@@ -4275,6 +4264,7 @@
       {
         type: 'den-subtitle',
         id: current.playlist,
+        generation: castLoadGeneration,
         language: selectedSubtitleLanguage(current),
         track: current.externalSubtitles
           ?.filter((track) => track.value === subtitleChoice && track.castUrl)
@@ -4837,7 +4827,10 @@
     if (!current?.castOrigin) return false;
     const frame = readyCastFrame(current.castOrigin);
     if (!frame) return false;
-    frame.postMessage({ type: 'den-seek', id: current.playlist, time }, current.castOrigin);
+    frame.postMessage(
+      { type: 'den-seek', id: current.playlist, generation: castLoadGeneration, time },
+      current.castOrigin,
+    );
     return true;
   }
 
@@ -5370,11 +5363,9 @@
         ),
         quiet: true,
       });
-    const blocked = castPlayBlocked;
-    if (blocked)
+    if (castPlayBlocked)
       list.push({
         text: i18n.text('player.autoplayBlocked'),
-        action: { label: i18n.text('common.play'), run: () => playInCastFrame(blocked) },
         urgent: true,
       });
     const failed = subtitleLoadFailure;
@@ -6785,6 +6776,7 @@
       bind:this={castFrame}
       class="cast-frame"
       class:cast-frame-stage={castStage}
+      class:cast-frame-play-blocked={castStage && !!castPlayBlocked}
       class:cast-frame-unplaced={!castFrameBox}
       class:cast-focused={castFocus === 'keyboard'}
       style:left={castFrameBox ? `${castFrameBox.left}px` : undefined}
@@ -7486,6 +7478,11 @@
     z-index: auto;
     border-radius: 0;
     background: #000;
+  }
+
+  /* A blocked cross-origin player must receive its own trusted Play click, above Den's overlapping chrome. */
+  .cast-frame-stage.cast-frame-play-blocked {
+    z-index: 6;
   }
 
   /* Before it has a place, rendered but unseen, so the Cast SDK in it runs as usual. */
