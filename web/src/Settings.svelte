@@ -158,6 +158,12 @@
       authority.activityModel === activityModel &&
       authority.preferences === preferences,
   );
+  const ownsAuthority = (owner: SettingsAuthority, generation: number): boolean =>
+    generation === authorityGeneration &&
+    authority === owner &&
+    owner.model === model &&
+    owner.activityModel === activityModel &&
+    owner.preferences === preferences;
   const effectivePreferences = $derived(
     authority.preferences ? authority.preferences.value : settings?.preferences,
   );
@@ -216,6 +222,7 @@
     profileTopology || profileTopologyBlocked || (connections?.diagnostics.libraryFormat ?? 0) >= 5,
   );
   async function run(action: () => Promise<unknown>, quiet = false): Promise<boolean> {
+    const owner = authority;
     const generation = authorityGeneration;
     const restoreFocus =
       document.activeElement instanceof HTMLElement &&
@@ -246,7 +253,7 @@
       return true;
     } catch (error) {
       console.warn('den: settings command failed', error);
-      if (!quiet && generation === authorityGeneration)
+      if (!quiet && ownsAuthority(owner, generation))
         failure = 'Couldn’t save that. Check your connection and try again.';
       return false;
     } finally {
@@ -254,7 +261,7 @@
       // remote can observe the newly enabled surface, move to its next control, and then have the continuation below
       // steal focus back to the setting that just saved.
       flushSync(() => {
-        if (!quiet && generation === authorityGeneration) saving = false;
+        if (!quiet && ownsAuthority(owner, generation)) saving = false;
       });
       // Saving temporarily disables the settings surface. Some engines move focus to the document when the active
       // native control becomes disabled, which strands the next keyboard/remote press. Return keyboard users to that
@@ -265,6 +272,7 @@
         // TV Settings is intentionally inert during a save; a remote press cannot make a reliable move until it
         // settles, so always return to its semantic origin. Pointer/keyboard web users may deliberately move on.
         if (
+          ownsAuthority(owner, generation) &&
           (__DEN_TV__ || !movedOn) &&
           restoreFocus.isConnected &&
           !restoreFocus.matches(':disabled')
@@ -275,30 +283,38 @@
   }
 
   async function patchPreferences(changes: PreferenceChanges): Promise<void> {
-    const profilePreferences = authority.preferences;
+    const owner = authority;
+    const generation = authorityGeneration;
+    const profilePreferences = owner.preferences;
+    const publishInterfaceLanguage = oninterfacelanguage;
+    const localPresentation = local;
+    const publishLanguage = (language: InterfaceLanguage) => {
+      if (
+        !ownsAuthority(owner, generation) ||
+        publishInterfaceLanguage !== oninterfacelanguage ||
+        localPresentation !== local
+      )
+        return;
+      rememberFreshPresentationLanguage(language);
+      if (localPresentation) {
+        localInterfaceLanguage = language;
+        rememberLocalInterfaceLanguage(language);
+      }
+      publishInterfaceLanguage?.(language);
+    };
     if (!profilePreferences) {
       const language = changes.interfaceLanguage;
-      await authority.model.patchPreferences(changes);
-      if (language) {
-        rememberFreshPresentationLanguage(language);
-        if (local) {
-          localInterfaceLanguage = language;
-          rememberLocalInterfaceLanguage(language);
-        }
-        oninterfacelanguage?.(language);
-      }
+      await owner.model.patchPreferences(changes);
+      if (language) publishLanguage(language);
       return;
     }
     // Every preference, region and services included, belongs to the active profile's library; the household's write
     // guard would drop one sent to the control log. Only the maturity ceiling is not a profile preference (a
     // profile's policy lives in the directory) and stays on the control log.
     const { maturityCeiling, ...personal } = changes;
-    if ('maturityCeiling' in changes) await authority.model.patchPreferences({ maturityCeiling });
+    if ('maturityCeiling' in changes) await owner.model.patchPreferences({ maturityCeiling });
     if (Object.keys(personal).length) await profilePreferences.patch(personal);
-    if (changes.interfaceLanguage) {
-      rememberFreshPresentationLanguage(changes.interfaceLanguage);
-      oninterfacelanguage?.(changes.interfaceLanguage);
-    }
+    if (changes.interfaceLanguage) publishLanguage(changes.interfaceLanguage);
   }
   const savePrefs = (changes: PreferenceChanges) => {
     // A native disabled control cannot emit user changes, but keep the command boundary authoritative too: a queued
@@ -499,12 +515,12 @@
         class="banner settings-load"
         role={loadError ? 'alert' : 'status'}
       >
-        <p>{loadError ? 'Couldn’t load your settings.' : 'Loading your settings…'}</p>
+        <p>{i18n.phrase(loadError ? 'Couldn’t load your settings.' : 'Loading your settings…')}</p>
         {#if loadError}
           <Button
             variant="secondary"
             icon="retry"
-            label={retrying ? 'Trying again…' : 'Try again'}
+            label={i18n.phrase(retrying ? 'Trying again…' : 'Try again')}
             disabled={retrying}
             onclick={() => void retryLoad()}
           />

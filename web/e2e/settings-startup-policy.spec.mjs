@@ -62,7 +62,9 @@ test('a saved language and Automatic subtitles read correctly before deferred po
   await page.reload();
   const startupSubtitles = page.locator('#subtitle-language select');
   const startupLanguage = page.locator('#interface-language select');
-  await expect(page.locator('.settings-load[role="status"]')).toBeVisible({ timeout: 30_000 });
+  const loading = page.locator('.settings-load[role="status"]');
+  await expect(loading).toBeVisible({ timeout: 30_000 });
+  await expect(loading).toHaveText('Läser in dina inställningar...');
   const playbackInputs = page.locator('#playback select, #playback input');
   await expect(playbackInputs).toHaveCount(6);
   await expect

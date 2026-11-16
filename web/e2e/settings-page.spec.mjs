@@ -543,6 +543,46 @@ test('a held profile replacement disables every Playback input and never crosses
     .toEqual({ primary: [], replacement: ['best'] });
 });
 
+test('a held retired preference save cannot publish language or restore focus into its replacement', async ({
+  page,
+}) => {
+  await guardNetwork(page);
+  await page.route('**/lib/*/grants', (route) => route.fulfill({ json: { grants: [] } }));
+  await page.route('**/routes', (route) => route.fulfill({ json: {} }));
+  await page.route('**/version', (route) => route.fulfill({ json: { version: 'test' } }));
+  await page.route('**/config', (route) => route.fulfill({ json: {} }));
+  await routeTmdb(page, (route) => route.fulfill({ json: { images: {}, results: [] } }));
+  await page.goto(`${E2E_ORIGIN}/test/settings.html?playback-authority-replacement`);
+
+  const language = page.locator('#interface-language select');
+  const replacementFocus = page.locator('#playback-source-policy select');
+  await expect(language).toBeEnabled();
+  await language.focus();
+  // Establish keyboard modality before the save captures its focus origin; otherwise there is intentionally no
+  // restore candidate and the stale-finally assertion would not exercise the authority fence.
+  await language.dispatchEvent('keydown', { key: 'Enter' });
+  await language.selectOption('sv');
+  await expect
+    .poll(() => page.evaluate(() => globalThis.fixtureSettingsAuthority.preferencePatchStarted()))
+    .toBe(true);
+
+  await page.evaluate(() => globalThis.fixtureSettingsAuthority.replacePlaybackHeld());
+  await page.evaluate(() => globalThis.fixtureSettingsAuthority.releasePlaybackReplacement());
+  await expect(page.locator('.settings-load')).toHaveCount(0);
+  await replacementFocus.focus();
+  await expect(replacementFocus).toBeFocused();
+
+  await page.evaluate(() => globalThis.fixtureSettingsAuthority.releasePreferencePatch());
+  await expect
+    .poll(() => page.evaluate(() => globalThis.fixtureSettingsAuthority.preferenceCommands()))
+    .toEqual({ primary: ['language:sv'], replacement: [] });
+  await expect(replacementFocus).toBeFocused();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  expect(
+    await page.evaluate(() => globalThis.fixtureSettingsAuthority.presentationLanguages()),
+  ).toEqual([]);
+});
+
 test('saving a provider key validates it in the content Worker before storing it', async ({
   page,
 }) => {

@@ -25,6 +25,7 @@
   import { validateStoredProfileDirectory } from '../src/lib/profileDirectory';
   import type { ProfilePreferences } from '../src/lib/profilePreferences.svelte';
   import type { ProfilePolicy } from '../src/lib/profilePolicy';
+  import { setInterfaceLanguage } from '../src/lib/i18n.svelte';
   import '../src/app.css';
 
   const at = [1, 0, 'test'] as unknown as Stamp;
@@ -269,6 +270,10 @@
     : undefined;
   let model = $state.raw<LibraryModel>(primaryModel);
   const preferenceCommands = { primary: [] as string[], replacement: [] as string[] };
+  let preferencePatchStarted = false;
+  let releasePreferencePatch = () => {};
+  const heldPreferencePatch = new Promise<void>((resolve) => (releasePreferencePatch = resolve));
+  const presentationLanguages: string[] = [];
   const profilePreferences = (
     name: keyof typeof preferenceCommands,
     owner: LibraryModel,
@@ -281,7 +286,15 @@
       },
       policy: {} as ProfilePolicy,
       async patch(changes) {
-        preferenceCommands[name].push(changes.playbackSourcePolicy ?? 'other');
+        if (playbackAuthorityFixture && name === 'primary') {
+          preferencePatchStarted = true;
+          await heldPreferencePatch;
+        }
+        preferenceCommands[name].push(
+          changes.interfaceLanguage
+            ? `language:${changes.interfaceLanguage}`
+            : (changes.playbackSourcePolicy ?? 'other'),
+        );
       },
       close() {},
     }) satisfies ProfilePreferences;
@@ -391,6 +404,15 @@
     },
     preferenceCommands() {
       return structuredClone(preferenceCommands);
+    },
+    preferencePatchStarted() {
+      return preferencePatchStarted;
+    },
+    releasePreferencePatch() {
+      releasePreferencePatch();
+    },
+    presentationLanguages() {
+      return [...presentationLanguages];
     },
     releasePinReply() {
       releasePinReply();
@@ -683,6 +705,12 @@
       preferences={activePreferences}
       {content}
       local={joinPresentationFixture}
+      oninterfacelanguage={playbackAuthorityFixture
+        ? (language) => {
+            presentationLanguages.push(language);
+            void setInterfaceLanguage(language);
+          }
+        : undefined}
       onjoin={joinPresentationFixture ? heldJoin : undefined}
       onresetkey={async () => null}
       oncompoundreset={profileResetFixture
