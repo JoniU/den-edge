@@ -364,22 +364,26 @@
         if (ticket !== revision) return;
         window.scrollTo({ left: current.x, top: current.y, behavior: 'instant' });
         if (import.meta.env.DEN_E2E) {
+          // Read the landing and its limit before row geometry: asking a content-visibility row for its rect can
+          // make WebKit lay it out, and the evidence must preserve where the restore landed before that inspection.
+          const resulting = { x: window.scrollX, y: window.scrollY };
+          const scrollRoot = document.scrollingElement ?? document.documentElement;
+          const max = {
+            x: Math.max(0, scrollRoot.scrollWidth - scrollRoot.clientWidth),
+            y: Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight),
+          };
           const activePage = document.querySelector<HTMLElement>(
             '[data-route-page][data-active="true"]',
           );
           const pageRect = activePage?.getBoundingClientRect();
-          const scrollRoot = document.scrollingElement ?? document.documentElement;
           const target = window as Window & { __denScrollRestoreTimeline?: unknown[] };
           const timeline = (target.__denScrollRestoreTimeline ??= []);
           timeline.push({
             at: performance.now(),
             route: address(),
             requested: { x: current.x, y: current.y },
-            resulting: { x: window.scrollX, y: window.scrollY },
-            max: {
-              x: Math.max(0, scrollRoot.scrollWidth - scrollRoot.clientWidth),
-              y: Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight),
-            },
+            resulting,
+            max,
             routePage: activePage
               ? {
                   height: pageRect?.height ?? 0,
