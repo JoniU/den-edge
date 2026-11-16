@@ -263,7 +263,7 @@ async function learnReceiver(session: CastSession | null | undefined): Promise<v
 function hearReceiverEvents(session: CastSession | null | undefined): void {
   if (!receiverApp || !session?.addMessageListener) return;
   session.addMessageListener(RECEIVER_NAMESPACE, (_namespace: string, raw: string) => {
-    let message: { type?: unknown } | null;
+    let message: { type?: unknown; id?: unknown; generation?: unknown } | null;
     try {
       message = typeof raw === 'string' ? JSON.parse(raw) : raw;
     } catch {
@@ -272,10 +272,11 @@ function hearReceiverEvents(session: CastSession | null | undefined): void {
     if (message?.type !== 'den-receiver-event') return;
     const { type: _type, ...event } = message as { type: unknown } & Record<string, unknown>;
     console.info(`[Den receiver] ${JSON.stringify(event)}`);
+    const reportedLoad = exactLoad(message.id, message.generation) ? playingLoad : undefined;
     // The codes of the receiver's player error, for den-edge's cast report: numbers only.
-    if (event.event === 'error') {
+    if (event.event === 'error' && reportedLoad) {
       const shaka = (event.error as { shakaErrorCode?: unknown } | null)?.shakaErrorCode;
-      tellFor(playingLoad, 'den-receiver-error', {
+      tellFor(reportedLoad, 'den-receiver-error', {
         ...(Number.isInteger(event.detailedErrorCode) ? { code: event.detailedErrorCode } : {}),
         ...(Number.isInteger(shaka) ? { shaka } : {}),
       });
@@ -287,11 +288,12 @@ function hearReceiverEvents(session: CastSession | null | undefined): void {
       event.event === 'state' &&
       event.state === 'IDLE' &&
       event.idleReason === 'ERROR' &&
+      reportedLoad &&
       castStarted &&
-      !replacingCast
+      !receiverLoadAttempt?.replacing
     ) {
       castStarted = false;
-      if (playingLoad) failFor(playingLoad, 'Chromecast could not continue playback');
+      failFor(reportedLoad, 'Chromecast could not continue playback');
     }
   });
 }
@@ -410,12 +412,11 @@ let remoteController: RemotePlayerController | undefined;
 let castStarted = false;
 /** Whether a receiver is on the network, once the SDK has said; undefined before that. */
 let castDevices: boolean | undefined;
-let replacingCast = false;
 /**
  * A LOAD sent and not yet answered. The media it replaces keeps reporting meanwhile, and one of its progress ticks
- * must not end `replacingCast` before that media's own INTERRUPTED arrives: read as a stop, it ended the session.
+ * must not end replacement state before that media's own INTERRUPTED arrives: read as a stop, it ended the session.
  */
-let loadInFlight = false;
+let receiverLoadAttempt: { load: LoadMessage; replacing: boolean; settled?: boolean } | undefined;
 let castSubtitleAppliedLoad: LoadMessage | undefined;
 let measuredLoad: LoadMessage | undefined;
 interface LocalPlayback {
@@ -486,6 +487,12 @@ function tellFor(
     parentOrigin,
   );
 }
+
+const exactLoad = (
+  id: unknown,
+  generation: unknown,
+  load: LoadMessage | undefined = playingLoad,
+): load is LoadMessage => !!load && id === load.id && generation === load.generation;
 
 const ownsCurrent = (load: LoadMessage | undefined): load is LoadMessage => current === load;
 const ownsLocal = (owner: LocalPlayback): boolean =>
@@ -980,17 +987,27 @@ async function loadCast(load: LoadMessage | undefined = current): Promise<void> 
   }
   const request = new chrome.media.LoadRequest(info);
   request.currentTime = Math.max(0, media.currentTime ?? 0);
-  request.customData = { interfaceLanguage: media.interfaceLanguage ?? 'en' };
+  request.customData = {
+    interfaceLanguage: media.interfaceLanguage ?? 'en',
+    denLoad: { id: load.id, generation: load.generation },
+  };
   // An out-of-band VTT is known now; HLS renditions are discovered by the receiver and selected after LOAD.
   request.activeTrackIds =
     media.subtitleLanguage && validSubtitleTrack(media.subtitleTrack) ? [1] : [];
+  const attempt: NonNullable<typeof receiverLoadAttempt> = {
+    load,
+    replacing: castStarted,
+  };
+  receiverLoadAttempt = attempt;
   try {
-    replacingCast = castStarted;
-    loadInFlight = true;
-    try {
-      await session.loadMedia(request);
-    } finally {
-      loadInFlight = false;
+    await session.loadMedia(request);
+    // Overlapping LOAD promises may settle out of order. A stale completion has no authority to publish ownership,
+    // end the accepted media, or clear a newer attempt. If it landed on the receiver last, reassert the current load.
+    if (!ownsCurrent(load) || receiverLoadAttempt !== attempt) {
+      if (receiverLoadAttempt === attempt) receiverLoadAttempt = undefined;
+      if (receiverLoadAttempt?.load !== current || receiverLoadAttempt?.settled === true)
+        void loadCast(current);
+      return;
     }
     // A LOAD replaces the receiver only once it succeeds. Until then its events and lifecycle still belong to
     // the previous media, even though `current` already describes the requested replacement.
@@ -1009,11 +1026,8 @@ async function loadCast(load: LoadMessage | undefined = current): Promise<void> 
       if (!castStarted) stopLocal();
       endMedia(replaced);
     }
-    if (!ownsCurrent(load)) {
-      void loadCast(current);
-      return;
-    }
     castStarted = true;
+    attempt.settled = true;
     castSubtitleAppliedLoad = applyCastSubtitle(media.subtitleLanguage, media.subtitleIndex)
       ? load
       : undefined;
@@ -1025,11 +1039,9 @@ async function loadCast(load: LoadMessage | undefined = current): Promise<void> 
       device: deviceName(),
     });
   } catch {
-    replacingCast = false;
-    if (!ownsCurrent(load)) {
-      void loadCast(current);
-      return;
-    }
+    const ownsAttempt = receiverLoadAttempt === attempt;
+    if (ownsAttempt) receiverLoadAttempt = undefined;
+    if (!ownsCurrent(load) || !ownsAttempt) return;
     castStarted = false;
     // The Cast session is kept: the player decides what is tried next, and only Stop casting ends it.
     const message = 'Chromecast could not load this release';
@@ -1053,6 +1065,12 @@ function continued(load: LoadMessage): Promise<void> {
       },
     };
   });
+}
+
+function releaseWaiting(): void {
+  const held = waiting;
+  waiting = undefined;
+  held?.resolve();
 }
 
 async function open(message: LoadMessage): Promise<void> {
@@ -1116,7 +1134,7 @@ function initializeCast(): boolean {
       muted: remotePlayer.isMuted,
     });
     if (remotePlayer.playerState !== 'IDLE') {
-      if (!loadInFlight) replacingCast = false;
+      if (receiverLoadAttempt?.settled) receiverLoadAttempt = undefined;
       if (
         playingLoad &&
         castSubtitleAppliedLoad !== playingLoad &&
@@ -1126,13 +1144,13 @@ function initializeCast(): boolean {
       return;
     }
     const reason = castContext?.getCurrentSession()?.getMediaSession()?.idleReason;
-    const action = castIdleAction(reason, replacingCast);
+    const action = castIdleAction(reason, receiverLoadAttempt?.replacing === true);
     // The receiver's own words, for the console a viewer can share: what it said is what decides the session's end.
     console.info(
       `[Den cast] ${JSON.stringify({ event: 'receiver-idle', reason: reason ?? null, action })}`,
     );
     if (action === 'replaced' || action === 'pending') return;
-    replacingCast = false;
+    receiverLoadAttempt = undefined;
     castStarted = false;
     if (action === 'finished') {
       naturallyFinished = true;
@@ -1171,7 +1189,7 @@ function initializeCast(): boolean {
     if (state === 'SESSION_ENDED' && castStarted) {
       console.info(`[Den cast] ${JSON.stringify({ event: 'receiver-session-ended' })}`);
       castStarted = false;
-      replacingCast = false;
+      receiverLoadAttempt = undefined;
       tellFor(playingLoad, 'den-cast', { state: 'stopped', reason: 'SESSION_ENDED' });
     }
   });
@@ -1351,10 +1369,8 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
     return;
   }
   clearLocalPlay();
-  const held = waiting;
-  waiting = undefined;
-  held?.resolve();
   current = message as LoadMessage;
+  releaseWaiting();
   document.title = current.media.title;
   setStatus('');
   void open(current);
@@ -1471,7 +1487,7 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
     video.removeAttribute('src');
     if (!castStarted) endPlaying();
     current = undefined;
-    waiting = undefined;
+    releaseWaiting();
     setStatus('');
   }
 });
@@ -1495,6 +1511,8 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
 // The player outside removes this frame when its session ends — closed, restarted, or replaced — and that is this
 // page's hide. The last report goes first, then the end; a receiver still fetches on its own, so its session is left.
 window.addEventListener('pagehide', () => {
+  current = undefined;
+  releaseWaiting();
   stopLocal();
   if (!castStarted) endPlaying();
 });
