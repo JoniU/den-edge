@@ -261,16 +261,16 @@ describe('PlaybackRecorder', () => {
       audioAhead: null,
       ...noRequests,
     });
-    recorder.stalled(0, stall(), true, 2);
+    recorder.stalled(0, stall(), true);
     recorder.resumed(1_400);
     expect(recorder.linkStalls(), 'early and 1.4 s').toBe(0);
-    recorder.stalled(2_000, stall(), true, 4);
+    recorder.stalled(2_000, stall(), true);
     recorder.resumed(4_500);
     expect(recorder.linkStalls(), 'early but 2.5 s').toBe(1);
-    recorder.stalled(10_000, stall(), false, 120);
+    recorder.stalled(10_000, stall());
     recorder.resumed(10_100);
     expect(recorder.linkStalls(), 'short but mid-play').toBe(2);
-    recorder.stalled(20_000, stall(), true, 5);
+    recorder.stalled(20_000, stall(), true);
     expect(recorder.linkStalls(), 'early and still under way').toBe(3);
     expect(recorder.liveStalls(20_000).stallCount, 'the report counts every one').toBe(4);
   });
@@ -340,7 +340,7 @@ describe('reportBody', () => {
   const full = () => {
     const recorder = new PlaybackRecorder('hls.js', 'Chrome 141 / Windows');
     for (let i = 0; i < MAX_STALLS; i++) {
-      recorder.stalled(i, { kind: 'wait', videoAhead: 0, audioAhead: 1, ...noRequests }, false, i);
+      recorder.stalled(i, { kind: 'wait', videoAhead: 0, audioAhead: 1, ...noRequests });
       recorder.resumed(i + 1);
     }
     for (let i = 0; i < MAX_ERRORS; i++) recorder.error(`error ${'x'.repeat(60)} ${i}`, false);
@@ -369,7 +369,6 @@ describe('reportBody', () => {
         idleMs: 321,
       },
       false,
-      7_349_281.5,
     );
     recorder.resumed(2_250);
 
