@@ -133,10 +133,8 @@
   }
 
   .hold > :last-child {
-    /* ServiceTile's name is one ellipsized line. The unavailable copy must obey the same geometry: on Inter TV it
-       otherwise wraps where the system browser face happens to fit, moving every later Home row. */
-    overflow: hidden;
-    text-overflow: ellipsis;
+    /* ServiceTile's name and optional country share one line. The unavailable copy must obey the same vertical
+       geometry, while retaining its complete localized message instead of clipping it to a service tile. */
     white-space: nowrap;
   }
 
@@ -150,10 +148,14 @@
   }
 
   .empty {
+    width: max-content;
+    min-width: var(--tile-w);
+    justify-items: start;
     color: var(--muted);
   }
 
   .empty .plate {
+    width: var(--tile-w);
     font-size: 28px;
   }
 </style>
