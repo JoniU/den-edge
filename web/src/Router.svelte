@@ -363,7 +363,11 @@
         await tick();
         if (ticket !== revision) return;
         window.scrollTo({ left: current.x, top: current.y, behavior: 'instant' });
-        if (import.meta.env.DEN_E2E) {
+        if (
+          import.meta.env.DEN_E2E &&
+          (window as Window & { __denScrollRestoreDiagnostics?: boolean })
+            .__denScrollRestoreDiagnostics
+        ) {
           // Preserve the landing and its limit before the diagnostic makes any layout-dependent geometry reads.
           const resulting = { x: window.scrollX, y: window.scrollY };
           const scrollRoot = document.scrollingElement ?? document.documentElement;

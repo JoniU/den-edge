@@ -23,6 +23,11 @@ const TITLE = 339849;
 
 async function setup(page, start) {
   await guardNetwork(page);
+  await page.addInitScript(() => {
+    globalThis.__denScrollRestoreDiagnostics = true;
+    // One real Router restore must evict the oldest marker while keeping the diagnostic buffer bounded.
+    globalThis.__denScrollRestoreTimeline = Array.from({ length: 32 }, (_, seed) => ({ seed }));
+  });
   await page.addInitScript((path) => history.replaceState(null, '', path), start);
   await page.route('**/routes', (r) => r.fulfill({ json: {} }));
   await page.route('https://image.tmdb.org/**', (r) =>
@@ -106,6 +111,50 @@ async function withRestoreDiagnostics(page, restore) {
   }
 }
 
+async function expectRestoreDiagnostics(page, route, restored) {
+  const timeline = await page.evaluate(() => globalThis.__denScrollRestoreTimeline ?? []);
+  expect(timeline).toHaveLength(32);
+  expect(timeline.some((entry) => entry.seed === 0)).toBe(false);
+
+  const evidence = timeline.at(-1);
+  expect(evidence).toEqual({
+    at: expect.any(Number),
+    route,
+    requested: { x: expect.any(Number), y: expect.any(Number) },
+    resulting: { x: expect.any(Number), y: expect.any(Number) },
+    max: { x: expect.any(Number), y: expect.any(Number) },
+    routePage: {
+      height: expect.any(Number),
+      scrollHeight: expect.any(Number),
+      clientHeight: expect.any(Number),
+    },
+    rows: expect.any(Array),
+  });
+  expect(Math.abs(evidence.requested.y - restored.y)).toBeLessThanOrEqual(2);
+  expect(Math.abs(evidence.resulting.y - restored.y)).toBeLessThanOrEqual(2);
+  expect(evidence.max.y).toBeGreaterThanOrEqual(evidence.resulting.y);
+  expect(evidence.routePage.height).toBeGreaterThan(0);
+  expect(evidence.rows.length).toBeGreaterThan(0);
+  for (const row of evidence.rows) {
+    expect(row).toEqual({
+      id: expect.any(String),
+      layoutState: expect.any(String),
+      geometry: {
+        top: expect.any(Number),
+        bottom: expect.any(Number),
+        width: expect.any(Number),
+        height: expect.any(Number),
+      },
+      placement: { placed: expect.any(Boolean), near: expect.any(Boolean) },
+      containment: {
+        contentVisibility: expect.any(String),
+        contain: expect.any(String),
+        containIntrinsicSize: expect.any(String),
+      },
+    });
+  }
+}
+
 /** Scroll to a row, along it, and read where the page and the row are. */
 async function scrollAlong(page, row) {
   // Rows are rebuilt as late answers arrive, so retry across a replaced element.
@@ -160,6 +209,7 @@ async function backRestoresRow(page, name) {
       2,
     );
   }).toPass({ timeout: 10_000 });
+  await expectRestoreDiagnostics(page, before, left);
 
   // The restored row still takes a tap.
   const again = row().locator('a.card:visible').first();
