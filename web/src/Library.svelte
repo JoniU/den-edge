@@ -1706,12 +1706,16 @@
 
   /** The aired episode after the one playing, from the series' season layout; none after a movie or the last. */
   let following = $state<Target | null>(null);
-  /** The playing series' seasons and how much of each has aired, for the player's episode list. */
+  /**
+   * The playing series' seasons and how much of each has aired, for the player's episode list. Kept across an advance
+   * within the series, so the list neither blinks out nor asks for its season again.
+   */
   let playingSeasons = $state.raw<{ number: number; aired: number }[]>();
+  let playingSeasonsOf: string | undefined;
   $effect(() => {
     const target = playing;
     following = null;
-    playingSeasons = undefined;
+    if (!target || playingSeasonsOf !== titleKey(target.title)) playingSeasons = undefined;
     if (!target || target.season === undefined || target.episode === undefined) return;
     const at = { season: target.season, episode: target.episode };
     void (async () => {
@@ -1726,7 +1730,9 @@
       );
       if (playing !== target) return;
       if (next && isAired(next, aired)) following = { title: target.title, ...next };
-      if (shape) playingSeasons = airedSeasons(shape, aired);
+      if (!shape) return;
+      playingSeasons = airedSeasons(shape, aired);
+      playingSeasonsOf = titleKey(target.title);
     })();
   });
 

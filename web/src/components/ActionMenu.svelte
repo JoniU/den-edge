@@ -257,9 +257,14 @@
     // items with a second line are taller than the estimate. `scrollHeight` is the whole list, not the part a
     // previous cap left visible; it leaves out the border, which the border-box cap below counts.
     const width = positioned.offsetWidth || 240;
-    let height = positioned.scrollHeight
-      ? positioned.scrollHeight + positioned.offsetHeight - positioned.clientHeight
-      : shownItems.length * 44 + 16;
+    // The stylesheet's own cap (a caller's compact list), read before the room beside the trigger is written over it.
+    const cap = parseFloat(getComputedStyle(positioned).maxHeight) || Infinity;
+    let height = Math.min(
+      cap,
+      positioned.scrollHeight
+        ? positioned.scrollHeight + positioned.offsetHeight - positioned.clientHeight
+        : shownItems.length * 44 + 16,
+    );
     let x: number, y: number;
     if (coords) {
       x = coords.x;
@@ -278,7 +283,7 @@
       const room = flip ? above : below;
       height = Math.min(height, room);
       y = flip ? rect.top - 6 - height : rect.bottom + 6;
-      positioned.style.maxHeight = `${room}px`;
+      positioned.style.maxHeight = `${Math.min(room, cap)}px`;
     }
     x = Math.min(Math.max(8, x), Math.max(8, vw - width - 8));
     y = Math.min(Math.max(8, y), Math.max(8, vh - height - 8));

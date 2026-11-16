@@ -1214,6 +1214,30 @@
       .filter(Boolean)
       .join(' · '),
   );
+  /**
+   * A season's episodes through the already-open content service, dated as the title page's list dates them: atlas's
+   * release day where atlas has one. Null when they could not be had; never settles once `signal` has aborted.
+   */
+  function seasonEpisodes(picked: number, signal: AbortSignal): Promise<AiredEpisode[] | null> {
+    return new Promise((resolve) => {
+      void content
+        .query({ kind: 'season', title: { type: 'tv', id: title.id }, season: picked }, signal)
+        .then(({ episodes }) =>
+          episodes.state === 'ready'
+            ? withAiring(
+                episodes.value,
+                picked,
+                untrack(() => airingStore(content).get(title.id)),
+              )
+            : null,
+        )
+        .catch(() => null)
+        .then((listed) => {
+          if (!signal.aborted) resolve(listed);
+        });
+    });
+  }
+
   // tvOS resolves episode metadata after playback has begun. Do the same through the already-open content service:
   // it enriches the transport and Down panel without joining the source/session critical path.
   $effect(() => {
@@ -1227,26 +1251,9 @@
     )
       return;
     const controller = new AbortController();
-    void content
-      .query(
-        { kind: 'season', title: { type: 'tv', id: title.id }, season: pickedSeason },
-        controller.signal,
-      )
-      .then(({ episodes }) => {
-        if (controller.signal.aborted) return;
-        // Dated as the episode list dates it: atlas's release day where atlas has one.
-        tvEpisode =
-          episodes.state === 'ready'
-            ? (withAiring(
-                episodes.value,
-                pickedSeason,
-                untrack(() => airingStore(content).get(title.id)),
-              ).find((item) => item.number === pickedEpisode) ?? null)
-            : null;
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) tvEpisode = null;
-      });
+    void seasonEpisodes(pickedSeason, controller.signal).then(
+      (listed) => (tvEpisode = listed?.find((item) => item.number === pickedEpisode) ?? null),
+    );
     return () => controller.abort();
   });
   /** The season the Episodes list shows: the one playing, until another is picked there. */
@@ -1264,25 +1271,7 @@
     listedEpisodes = undefined;
     if (!listsEpisodes || !hasSession || picked === undefined) return;
     const controller = new AbortController();
-    void content
-      .query(
-        { kind: 'season', title: { type: 'tv', id: title.id }, season: picked },
-        controller.signal,
-      )
-      .then(({ episodes }) => {
-        if (controller.signal.aborted) return;
-        listedEpisodes =
-          episodes.state === 'ready'
-            ? withAiring(
-                episodes.value,
-                picked,
-                untrack(() => airingStore(content).get(title.id)),
-              )
-            : null;
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) listedEpisodes = null;
-      });
+    void seasonEpisodes(picked, controller.signal).then((listed) => (listedEpisodes = listed));
     return () => controller.abort();
   });
   /** The list's rows: each episode with its menu item, a link to play it, or inert until it has aired. */
@@ -1298,7 +1287,7 @@
               kind: 'item',
               key: `${picked}:${item.number}`,
               label: item.name,
-              onselect() {},
+              onselect: NO_ACTION,
               disabled: true,
             }
           : {
@@ -5345,7 +5334,8 @@
     releaseListing = 'idle';
     swapped = autoSwitch = struggling = slowPick = unchanged = null;
     clearTransition();
-    showTransition('Starting next…');
+    // Named, not "next": one picked from the Episodes list may be any episode of the series.
+    showTransition(`Starting S${at.season} · E${at.episode}…`);
     switchCount = 0;
     lastSwitchReason = undefined;
     degraded = false;
@@ -8971,6 +8961,7 @@
   :global(div.menu:not(.sheet):has(.episode-list)) {
     width: 420px;
     max-width: calc(100vw - 16px);
+    max-height: min(600px, calc(100dvh - 16px));
   }
 
   :global(div.menu.sheet:has(.episode-list)) {
@@ -9029,6 +9020,7 @@
   }
 
   .episode-row {
+    box-sizing: border-box;
     display: grid;
     grid-template-columns: 112px minmax(0, 1fr);
     gap: 12px;
