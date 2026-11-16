@@ -502,16 +502,12 @@ export function watchPlayback(options: WatchOptions): Watcher {
 
   /** Exact media position used only inside this watcher to recognize recovery; never serialized. */
   let waitAt = NaN;
-  const stall = (
-    kind: Stall['kind'],
-    at = video.currentTime,
-    buffered = ahead(video.currentTime),
-  ) => {
+  const stall = (kind: Stall['kind'], buffered = ahead(video.currentTime)) => {
     if (stopped || !started || video.seeking) return;
     const stalled = { kind, ...buffered, ...requests() };
     const early = playedSecondsOf(video.played) < EARLY_PLAYED_SECONDS;
     if (recorder.stalled(now(), stalled, early)) {
-      waitAt = kind === 'wait' ? at : NaN;
+      waitAt = kind === 'wait' ? video.currentTime : NaN;
       schedule.stall();
     }
   };
@@ -565,7 +561,7 @@ export function watchPlayback(options: WatchOptions): Watcher {
     }
     // A hidden page decodes no video in some browsers, and that is not a frozen picture.
     if (!video.paused && document.visibilityState === 'visible' && time - frames.at >= FROZEN_SECS)
-      stall('frozen', frames.at, frames.buffered);
+      stall('frozen', frames.buffered);
   });
   on('error', () => {
     if (video.error) recorder.error(`MediaError ${video.error.code}`, true);
