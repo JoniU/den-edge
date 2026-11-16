@@ -450,6 +450,35 @@ test('a failed next-episode lookup is distinct from a finale and Retry advances 
   }
 });
 
+test('episode replacement never composes the prior episode’s following state', async () => {
+  const { browser, page, asked } = await open(chromium);
+  try {
+    await page.evaluate(() => {
+      window.__nextEpisodeCompositions = [];
+      window.denTestNextEpisodeComposition = (value) =>
+        window.__nextEpisodeCompositions.push(JSON.parse(JSON.stringify(value)));
+    });
+    await playFirstEpisode(page);
+    await player(page).getByRole('link', { name: 'Next episode: S1 · E2' }).click();
+    await expect(player(page)).toHaveAttribute('aria-label', `Series ${SERIES} · S1 · E2`);
+
+    const episodeTwo = await page.evaluate(() =>
+      window.__nextEpisodeCompositions.filter((value) => value.season === 1 && value.episode === 2),
+    );
+    expect(episodeTwo.length).toBeGreaterThan(0);
+    expect(episodeTwo[0].availability).toBe('loading');
+    for (const composition of episodeTwo) {
+      expect(composition.availability).toBeTruthy();
+      expect(composition.next).not.toEqual({ season: 1, episode: 2 });
+    }
+    // The old successor cannot be invoked as its own replacement before the current lookup settles.
+    await page.waitForTimeout(250);
+    expect(asked.playback.map(itemOf)).toEqual(['e1', 'e2']);
+  } finally {
+    await browser.close();
+  }
+});
+
 test('a late next-episode answer is adopted only while the ended player still owns it', async () => {
   const { browser, page, asked } = await open(chromium, {
     libraryQuery: ['next-metadata-recovery'],
