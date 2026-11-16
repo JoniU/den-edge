@@ -94,7 +94,7 @@ function loadFor(event: PlayerEvent): ReceiverLoad | undefined {
 function tellSenders(
   event: string,
   detail: Record<string, unknown>,
-  load: ReceiverLoad | undefined | typeof ACTIVE_LOAD = ACTIVE_LOAD,
+  load: ReceiverLoad | undefined | typeof ACTIVE_LOAD,
 ): void {
   const reportedLoad = load === ACTIVE_LOAD ? activeLoad : load;
   const message = { type: 'den-receiver-event', event, ...reportedLoad, ...detail };
@@ -161,7 +161,11 @@ player.addEventListener(EventType.ERROR, (event) =>
   ),
 );
 addEventListener('securitypolicyviolation', (event) =>
-  tellSenders('blocked', { directive: event.violatedDirective, url: event.blockedURI }),
+  tellSenders(
+    'blocked',
+    { directive: event.violatedDirective, url: event.blockedURI },
+    ACTIVE_LOAD,
+  ),
 );
 
 context.start({ customNamespaces: { [RECEIVER_NAMESPACE]: framework.system.MessageType.JSON } });

@@ -367,7 +367,8 @@ async function open(
 const castFrame = (page) => page.frameLocator(`iframe[src^="${CAST}"]`);
 const castButton = (page) => castFrame(page).locator('#cast');
 const frameOf = (page) => page.frames().find((frame) => frame.url().startsWith(CAST));
-const receiver = (page, what) => frameOf(page)?.evaluate((key) => window[key] ?? [], what) ?? [];
+const receiver = (page, what) =>
+  frameOf(page)?.evaluate((key) => (key in window ? window[key] : []), what) ?? [];
 
 async function playingPast(page, seconds) {
   await page.waitForFunction(
@@ -613,10 +614,11 @@ test('reordered same-id receiver LOADs publish only the accepted generation and 
     await reveal(page);
     await castButton(page).click();
     await expect.poll(() => receiver(page, 'loads')).toHaveLength(1);
+    const accepted = (await receiver(page, 'loads'))[0].denLoad;
     await page.evaluate(
-      ([cast, url]) => {
+      ([cast, url, accepted]) => {
         const frame = document.querySelector(`iframe[src^="${cast}"]`);
-        for (const generation of [98, 99])
+        for (const generation of [accepted.generation - 1, accepted.generation])
           frame.contentWindow.postMessage(
             {
               type: 'den-load',
@@ -627,7 +629,7 @@ test('reordered same-id receiver LOADs publish only the accepted generation and 
             cast,
           );
       },
-      [CAST, TORBOX],
+      [CAST, TORBOX, accepted],
     );
     await expect.poll(() => receiver(page, 'heldLoads').then((loads) => loads.length)).toBe(2);
     await frameOf(page).evaluate(() => window.releaseLoad(1));
@@ -639,7 +641,7 @@ test('reordered same-id receiver LOADs publish only the accepted generation and 
     await frameOf(page).evaluate(() => window.releaseLoad(2));
     await expect
       .poll(() => receiver(page, 'loads').then((loads) => loads.at(-1)?.denLoad))
-      .toEqual({ id: TORBOX, generation: 99 });
+      .toEqual(accepted);
 
     await page.evaluate(() => {
       window.staleReceiverErrors = [];
@@ -658,7 +660,7 @@ test('reordered same-id receiver LOADs publish only the accepted generation and 
           error: { shakaErrorCode: 999 },
         });
       },
-      [TORBOX, 98],
+      [TORBOX, accepted.generation - 1],
     );
     await frameOf(page).evaluate(() => {
       window.receiverSays({
@@ -694,10 +696,17 @@ test('a refused replacement stops a stale overlapping LOAD which landed on the r
     await reveal(page);
     await castButton(page).click();
     await expect.poll(() => receiver(page, 'loads')).toHaveLength(1);
+    const accepted = (await receiver(page, 'loads'))[0].denLoad;
+    await page.evaluate(() => {
+      window.overlapErrors = [];
+      window.addEventListener('message', (event) => {
+        if (event.data?.type === 'den-error') window.overlapErrors.push(event.data);
+      });
+    });
     await page.evaluate(
-      ([cast, url]) => {
+      ([cast, url, accepted]) => {
         const frame = document.querySelector(`iframe[src^="${cast}"]`);
-        for (const generation of [98, 99])
+        for (const generation of [accepted.generation - 1, accepted.generation])
           frame.contentWindow.postMessage(
             {
               type: 'den-load',
@@ -708,19 +717,22 @@ test('a refused replacement stops a stale overlapping LOAD which landed on the r
             cast,
           );
       },
-      [CAST, TORBOX],
+      [CAST, TORBOX, accepted],
     );
     await expect.poll(() => receiver(page, 'heldLoads').then((loads) => loads.length)).toBe(2);
     await frameOf(page).evaluate(() => window.releaseLoad(0));
-    await expect.poll(() => receiver(page, 'receiverLoad')).toEqual({ id: TORBOX, generation: 98 });
+    await expect
+      .poll(() => receiver(page, 'receiverLoad'))
+      .toEqual({
+        id: TORBOX,
+        generation: accepted.generation - 1,
+      });
     await frameOf(page).evaluate(() => window.releaseLoad(1, 'reject'));
     await expect.poll(() => receiver(page, 'calls')).toContain('stop');
     await expect.poll(() => receiver(page, 'receiverLoad')).toBeNull();
-    await expect(
-      page.getByText(
-        'The Chromecast couldn’t play this TorBox release, so it’s playing here again.',
-      ),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(() => page.evaluate(() => window.overlapErrors))
+      .toContainEqual(expect.objectContaining({ ...accepted, type: 'den-error' }));
   } finally {
     await browser.close();
   }
@@ -736,10 +748,17 @@ test('a stale LOAD landing after the current replacement refused is stopped with
     await reveal(page);
     await castButton(page).click();
     await expect.poll(() => receiver(page, 'loads')).toHaveLength(1);
+    const accepted = (await receiver(page, 'loads'))[0].denLoad;
+    await page.evaluate(() => {
+      window.overlapErrors = [];
+      window.addEventListener('message', (event) => {
+        if (event.data?.type === 'den-error') window.overlapErrors.push(event.data);
+      });
+    });
     await page.evaluate(
-      ([cast, url]) => {
+      ([cast, url, accepted]) => {
         const frame = document.querySelector(`iframe[src^="${cast}"]`);
-        for (const generation of [98, 99])
+        for (const generation of [accepted.generation - 1, accepted.generation])
           frame.contentWindow.postMessage(
             {
               type: 'den-load',
@@ -750,15 +769,13 @@ test('a stale LOAD landing after the current replacement refused is stopped with
             cast,
           );
       },
-      [CAST, TORBOX],
+      [CAST, TORBOX, accepted],
     );
     await expect.poll(() => receiver(page, 'heldLoads').then((loads) => loads.length)).toBe(2);
     await frameOf(page).evaluate(() => window.releaseLoad(1, 'reject'));
-    await expect(
-      page.getByText(
-        'The Chromecast couldn’t play this TorBox release, so it’s playing here again.',
-      ),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(() => page.evaluate(() => window.overlapErrors))
+      .toContainEqual(expect.objectContaining({ ...accepted, type: 'den-error' }));
     await frameOf(page).evaluate(() => window.releaseLoad(0));
     await expect.poll(() => receiver(page, 'calls')).toContain('stop');
     await expect.poll(() => receiver(page, 'receiverLoad')).toBeNull();

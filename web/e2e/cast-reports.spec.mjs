@@ -188,6 +188,7 @@ async function open({
         audioTrack: 0,
         audioTracks: [],
         publicBase: MEDIA,
+        ...(holdCastLan ? { lanBase: 'https://lan.test:8449' } : {}),
         castOrigin: CAST,
       },
     }),
@@ -525,7 +526,7 @@ test('queued local media events from an old same-id generation cannot mutate its
   }
 });
 
-test('a non-autoplay retry failure leaves recovery and enters the existing failure path', async () => {
+test('a non-autoplay retry failure leaves recovery and reports through the existing failure path', async () => {
   const { browser, page } = await open({ blockAutoplay: 'error' });
   try {
     const frame = page.frameLocator('iframe[title="Den Cast player"]');
@@ -533,7 +534,10 @@ test('a non-autoplay retry failure leaves recovery and enters the existing failu
     await expect(play).toBeVisible();
     await play.click();
     await expect(play).toBeHidden();
-    await expect(page.getByText('This browser couldn’t play this release.')).toBeVisible();
+    await expect(page.getByText('Select Play on the video to continue.')).toHaveCount(0);
+    await expect
+      .poll(() => heard.reports.map((report) => report.message))
+      .toContain('Playback failed');
   } finally {
     await browser.close();
   }
