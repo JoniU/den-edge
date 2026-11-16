@@ -23,22 +23,24 @@
     series: true,
     variants: [],
   };
+  const ordinary: ResolvedService[] = [
+    { pick: { id: netflix.id, country: 'US' }, service: netflix },
+    { pick: { id: max.id, country: 'US' }, service: max },
+  ];
+  const duplicate: ResolvedService[] = [
+    { pick: { id: netflix.id, country: 'US' }, service: netflix },
+    { pick: { id: netflix.id, country: 'FI' }, service: netflix },
+  ];
+  (window as unknown as { replaceServicesWithDuplicate: () => void }).replaceServicesWithDuplicate =
+    () => (services = duplicate);
 
   function admit() {
     if (admitted) return;
     admitted = true;
     requests++;
     queueMicrotask(() => {
-      if (result === 'resolved')
-        services = [
-          { pick: { id: netflix.id, country: 'US' }, service: netflix },
-          { pick: { id: max.id, country: 'US' }, service: max },
-        ];
-      else if (result === 'duplicate')
-        services = [
-          { pick: { id: netflix.id, country: 'US' }, service: netflix },
-          { pick: { id: netflix.id, country: 'FI' }, service: netflix },
-        ];
+      if (result === 'resolved' || result === 'replacement') services = ordinary;
+      else if (result === 'duplicate') services = duplicate;
       settled = true;
     });
   }

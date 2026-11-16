@@ -49,11 +49,16 @@ test('TV Services keeps its reserved height when provider names resolve', async 
   await expect(row.locator('.name').first()).toHaveCSS('font-size', labelFont);
 });
 
-test('TV Services keeps duplicate-country identity in the reserved name line', async ({ page }) => {
-  const { row, reserved, labelFont } = await pendingRow(page, '?result=duplicate');
+test('TV Services keeps duplicate-country replacement in the reserved name line', async ({
+  page,
+}) => {
+  const { row, reserved, labelFont } = await pendingRow(page, '?result=replacement');
 
   await row.scrollIntoViewIfNeeded();
   await expect(row).toHaveAttribute('data-layout-state', 'settled');
+  await expect(row.getByRole('link', { name: 'Netflix' })).toBeVisible();
+  expect(await geometry(row)).toEqual(reserved);
+  await page.evaluate(() => globalThis.replaceServicesWithDuplicate());
   await expect(row.getByRole('link', { name: 'Netflix, US' })).toBeVisible();
   await expect(row.getByRole('link', { name: 'Netflix, FI' })).toBeVisible();
   await expect(row.locator('.country')).toHaveText(['US', 'FI']);
