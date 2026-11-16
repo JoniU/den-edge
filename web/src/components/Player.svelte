@@ -32,6 +32,7 @@
   import { retryWithoutHint } from '../lib/ipv4';
   import type { Title } from '../lib/library';
   import { interfaceLocale, type InterfaceLanguage } from '../lib/interfaceLanguage';
+  import { languageName } from '../lib/languageName';
   import type { Episode as EpisodeDetail } from '../lib/detail';
   import { PLAYBACK_PROGRESS_SAVE_MS, PlaybackProgressReporter } from '../lib/playbackProgress';
   import { playable, withoutRefused, type Playable } from '../lib/playable';
@@ -1241,13 +1242,6 @@
   // The page under the player is not on screen while it plays (its `active` is off), so it names the tab no more:
   // the player does, as the title's page would.
   nameTab(() => named(heading, season === undefined ? title.year : undefined));
-  const names = (() => {
-    try {
-      return new Intl.DisplayNames([navigator.language], { type: 'language' });
-    } catch {
-      return null;
-    }
-  })();
 
   /**
    * Start a session: the release den-remux picks, or the one `pick` names — in another audio track, perhaps. `extra`
@@ -5103,12 +5097,7 @@
   }
 
   function trackLabel(track: AudioTrack, n: number): string {
-    let language: string | undefined;
-    try {
-      language = track.language ? (names?.of(track.language) ?? track.language) : undefined;
-    } catch {
-      language = track.language ?? undefined;
-    }
+    const language = track.language ? (languageName(track.language) ?? track.language) : undefined;
     const channels = track.channels === 6 ? ' 5.1' : track.channels === 8 ? ' 7.1' : '';
     return `${language ?? track.name ?? `Track ${n + 1}`}${channels}${track.commentary ? ' · commentary' : ''}`;
   }
