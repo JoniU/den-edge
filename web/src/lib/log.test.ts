@@ -1250,7 +1250,6 @@ describe('LibraryLog', () => {
     const { vault } = memoryVault();
     let refuseWrites = false;
     let holdOpeningBody = false;
-    let reads = 0;
     let posts = 0;
     let bodyCancelled = false;
     let headersReturned!: () => void;
@@ -1262,7 +1261,6 @@ describe('LibraryLog', () => {
         posts++;
         if (refuseWrites) throw new TypeError('offline');
       } else if (String(input).includes('/changes?')) {
-        reads++;
         if (holdOpeningBody) {
           const response = await server.fetchImpl(input, init);
           const headers = new Headers(response.headers);
@@ -2271,6 +2269,63 @@ describe('LibraryLog', () => {
     expect(hasLibraryCredential()).toBe(true);
     await replacement.refresh();
     expect(members, 'the successful successor registration is reused').toBe(2);
+    replacement.close();
+    forgetLibraryCredential();
+  });
+
+  it('cancels a cached registration held in a generation-change body before replacement', async () => {
+    const { data, vault } = memoryVault();
+    const server = await edge([row(1)], [], 'generation-1');
+    let phase: 'prime' | 'held' | 'replacement' = 'prime';
+    let members = 0;
+    let bodyCancelled = false;
+    let bodyReadStarted!: () => void;
+    const bodyReading = new Promise<void>((resolve) => (bodyReadStarted = resolve));
+    const connection: typeof fetch = async (url, init) => {
+      if (init?.method === 'PUT') {
+        members++;
+        if (phase === 'prime') return new Response('{}', { status: 503 });
+        if (phase === 'held') {
+          return new Response(
+            new ReadableStream({
+              pull() {
+                bodyReadStarted();
+                return new Promise<void>(() => undefined);
+              },
+              cancel() {
+                bodyCancelled = true;
+              },
+            }),
+            {
+              status: 409,
+              headers: { 'x-den-generation': 'generation-2' },
+            },
+          );
+        }
+        return new Response('{}');
+      }
+      return server.fetchImpl(url, init);
+    };
+    forgetLibraryCredential();
+    await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault);
+    await vi.waitFor(() => expect(keptFacts(data)).toBe(true));
+    forgetLibraryCredential();
+    phase = 'held';
+    members = 0;
+
+    const stale = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    await bodyReading;
+    stale.close();
+    await vi.waitFor(() => expect(bodyCancelled).toBe(true));
+    expect(members, 'a superseded 409 cannot start its generation retry').toBe(1);
+    expect(hasLibraryCredential()).toBe(false);
+
+    phase = 'replacement';
+    const replacement = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    await vi.waitFor(() => expect(hasLibraryCredential()).toBe(true));
+    expect(members).toBe(2);
+    await replacement.refresh();
+    expect(members, 'the replacement reuses its successful membership').toBe(2);
     replacement.close();
     forgetLibraryCredential();
   });

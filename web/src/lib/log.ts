@@ -4224,14 +4224,15 @@ export class LibraryLog {
     const controller = new AbortController();
     const timedOut = () => new DOMException('den-edge stopped answering', 'TimeoutError');
     const deadline = setTimeout(() => controller.abort(timedOut()), answerMs);
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const transport = { reader: undefined as ReadableStreamDefaultReader<Uint8Array> | undefined };
     const detach = () => init.signal?.removeEventListener('abort', stop);
     const stop = () => {
       const reason = init.signal?.reason;
       controller.abort(reason);
-      void reader?.cancel(reason).catch(() => undefined);
+      void transport.reader?.cancel(reason).catch(() => undefined);
     };
-    init.signal?.addEventListener('abort', stop, { once: true });
+    if (init.signal?.aborted) stop();
+    else init.signal?.addEventListener('abort', stop, { once: true });
     let res: Response;
     try {
       res = await this.fetchImpl(path, { ...init, signal: controller.signal });
@@ -4248,7 +4249,7 @@ export class LibraryLog {
       return res;
     }
     const responseReader = res.body.getReader();
-    reader = responseReader;
+    transport.reader = responseReader;
     if (init.signal?.aborted) stop();
     const body = new ReadableStream<Uint8Array>({
       async pull(stream) {
@@ -4317,6 +4318,8 @@ export class LibraryLog {
 
   private async putMember(active: () => boolean, signal?: AbortSignal): Promise<void> {
     const put = async (generation?: string) => {
+      if (!active() || signal?.aborted)
+        throw signal?.reason ?? new DOMException('Membership authority was superseded', 'AbortError');
       const response = await this.send(
         `/lib/${this.keys.id}/member`,
         {
@@ -4340,12 +4343,9 @@ export class LibraryLog {
       // Registered under a generation this browser has not read yet (a cached open, or a change since): once more
       // under the one den-edge names. Only the registration takes it; reads and writes still find the change.
       const current = res.headers.get('x-den-generation');
-      if (
-        res.status === 409 &&
-        (await errorCode(res)) === 'generation_changed' &&
-        current &&
-        current !== registered
-      ) {
+      const changed = res.status === 409 ? await errorCode(res) : undefined;
+      if (!active() || signal?.aborted) return;
+      if (changed === 'generation_changed' && current && current !== registered) {
         registered = current;
         res = await put(current);
         if (!active()) return;
