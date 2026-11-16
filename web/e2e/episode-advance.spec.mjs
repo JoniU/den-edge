@@ -448,7 +448,7 @@ test('a failed next-episode lookup is distinct from a finale and Retry advances 
 
     await expect(pageVideo(page)).toHaveJSProperty('ended', true);
     const recovery = page.getByRole('status').filter({
-      hasText: 'Couldn’t check for the next episode.',
+      hasText: 'Couldn’t load this season from TMDB.',
     });
     await expect(recovery).toBeVisible();
     await recovery.getByRole('button', { name: 'Try again' }).click();

@@ -201,7 +201,6 @@
     resume,
     next,
     nextEpisode,
-    nextAvailability,
     castPlayMs = CAST_PLAY_MS,
     onprogress,
     onfinalprogress,
@@ -251,10 +250,8 @@
     resume: { fraction: number; seconds?: number };
     /** The episode after this one, as `S2 · E4`, when there is one. */
     next?: string;
-    /** That episode's own numbers, so it can be warmed before the advance (`shouldWarmNext`). */
-    nextEpisode?: { season?: number; episode?: number };
-    /** Whether this exact episode has a ready successor, a confirmed end, or metadata still needs recovery. */
-    nextAvailability?: 'loading' | 'ready' | 'finale' | 'unreleased' | 'failed';
+    /** The ready successor's numbers, or why its metadata is not actionable. */
+    nextEpisode?: { season?: number; episode?: number } | 'loading' | 'unreleased' | 'failed';
     /** Timer seam for the browser fixture; the app always uses the production default. */
     castPlayMs?: number;
     /** Where playback got to, and the episode that is about: one advanced to in place reports as itself. */
@@ -282,7 +279,9 @@
     ) => void;
   } = $props();
   const nextHref = $derived(
-    onnext && nextEpisode?.season !== undefined && nextEpisode.episode !== undefined
+    typeof nextEpisode === 'object' &&
+      nextEpisode.season !== undefined &&
+      nextEpisode.episode !== undefined
       ? titleHref({ ...title, ...nextEpisode, play: true })
       : undefined,
   );
@@ -298,8 +297,8 @@
             title: { type: Title['type']; id: number };
             season?: number;
             episode?: number;
-            availability?: typeof nextAvailability;
-            next?: typeof nextEpisode;
+            availability?: string;
+            next?: { season?: number; episode?: number };
             seasons?: number[];
           }) => void;
         }
@@ -307,8 +306,8 @@
         title: { type: title.type, id: title.id },
         season,
         episode,
-        availability: nextAvailability,
-        next: nextEpisode,
+        availability: typeof nextEpisode === 'string' ? nextEpisode : undefined,
+        next: typeof nextEpisode === 'object' ? nextEpisode : undefined,
         seasons: seasons?.map(({ number }) => number),
       });
     });
@@ -701,10 +700,8 @@
   let regrantedAt = -Infinity;
   let key = $state('');
   let badKey = $state(false);
-  /** Seconds until the next episode starts, once this one has ended. */
+  /** Seconds until advance; zero while a natural end still owns metadata recovery. */
   let upNext = $state<number | null>(null);
-  /** A natural end still owns next-episode recovery; replay, Stay, close and advance retire it. */
-  let awaitingNext = $state(false);
   let imdb: string | undefined;
   let hls: Hls | undefined;
   let avplay: SamsungAvplayAdapter | undefined;
@@ -4014,9 +4011,18 @@
     // For den-edge's own outcome report (`finish()`): this visit reached a natural end, whether or not there is
     // a next episode to count down to.
     reachedNaturalEnd = true;
-    awaitingNext = nextAvailability !== undefined && nextAvailability !== 'finale';
-    if (!onnext || nextAvailability !== 'ready' || ended) return;
+    if (nextEpisode === 'loading') waitForNext();
+    else upNext = typeof nextEpisode === 'string' ? 0 : null;
+    if (typeof nextEpisode !== 'object' || ended) return;
     startNextCountdown();
+  }
+
+  function waitForNext() {
+    clearInterval(countdown);
+    upNext = -1;
+    countdown = setTimeout(() => {
+      if (upNext === -1) upNext = 0;
+    }, 10_000);
   }
 
   function startNextCountdown() {
@@ -4035,14 +4041,14 @@
   // Metadata can settle after the media's one `ended` event. Adopt a ready result only while that exact natural end
   // still owns recovery; replay and Stay call `stay()` and therefore cannot be advanced by a late answer.
   $effect(() => {
-    if (nextAvailability === 'ready' && onnext && awaitingNext && upNext === null && !ended)
-      untrack(startNextCountdown);
+    if (upNext === null || ended) return;
+    if (typeof nextEpisode === 'object') untrack(startNextCountdown);
+    else if (nextEpisode === 'loading' && upNext === 0) untrack(waitForNext);
   });
 
   function stay() {
     clearInterval(countdown);
     upNext = null;
-    awaitingNext = false;
   }
 
   /**
@@ -4668,8 +4674,8 @@
   let nextDetailRequest: AbortController | undefined;
   function describeNext(at: number) {
     const to = nextEpisode;
-    if (nextDetailRequest || title.type !== 'tv' || !onnext) return;
-    if (to?.season === undefined || to.episode === undefined) return;
+    if (nextDetailRequest || title.type !== 'tv') return;
+    if (typeof to !== 'object' || to.season === undefined || to.episode === undefined) return;
     if (!shouldWarmNext(at, length(), NEXT_DETAIL_LEAD_SECS)) return;
     const request = new AbortController();
     nextDetailRequest = request;
@@ -4699,9 +4705,9 @@
     const activelyWatching = video
       ? !video.paused && !video.ended
       : customTransport && !remotePaused;
-    if (warmedNext || !imdb || !onnext || !session || !activelyWatching) return;
+    if (warmedNext || !imdb || !session || !activelyWatching) return;
     const to = nextEpisode;
-    if (!to || !shouldWarmNext(at, length())) return;
+    if (typeof to !== 'object' || !shouldWarmNext(at, length())) return;
     warmedNext = true;
     const playingFilename = session.release.filename;
     const from = { ...playingEpisode };
@@ -5488,21 +5494,24 @@
   /** What playback says as it goes, in the order the TV's stack shows it. */
   const notices = $derived.by(() => {
     const list: Notice[] = [];
-    if (awaitingNext && nextAvailability === 'loading')
+    if (upNext === -1 && nextEpisode === 'loading')
       list.push({
-        text: i18n.phrase('Finding the next episode…'),
+        text: i18n.phrase('Loading episodes'),
         quiet: true,
         busy: true,
       });
-    else if (awaitingNext && nextAvailability === 'failed')
+    else if (
+      upNext !== null &&
+      (nextEpisode === 'failed' || (nextEpisode === 'loading' && upNext === 0))
+    )
       list.push({
-        text: i18n.phrase('Couldn’t check for the next episode.'),
-        action: onnext ? { label: i18n.phrase('Try again'), run: onnext } : undefined,
+        text: i18n.phrase('Couldn’t load this season from TMDB.'),
+        action: { label: i18n.phrase('Try again'), run: onnext! },
         urgent: true,
       });
-    else if (awaitingNext && nextAvailability === 'unreleased')
+    else if (upNext === 0 && nextEpisode === 'unreleased')
       list.push({
-        text: i18n.phrase('The next episode isn’t available yet.'),
+        text: i18n.phrase('Upcoming'),
         urgent: true,
       });
     if (transitionNotice)
@@ -6298,7 +6307,7 @@
   class:web-touch-player={webTransport && !desktopTransport}
   class:web-controls-hidden={webTransport && !webControlsVisible}
   class:web-casting={webTransport && castView}
-  class:web-counting={webTransport && upNext !== null}
+  class:web-counting={webTransport && !!next && upNext !== null}
   role="dialog"
   tabindex="-1"
   aria-modal="true"
@@ -6767,7 +6776,7 @@
     {@const short = pickLabel(session.release)}
     {@const playingTrack = session.audioTracks[session.audioTrack] ?? session.audioTracks[0]}
     {@const downmix = downmixLabel(session)}
-    <footer class:counting-down={upNext !== null}>
+    <footer class:counting-down={!!next && upNext !== null}>
       <!-- What plays, then where it came from: two parts of one sentence, so the source moves down whole rather
            than breaking mid-label when there is no room beside it. -->
       <p class="release" aria-live="polite">

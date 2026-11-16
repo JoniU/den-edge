@@ -624,6 +624,8 @@
         }),
         replace,
       );
+    following = undefined;
+    if (playingSeasonsOf !== titleKey(target.title)) playingSeasons = undefined;
     playbackIntent += 1;
     playing = target;
   }
@@ -1718,23 +1720,26 @@
   });
 
   /** The aired episode after the one playing, preserving why there is not one yet. */
-  let following = $state<Target | null>(null);
-  let followingAvailability = $state<'loading' | 'ready' | 'finale' | 'unreleased' | 'failed'>();
-  let followingOwner = $state<Target | null>(null);
-  let followingGeneration = 0;
-  let followingWait: ReturnType<typeof setTimeout> | undefined;
+  let following = $state<Target | 'unreleased' | 'failed' | null>();
   /**
    * The playing series' seasons and how much of each has aired, for the player's episode list. Kept across an advance
    * within the series, so the list neither blinks out nor asks for its season again.
    */
   let playingSeasons = $state.raw<{ number: number; aired: number }[]>();
-  let playingSeasonsOf = $state<string>();
+  let playingSeasonsOf: string | undefined;
 
-  function publishFollowing(target: Target, generation: number): boolean {
-    if (playing !== target || followingGeneration !== generation) return false;
-    const shape = session.shapes.get(titleKey(target.title));
-    if (!shape) return false;
-    clearTimeout(followingWait);
+  function findFollowing(target: Target): void {
+    const key = titleKey(target.title);
+    const shape = session.shapes.get(key);
+    if (!shape) {
+      following = undefined;
+      void promoteLibraryTitle(session, target.title).then(() => {
+        if (playing !== target) return;
+        if (session.shapes.has(key)) findFollowing(target);
+        else following = 'failed';
+      });
+      return;
+    }
     const at = { season: target.season!, episode: target.episode! };
     // Atlas's dates first: an episode out before TMDB's broadcast slot is next in line the day it is out.
     const aired = airedThrough(
@@ -1742,54 +1747,21 @@
       untrack(() => airings.get(target.title.id)),
     );
     playingSeasons = airedSeasons(shape, aired);
-    playingSeasonsOf = titleKey(target.title);
+    playingSeasonsOf = key;
     const next = episodeAfter(at, shape);
     if (!next) {
       following = null;
-      followingAvailability = 'finale';
-      return true;
+      return;
     }
-    const ready = isAired(next, aired);
-    following = ready ? { title: target.title, ...next } : null;
-    followingAvailability = ready ? 'ready' : 'unreleased';
-    return true;
-  }
-
-  function findFollowing(target: Target): void {
-    const generation = ++followingGeneration;
-    clearTimeout(followingWait);
-    followingOwner = target;
-    if (publishFollowing(target, generation)) return;
-    followingAvailability = 'loading';
-    // A library-provider request can remain in flight while its Worker reconnects. The request may still complete,
-    // but the ended player must acquire an actionable state instead of announcing an unbounded wait.
-    followingWait = setTimeout(() => {
-      if (playing === target && followingGeneration === generation)
-        followingAvailability = 'failed';
-    }, 10_000);
-    void promoteLibraryTitle(session, target.title).then(() => {
-      if (
-        !publishFollowing(target, generation) &&
-        playing === target &&
-        followingGeneration === generation
-      ) {
-        clearTimeout(followingWait);
-        followingAvailability = 'failed';
-      }
-    });
+    following = isAired(next, aired) ? { title: target.title, ...next } : 'unreleased';
   }
 
   $effect(() => {
     const target = playing;
-    followingGeneration += 1;
-    clearTimeout(followingWait);
-    following = null;
-    followingAvailability = undefined;
-    followingOwner = null;
+    following = undefined;
     if (!target || playingSeasonsOf !== titleKey(target.title)) playingSeasons = undefined;
     if (!target || target.season === undefined || target.episode === undefined) return;
     untrack(() => findFollowing(target));
-    return () => clearTimeout(followingWait);
   });
 
   /** Autoplay and "Next": the profile's policy is asked again before the following episode starts. */
@@ -3447,8 +3419,8 @@
   </div>
 {:else if playing && scout && (scout.playback || remux !== null) && PlayerScreen.current}
   {@const target = playing}
-  {@const after = followingOwner === target ? following : null}
-  {@const nextAvailability = followingOwner === target ? followingAvailability : undefined}
+  {@const after = typeof following === 'object' ? following : null}
+  {@const nextAvailability = typeof following === 'string' ? following : undefined}
   <!-- A session names one source: a shared scout goes with the shared subtitles, a library's with its own. -->
   {@const guestSource = !!sharedInstallOf(scout.install)}
   {@const releaseAuthority = [
@@ -3489,10 +3461,11 @@
       preferredPlaybackSource={playbackPrefs.preferredPlaybackSource}
       resume={resumePoint(target)}
       next={after ? `S${after.season} · E${after.episode}` : undefined}
-      nextEpisode={after ? { season: after.season, episode: after.episode } : undefined}
-      nextAvailability={target.season !== undefined && target.episode !== undefined
-        ? (nextAvailability ?? 'loading')
-        : undefined}
+      nextEpisode={after
+        ? { season: after.season, episode: after.episode }
+        : target.season !== undefined && target.episode !== undefined
+          ? (nextAvailability ?? (following === undefined ? 'loading' : undefined))
+          : undefined}
       onprogress={(fraction, seconds, at, playing) =>
         void progressed({ title: target.title, ...at }, fraction, seconds, playing)}
       onfinalprogress={(fraction, seconds, at) =>
@@ -3503,10 +3476,10 @@
       onplaybackreceipthandoff={requestPlaybackReceiptHandoff}
       onnext={after
         ? () => void advance(after)
-        : nextAvailability === 'failed'
+        : target.season !== undefined && (following === undefined || nextAvailability === 'failed')
           ? () => findFollowing(target)
           : undefined}
-      seasons={playingSeasonsOf === titleKey(target.title) ? playingSeasons : undefined}
+      seasons={playingSeasons}
       episodeProgress={(season, episode) =>
         // The open page's rows are keyed by season and episode alone, so they are this series' only while its page
         // is the one open under the player; another series' page would lend its own progress.

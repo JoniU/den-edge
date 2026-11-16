@@ -1,8 +1,5 @@
 // Generated from user-facing Svelte markup; English remains inline as the zero-cost fallback.
 export const sourcePhrases: Readonly<Record<string, string>> = {
-  'Finding the next episode…': 'Söker efter nästa avsnitt…',
-  'Couldn’t check for the next episode.': 'Det gick inte att söka efter nästa avsnitt.',
-  'The next episode isn’t available yet.': 'Nästa avsnitt är inte tillgängligt ännu.',
   '— your own redeems count too.': '– Dina egna inlösen räknas också.',
   ', or in Den wherever your library is already open, under':
     ', eller i Den varhelst ditt bibliotek redan är öppet, under',
