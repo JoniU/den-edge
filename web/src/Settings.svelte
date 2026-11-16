@@ -498,9 +498,16 @@
             verifyPin={(pin) => authority.model.verifyParentalPin(pin)}
             ownerPin={profileAware}
             pinRemovable={connections?.parentalPinRemovable ?? false}
+            showProfileLifecycleNotice={profileAware}
           />{/key}
       {:else}
         <SettingsSection id="content" title={i18n.text('settings.section.content')}>
+          <SettingRow
+            id="profile-lifecycle"
+            label={i18n.phrase(
+              'This TV is viewer-only. Profile administration is not available on this TV.',
+            )}
+          />
           <SettingRow
             id="owner-pin-management-handoff"
             label={i18n.phrase('Manage the Owner PIN in a supported browser')}
