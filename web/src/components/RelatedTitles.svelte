@@ -30,6 +30,7 @@
   import { SvelteSet } from 'svelte/reactivity';
   import { yieldTask } from '../lib/taskYield';
   import type { ContentServiceClientPort } from '../lib/contentServiceClient';
+  import { i18n } from '../lib/i18n.svelte';
 
   const regions = new Intl.DisplayNames(['en'], { type: 'region' });
   import BrowseRow from './BrowseRow.svelte';
@@ -78,6 +79,13 @@
     start: () => Promise<void>;
     cancel: () => void;
   }>();
+  let versionsUnavailable = $state(false);
+  let versionsBusy = $state(false);
+  let versionsRecovered = $state(false);
+  let versionsRetryButton = $state.raw<HTMLButtonElement>();
+  let versionsRecoveryStatus = $state.raw<HTMLParagraphElement>();
+  let retryVersions: (() => void) | undefined;
+  const requestVersionsRetry = () => retryVersions?.();
   /** Live BrowseRows already admitted. The one-block substitutes keep the same initial skeleton height. */
   const mountedRows = new SvelteSet<string>();
 
@@ -187,6 +195,12 @@
     // is one TMDB request per member.
     // The promise identities live for this whole build, even while its RoutePage is retained inactive. Their gate
     // stops either loader from being called by component construction alone.
+    const build = ++builds;
+    const controller = new AbortController();
+    const current = () => live && builds === build && rowsFor === key;
+    versionsUnavailable = false;
+    versionsBusy = false;
+    versionsRecovered = false;
     let releaseDiscovery!: (start: boolean) => void;
     let discoveryDecided = false;
     const discoveryGate = new Promise<boolean>((resolve) => (releaseDiscovery = resolve));
@@ -197,19 +211,35 @@
           )
         : null,
     );
-    const versions = discoveryGate.then((start) =>
-      start
-        ? versionsRow(self, atlas, franchise, options).then((row) =>
-            row ? firstScreen(tracked(noted(row)), shown) : null,
-          )
-        : null,
+    const loadVersions = async () => {
+      const answer = await versionsRow(self, atlas, franchise, options, controller.signal);
+      if (answer.state === 'unavailable') return answer;
+      return {
+        state: 'ready' as const,
+        row: answer.row ? await firstScreen(tracked(noted(answer.row)), shown) : null,
+      };
+    };
+    const versionsAnswer = discoveryGate
+      .then((start) =>
+        start ? loadVersions() : Promise.resolve({ state: 'ready' as const, row: null }),
+      )
+      .catch((error) => {
+        if ((error as Error)?.name === 'AbortError') return { state: 'cancelled' as const };
+        throw error;
+      });
+    const versions = versionsAnswer.then((answer) =>
+      answer.state === 'ready' ? answer.row : null,
     );
+    void versionsAnswer.then((answer) => {
+      if (!current()) return;
+      versionsUnavailable = answer.state === 'unavailable';
+    });
     const decideDiscovery = (start: boolean) => {
       if (discoveryDecided) return;
       discoveryDecided = true;
       releaseDiscovery(start);
     };
-    const settledDiscovery = Promise.all([franchise, versions]).then(() => undefined);
+    const settledDiscovery = Promise.all([franchise, versionsAnswer]).then(() => undefined);
     const pendingDiscovery = {
       start: () => {
         decideDiscovery(true);
@@ -276,20 +306,70 @@
         : []),
       ...(regional ? [regional] : []),
     ].map(tracked);
-    const build = ++builds;
-    const current = () => live && builds === build && rowsFor === key;
+    const retry = () => {
+      if (!current() || versionsBusy) return;
+      const returnFocus = document.activeElement === versionsRetryButton;
+      versionsBusy = true;
+      versionsRecovered = false;
+      void loadVersions()
+        .then(async (answer) => {
+          if (!current()) return;
+          versionsBusy = false;
+          if (answer.state === 'unavailable') {
+            versionsUnavailable = true;
+            if (returnFocus) requestAnimationFrame(() => versionsRetryButton?.focus());
+            return;
+          }
+          versionsUnavailable = false;
+          const upper = await franchise;
+          if (!current()) return;
+          const withoutPrevious = rows.filter(({ row }) => row.id !== 'other-versions');
+          if (answer.row) {
+            const at = upper ? withoutPrevious.findIndex(({ row }) => row.id === upper.id) + 1 : 0;
+            rows = [
+              ...withoutPrevious.slice(0, at),
+              { build, row: answer.row },
+              ...withoutPrevious.slice(at),
+            ];
+          } else {
+            rows = withoutPrevious;
+          }
+          versionsRecovered = returnFocus;
+          if (returnFocus)
+            requestAnimationFrame(() => {
+              if (current()) versionsRecoveryStatus?.focus();
+            });
+        })
+        .catch((error) => {
+          if ((error as Error)?.name === 'AbortError' || !current()) return;
+          versionsBusy = false;
+          versionsUnavailable = true;
+        });
+    };
+    retryVersions = retry;
     if (rebuild) {
       void Promise.all([
         franchise,
-        versions,
-        // Only replace content a viewer has already caused to load with another pre-resolved row. Untouched rows
-        // remain cheap definitions and keep the same heading/skeleton geometry when this build is published.
-        ...defined.map((row) => (preserve.has(row.id) ? firstScreen(row, shown) : row)),
-      ]).then((found) => {
+        versionsAnswer,
+        Promise.all(
+          // Only replace content a viewer has already caused to load with another pre-resolved row. Untouched rows
+          // remain cheap definitions and keep the same heading/skeleton geometry when this build is published.
+          defined.map((row) => (preserve.has(row.id) ? firstScreen(row, shown) : row)),
+        ),
+      ] as const).then(([upper, versionAnswer, rest]) => {
         if (!current()) return;
-        const next = found
+        const next = [upper, versionAnswer.state === 'ready' ? versionAnswer.row : null, ...rest]
           .filter((row): row is RowDef => row !== null)
           .map((row) => ({ build, row }));
+        // A transient Atlas failure is not evidence that an already authoritative row became empty. Keep that row
+        // until this exact lane answers successfully; Retry below reuses the current title/franchise authority.
+        if (versionAnswer.state === 'unavailable') {
+          const keptVersions = rows.find(({ row }) => row.id === 'other-versions');
+          if (keptVersions) {
+            const at = upper ? next.findIndex(({ row }) => row.id === upper.id) + 1 : 0;
+            next.splice(at, 0, keptVersions);
+          }
+        }
         // A rebuild with no atlas has none to suggest: the suggestions already shown for this title stay, under
         // More like this, rather than shrinking the page under the viewer.
         const kept = affinity ? undefined : rows.find(({ row }) => row.id === SUGGESTED);
@@ -311,6 +391,8 @@
     }
     return () => {
       live = false;
+      controller.abort(new DOMException('related title authority replaced', 'AbortError'));
+      if (retryVersions === retry) retryVersions = undefined;
       pendingDiscovery.cancel();
     };
   });
@@ -338,6 +420,22 @@
 </script>
 
 <div bind:this={root} aria-hidden={!active}>
+  {#if versionsUnavailable}
+    <div class="versions-recovery" role="alert" data-spatial-section>
+      <span>{i18n.phrase('Some title details couldn’t be loaded.')}</span>
+      <button
+        bind:this={versionsRetryButton}
+        type="button"
+        disabled={versionsBusy}
+        aria-busy={versionsBusy}
+        onclick={requestVersionsRetry}>{i18n.phrase('Try again')}</button
+      >
+    </div>
+  {:else if versionsRecovered}
+    <p bind:this={versionsRecoveryStatus} class="versions-recovered" role="status" tabindex="-1">
+      {i18n.phrase('Title details loaded.')}
+    </p>
+  {/if}
   {#each rows as { build, row } (`${build}:${row.id}`)}
     {#if mountedRows.has(`${build}:${row.id}`)}
       <BrowseRow {row} {shown} prefetch={false} />
@@ -348,6 +446,43 @@
 </div>
 
 <style>
+  .versions-recovery {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin: 0 0 20px;
+    color: var(--danger);
+  }
+
+  .versions-recovery button {
+    border: 1px solid currentcolor;
+    border-radius: 999px;
+    padding: 8px 14px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 650;
+  }
+
+  .versions-recovery button:focus-visible {
+    outline: var(--ring-width) solid var(--focus-ring);
+    outline-offset: 3px;
+  }
+
+  .versions-recovery button:disabled {
+    opacity: 0.6;
+  }
+
+  .versions-recovered {
+    margin: 0 0 20px;
+    color: var(--muted);
+  }
+
+  .versions-recovered:focus {
+    outline: none;
+  }
+
   .row-reserve {
     --card-w: var(--poster-card-w, clamp(140px, 38vw, 190px));
 

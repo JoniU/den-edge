@@ -71,12 +71,22 @@ const franchiseRow = (
   atlas: Parameters<typeof franchiseRowImpl>[2],
   options: FixtureOptions,
 ) => franchiseRowImpl(collection, title, atlas, fixtureOptions(options));
-const versionsRow = (
+const versionsRowResult = (
   title: Parameters<typeof versionsRowImpl>[0],
   atlas: Parameters<typeof versionsRowImpl>[1],
   franchise: Parameters<typeof versionsRowImpl>[2],
   options: FixtureOptions,
-) => versionsRowImpl(title, atlas, franchise, fixtureOptions(options));
+  signal?: AbortSignal,
+) => versionsRowImpl(title, atlas, franchise, fixtureOptions(options), signal);
+const versionsRow = async (
+  title: Parameters<typeof versionsRowImpl>[0],
+  atlas: Parameters<typeof versionsRowImpl>[1],
+  franchise: Parameters<typeof versionsRowImpl>[2],
+  options: FixtureOptions,
+) => {
+  const result = await versionsRowResult(title, atlas, franchise, options);
+  return result.state === 'ready' ? result.row : null;
+};
 const personRow = (
   person: Parameters<typeof personRowImpl>[0],
   department: Parameters<typeof personRowImpl>[1],
@@ -983,15 +993,23 @@ describe('versionsRow', () => {
     expect(asked).toEqual([versionsPath]);
   });
 
-  it('is no row, and no error, from an atlas that predates the route or answers something else', async () => {
+  it('keeps an absent or older versions route distinct from a transient failure', async () => {
     const older = answering({});
-    expect(await versionsRow(self, '/atlas', none, { key: 'k', fetchImpl: older })).toBeNull();
+    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: older })).toEqual({
+      state: 'ready',
+      row: null,
+    });
     const other = answering({ [versionsPath]: { ids: [8] } });
-    expect(await versionsRow(self, '/atlas', none, { key: 'k', fetchImpl: other })).toBeNull();
+    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: other })).toEqual({
+      state: 'ready',
+      row: null,
+    });
     const down = (async () => {
       throw new TypeError('offline');
     }) as unknown as typeof fetch;
-    expect(await versionsRow(self, '/atlas', none, { key: 'k', fetchImpl: down })).toBeNull();
+    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: down })).toEqual({
+      state: 'unavailable',
+    });
   });
 
   it('asks nothing without atlas', async () => {
@@ -1000,6 +1018,14 @@ describe('versionsRow', () => {
       await versionsRow(self, null, none, { key: 'k', fetchImpl: answering({}, asked) }),
     ).toBeNull();
     expect(asked).toEqual([]);
+  });
+
+  it('propagates authority replacement instead of presenting it as an outage', async () => {
+    const replaced = new AbortController();
+    replaced.abort(new DOMException('title replaced', 'AbortError'));
+    await expect(
+      versionsRowResult(self, '/atlas', none, { key: 'k' }, replaced.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
   });
 });
 
