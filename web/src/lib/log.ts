@@ -2762,13 +2762,25 @@ export class LibraryLog {
    * A stored row read as library v4 reads one (§4), keeping track of what can't be: an unreadable row by its `k`, to
    * be removed (`compact`); a newer framing or format, which stops this build writing. Null for a row not read.
    */
-  private async readEntry(entry: {
-    k: string;
-    v: string;
-  }): Promise<
+  private async readEntry(
+    entry: {
+      k: string;
+      v: string;
+    },
+    active: () => boolean = () => true,
+  ): Promise<
     Row | ProfileDirectoryDocument | KidTitleApprovalsDocument | InvalidProfileDirectory | null
   > {
     const opened = await openEntry(this.keys, entry.k, entry.v);
+    if (!active()) return null;
+    return this.acceptOpenedEntry(entry, opened);
+  }
+
+  /** Apply one already-opened row synchronously, so an opening page commits no prefix across a crypto await. */
+  private acceptOpenedEntry(
+    entry: { k: string },
+    opened: Awaited<ReturnType<typeof openEntry>>,
+  ): Row | ProfileDirectoryDocument | KidTitleApprovalsDocument | InvalidProfileDirectory | null {
     this.unreadable.delete(entry.k);
     this.newerFraming.delete(entry.k);
     if ('unreadable' in opened) {
@@ -2924,11 +2936,13 @@ export class LibraryLog {
     // Nothing else writes a library kept only here but another tab, whose rows each save takes up (`takeKept`).
     if (this.offline) return { changed: false, reachedHead: false };
     const generationsBefore = this.generationChanges;
+    const active = () => opening?.active() ?? true;
     // Null when den-edge couldn't be read (a page, or the rest of them); `unreported` keeps what the pages read did.
     // `missing` when den-edge holds no log for this library: nothing was read to a head.
     const run = this.writes.then(async (): Promise<'head' | 'missing' | null> => {
       try {
         for (;;) {
+          if (!active()) return null;
           const res = await this.send(
             `/lib/${this.keys.id}/changes?since=${this.head}&limit=1000`,
             { headers: this.headers(), ...(opening ? { signal: opening.signal } : {}) },
@@ -2947,16 +2961,14 @@ export class LibraryLog {
           // Consume an adopted opening body before observing even its headers. `close()` can revoke authority while
           // that body is held and cancel it; no protocol or row state has escaped at that point.
           const openingBody = opening ? await res.json().catch(() => undefined) : undefined;
-          if (opening && !opening.active()) return null;
-          if (opening) {
-            await this.observeProtocol(res);
-            if (!opening.active()) return null;
-          }
+          if (!active()) return null;
+          if (opening && !res.ok && !(await this.observeProtocol(res, active))) return null;
           if (res.status === 410) this.moved = true;
           if (res.status === 404) {
             // Only the first 404 has rows den-edge acknowledged to put back; an empty relay answers it every time.
             const staged = [...this.entries.values()].some((entry) => entry.seq > 0);
-            if (!(await this.stageRecovery())) return null;
+            if (!(await this.stageRecovery(undefined, active))) return null;
+            if (!active()) return null;
             this.memberRegistered = false;
             this.head = 0;
             for (const entry of this.entries.values()) entry.seq = 0;
@@ -2969,24 +2981,39 @@ export class LibraryLog {
           if (!res.ok) return null;
           // The log is here again (or always was): a refused start is over, and the membership stands again.
           if (this.refused || !hasLibraryCredential()) {
-            this.refused = false;
             // Register before exposing the proof to relayed requests.
-            await this.registerMember();
+            await this.registerMember(active);
+            if (!active()) return null;
+            this.refused = false;
             useLibraryCredential(this.keys);
           }
           const page = coherentResponsePage(res, opening ? openingBody : await res.json());
           if (!page) return null;
+          // Decrypt the whole opening page before committing any of it. A close during crypto work therefore leaves
+          // protocol, rows, facts and cursors at the cached authority instead of publishing a page prefix.
+          let stagedEntries: Array<Awaited<ReturnType<typeof openEntry>>> | undefined;
+          if (opening) {
+            stagedEntries = [];
+            for (const entry of page.entries) {
+              stagedEntries.push(await openEntry(this.keys, entry.k, entry.v));
+              if (!active()) return null;
+            }
+          }
+          if (!active()) return null;
+          if (opening && !(await this.observeProtocol(res, active))) return null;
           if (
             (this.generation && page.generation && this.generation !== page.generation) ||
             page.head < this.head
           ) {
-            if (this.directoryCommitted) await this.adoptProfileDirectory();
-            else if (!(await this.stageRecovery(page.generation))) return null;
+            if (this.directoryCommitted) await this.adoptProfileDirectory(active);
+            else if (!(await this.stageRecovery(page.generation, active))) return null;
+            if (!active()) return null;
             this.memberRegistered = false;
             // Registered under the generation it now reads: under the old one den-edge refuses it.
             this.generation = page.generation;
             this.writeGeneration = undefined;
-            await this.registerMember();
+            await this.registerMember(active);
+            if (!active()) return null;
             this.head = 0;
             for (const entry of this.entries.values()) entry.seq = 0;
             this.resetProfileDirectory();
@@ -3005,9 +3032,12 @@ export class LibraryLog {
           this.writeGeneration = undefined;
           const factEntries: LibraryFactEntry[] = [];
           let factProfileTopology = false;
-          for (const entry of page.entries) {
+          for (const [index, entry] of page.entries.entries()) {
             // Unreadable rows are skipped individually, as on initial open.
-            const row = await this.readEntry(entry);
+            const row = stagedEntries
+              ? this.acceptOpenedEntry(entry, stagedEntries[index]!)
+              : await this.readEntry(entry, active);
+            if (!active()) return null;
             if (!row) {
               factEntries.push({ k: entry.k, seq: entry.seq, value: entry.v, row: null });
               continue;
@@ -3053,7 +3083,9 @@ export class LibraryLog {
             factEntries,
             !page.more || page.entries.length === 0,
             factProfileTopology,
+            active,
           );
+          if (!active()) return null;
           // The finished views' marker names the head: a pass that reads back only this browser's own writes changes no
           // row, and without this the marker stayed behind them.
           if (head !== this.head) this.dirty = true;
@@ -3455,9 +3487,10 @@ export class LibraryLog {
     entries: readonly LibraryFactEntry[],
     complete: boolean,
     profileTopology = false,
+    active: () => boolean = () => true,
   ): Promise<void> {
     this.saving = this.saving.then(() =>
-      this.commitFacts(generation, head, entries, complete, profileTopology),
+      this.commitFacts(generation, head, entries, complete, profileTopology, active),
     );
     return this.saving;
   }
@@ -3468,8 +3501,9 @@ export class LibraryLog {
     entries: readonly LibraryFactEntry[],
     complete: boolean,
     profileTopology: boolean,
+    active: () => boolean = () => true,
   ): Promise<void> {
-    if (!this.factStore || !generation) return;
+    if (!this.factStore || !generation || !active()) return;
     try {
       const batchSize = 64;
       if (!entries.length) {
@@ -3477,6 +3511,7 @@ export class LibraryLog {
         return;
       }
       for (let offset = 0; offset < entries.length; offset += batchSize) {
+        if (!active()) return;
         const batch = entries.slice(offset, offset + batchSize);
         const last = offset + batch.length === entries.length;
         await this.factStore.commitBatch(
@@ -3486,6 +3521,7 @@ export class LibraryLog {
           complete && last,
           { profileTopology },
         );
+        if (!active()) return;
       }
     } catch (error) {
       console.warn('den: incremental library facts could not be kept', error);
@@ -4245,22 +4281,29 @@ export class LibraryLog {
     };
   }
 
-  private async observeProtocol(res: Response): Promise<void> {
+  private async observeProtocol(
+    res: Response,
+    active: () => boolean = () => true,
+  ): Promise<boolean> {
     const minimum = Number(res.headers.get('x-den-wire-min'));
-    if (!Number.isInteger(minimum) || minimum < 2 || minimum <= this.wireMin) return;
+    if (!active()) return false;
+    if (!Number.isInteger(minimum) || minimum < 2 || minimum <= this.wireMin) return true;
     this.wireMin = minimum;
     if (minimum > this.instanceWire) this.upgradeRequired = minimum;
     // The in-memory monotonic fence already stands for this visit; persistence is an optimization for the next.
     await this.putMeta('wireMin', String(minimum));
+    return active();
   }
 
   /** Register this browser's membership, once at a time: a cached open starts it while `refresh` may ask too. */
-  private registerMember(): Promise<void> {
+  private registerMember(active: () => boolean = () => true): Promise<void> {
     if (this.memberRegistered || this.offline) return Promise.resolve();
-    return (this.registering ??= this.putMember().finally(() => (this.registering = undefined)));
+    return (this.registering ??= this.putMember(active).finally(
+      () => (this.registering = undefined),
+    ));
   }
 
-  private async putMember(): Promise<void> {
+  private async putMember(active: () => boolean): Promise<void> {
     const put = (generation?: string) =>
       this.send(`/lib/${this.keys.id}/member`, {
         method: 'PUT',
@@ -4273,6 +4316,7 @@ export class LibraryLog {
     try {
       let registered = this.writeGeneration ?? this.generation;
       let res = await put();
+      if (!active()) return;
       // Registered under a generation this browser has not read yet (a cached open, or a change since): once more
       // under the one den-edge names. Only the registration takes it; reads and writes still find the change.
       const current = res.headers.get('x-den-generation');
@@ -4284,8 +4328,10 @@ export class LibraryLog {
       ) {
         registered = current;
         res = await put(current);
+        if (!active()) return;
       }
       if (res.ok) {
+        if (!active()) return;
         this.memberRegistered = true;
         // Remembered for the next visit, which opens without registering again; a failure only costs it that.
         if (registered)
@@ -4373,7 +4419,8 @@ export class LibraryLog {
    * preferences and keys) into the household, which every profile reads. Kept edits are not routed to a profile
    * library from here: this log has none, so they are dropped and named.
    */
-  private async adoptProfileDirectory(): Promise<void> {
+  private async adoptProfileDirectory(active: () => boolean = () => true): Promise<void> {
+    if (!active()) return;
     console.warn(
       `den: the household committed profiles; ${this.entries.size} rows held from before it are dropped, not written back`,
     );
@@ -4399,8 +4446,11 @@ export class LibraryLog {
           ),
         );
     await this.refreshPending();
+    if (!active()) return;
     const opened = new Map((await this.keptWork()).map((work) => [work.key, work]));
+    if (!active()) return;
     for (const key of [...this.pending.keys()]) {
+      if (!active()) return;
       const work = opened.get(key);
       const names = !work
         ? 'unreadable'
@@ -4411,10 +4461,15 @@ export class LibraryLog {
         `den: ${work?.kind ?? 'kept'} work kept for the household from before its split is dropped (${names})`,
       );
       await this.discard(key);
+      if (!active()) return;
     }
   }
 
-  private async stageRecovery(generation?: string): Promise<boolean> {
+  private async stageRecovery(
+    generation?: string,
+    active: () => boolean = () => true,
+  ): Promise<boolean> {
+    if (!active()) return false;
     const rows = [...this.entries.values()]
       .filter((entry) => entry.seq > 0)
       .map((entry) => entry.row);
@@ -4433,7 +4488,12 @@ export class LibraryLog {
           ))
         )
           return false;
+        if (!active()) {
+          await this.discard(key);
+          return false;
+        }
       }
+      if (!active()) return false;
       const retained = new Map((this.recoveryRows ?? []).map((row) => [rowName(row), row]));
       for (const row of rows) {
         const previous = retained.get(rowName(row));

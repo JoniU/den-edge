@@ -1255,6 +1255,8 @@ describe('LibraryLog', () => {
     let bodyCancelled = false;
     let headersReturned!: () => void;
     const openingHeaders = new Promise<void>((resolve) => (headersReturned = resolve));
+    let bodyReadStarted!: () => void;
+    const openingBodyRead = new Promise<void>((resolve) => (bodyReadStarted = resolve));
     const connection: typeof fetch = async (input, init) => {
       if (init?.method === 'POST') {
         posts++;
@@ -1268,6 +1270,13 @@ describe('LibraryLog', () => {
           headersReturned();
           return new Response(
             new ReadableStream({
+              start(stream) {
+                stream.enqueue(new TextEncoder().encode('{'));
+              },
+              pull() {
+                bodyReadStarted();
+                return new Promise<void>(() => undefined);
+              },
               cancel() {
                 bodyCancelled = true;
               },
@@ -1293,6 +1302,7 @@ describe('LibraryLog', () => {
     const speculative = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
     const refreshing = speculative.refresh();
     await openingHeaders;
+    await openingBodyRead;
     speculative.close();
     await expect(refreshing).resolves.toBe(false);
     await vi.waitFor(() => expect(bodyCancelled).toBe(true));
@@ -1310,6 +1320,78 @@ describe('LibraryLog', () => {
     expect(replacement.title({ type: 'movie', id: 3 })).toBeDefined();
     expect(replacement.pendingActions).toBe(0);
     expect(posts, 'replacement reuses its pull and sends retained work once').toBe(2);
+    await replacement.refresh();
+    expect(posts).toBe(2);
+    replacement.close();
+    warn.mockRestore();
+  });
+
+  it('revokes an opening page held in row decode without publishing a page prefix', async () => {
+    const server = await edge([row(1)], [], 'generation-1');
+    const { vault } = memoryVault();
+    let refuseWrites = false;
+    let posts = 0;
+    let markOpening = false;
+    const connection: typeof fetch = async (input, init) => {
+      if (init?.method === 'POST') {
+        posts++;
+        if (refuseWrites) throw new TypeError('offline');
+      }
+      const response = await server.fetchImpl(input, init);
+      if (!markOpening || !String(input).includes('/changes?')) return response;
+      const headers = new Headers(response.headers);
+      headers.set('x-den-wire-min', '9');
+      return new Response(response.body, { status: response.status, headers });
+    };
+    const first = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    refuseWrites = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await first.write(row(2));
+    await vi.waitFor(() => expect(posts).toBe(1));
+    first.close();
+    refuseWrites = false;
+    await server.append(row(3));
+    const facts = (await LibraryFactStore.open(LIBRARY_KEY, vault))!;
+    const manifestBefore = await facts.manifest();
+    markOpening = true;
+
+    const speculative = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    const originalDecrypt = crypto.subtle.decrypt.bind(crypto.subtle);
+    let decodeStarted!: () => void;
+    const decoding = new Promise<void>((resolve) => (decodeStarted = resolve));
+    let releaseDecode!: () => void;
+    const heldDecode = new Promise<void>((resolve) => (releaseDecode = resolve));
+    let holdOneDecode = true;
+    const decrypt = vi
+      .spyOn(crypto.subtle, 'decrypt')
+      .mockImplementation(async (algorithm, key, data) => {
+        if (holdOneDecode) {
+          holdOneDecode = false;
+          decodeStarted();
+          await heldDecode;
+        }
+        return originalDecrypt(algorithm, key, data);
+      });
+    const refreshing = speculative.refresh();
+    await decoding;
+    speculative.close();
+    releaseDecode();
+    await expect(refreshing).resolves.toBe(false);
+    expect(speculative.currentGeneration).toBe('generation-1');
+    expect(speculative.wireMinimum).toBeLessThan(9);
+    expect(speculative.upgradeRequired).toBeNull();
+    expect(speculative.title({ type: 'movie', id: 3 })).toBeUndefined();
+    expect(speculative.pendingActions).toBe(1);
+    expect(await facts.manifest()).toEqual(manifestBefore);
+    expect(posts).toBe(1);
+    decrypt.mockRestore();
+
+    markOpening = false;
+    const replacement = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    await expect(replacement.refresh()).resolves.toBe(true);
+    expect(replacement.title({ type: 'movie', id: 3 })).toBeDefined();
+    expect(replacement.pendingActions).toBe(0);
+    expect(posts).toBe(2);
     await replacement.refresh();
     expect(posts).toBe(2);
     replacement.close();
