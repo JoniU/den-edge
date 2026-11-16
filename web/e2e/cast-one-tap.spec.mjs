@@ -615,6 +615,7 @@ test('a refused replacement stops the previously accepted receiver load', async 
     await castButton(page).click();
     await expect.poll(() => receiver(page, 'loads')).toHaveLength(1);
     const accepted = (await receiver(page, 'loads'))[0].denLoad;
+    await expect.poll(() => receiver(page, 'receiverLoad')).toEqual(accepted);
     const replacement = { id: accepted.id, generation: accepted.generation + 1 };
     await page.evaluate(
       ([cast, url, replacement]) =>
@@ -716,6 +717,7 @@ test('reordered same-id receiver LOADs publish only the accepted generation and 
       });
     });
     await expect.poll(() => page.evaluate(() => window.staleReceiverErrors)).toEqual([]);
+    expect(receiverLogs.some((line) => line.includes('"detailedErrorCode":999'))).toBe(true);
     expect(receiverLogs.every((line) => !line.includes(TORBOX))).toBe(true);
     await expect(page.locator('.player video')).toHaveCount(0);
     expect(await receiver(page, 'calls')).not.toEqual(

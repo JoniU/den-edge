@@ -324,6 +324,7 @@ test('Den’s receiver, under its policy, shows Den while idle and tells a sende
         error: { message: null, code: null, shakaErrorCode: 1001 },
       },
     ]);
+    expect(receiverLogs.some((line) => line.includes('"generation":2'))).toBe(true);
     expect(receiverLogs.every((line) => !line.includes(privateLoadId))).toBe(true);
     expect(await page.evaluate(() => window.violations)).toEqual([]);
   } finally {
