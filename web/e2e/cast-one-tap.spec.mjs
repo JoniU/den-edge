@@ -564,6 +564,7 @@ test('a replacement LOAD on the receiver never ends the Cast session', async () 
           {
             type: 'den-load',
             id: `${url}&replacement`,
+            generation: 99,
             media: { url: `${url}&replacement`, mode: 'cast', title: 'Fixture', external: true },
           },
           cast,

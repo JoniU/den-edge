@@ -551,6 +551,8 @@
   let castDevice = $state<string>();
   /** A Cast failure in plain words, with a way back when this page can offer one. */
   let castNotice = $state<{ text: string; retry?: () => void } | null>(null);
+  /** The exact cast-page load whose browser asked for another user gesture before local playback may start. */
+  let castPlayBlocked = $state<{ id: string; generation: number } | null>(null);
   /** This move to Cast has spent its one retry of a TorBox stream the receiver couldn't play. */
   let castRetried = false;
   /** Where the Cast button is drawn: Den's own button surface, which the cast page's frame lies exactly over. */
@@ -590,6 +592,8 @@
    */
   let chosenRelease: string | undefined = untrack(() => filename);
   let session = $state<Session | null>(null);
+  /** Stable identity for the accepted session; unlike start attempts, failed replacements do not advance it. */
+  let castLoadGeneration = 0;
   /** Holds a direct Cast handoff until its selected external subtitle has its receiver URL. */
   let castSubtitlePreparing = $state(false);
   /**
@@ -1722,6 +1726,8 @@
     castSubtitlePreparing = result.external === true && subtitleChoice !== null;
     subtitleSelectionGeneration += 1;
     subtitleLoadFailure = null;
+    castPlayBlocked = null;
+    castLoadGeneration += 1;
     session = result;
     if (chosenRelease === result.release.filename && !continuityGroup)
       rememberContinuityChoice(result.release.filename);
@@ -2073,6 +2079,7 @@
     hls?.destroy();
     hls = undefined;
     endSession(current);
+    castPlayBlocked = null;
     session = null;
     showTransition('Resuming…');
     void begin(
@@ -2723,6 +2730,7 @@
       {
         type: 'den-load',
         id: current.playlist,
+        generation: castLoadGeneration,
         media: {
           url: current.playlist,
           ...(current.external
@@ -2756,6 +2764,22 @@
           external: current.external === true,
         },
       },
+      current.castOrigin,
+    );
+  }
+
+  /** Give the blocked cast-page load a fresh gesture without letting an old notice control its replacement. */
+  function playInCastFrame(blocked: { id: string; generation: number }): void {
+    const current = session;
+    if (
+      castPlayBlocked !== blocked ||
+      !current?.castOrigin ||
+      current.playlist !== blocked.id ||
+      castLoadGeneration !== blocked.generation
+    )
+      return;
+    readyCastFrame(current.castOrigin)?.postMessage(
+      { type: 'den-play', id: blocked.id, generation: blocked.generation },
       current.castOrigin,
     );
   }
@@ -2895,6 +2919,7 @@
     const message = event.data as {
       type?: string;
       id?: string;
+      generation?: number;
       currentTime?: number;
       duration?: number;
       paused?: boolean;
@@ -2907,8 +2932,17 @@
       volume?: number;
       muted?: boolean;
     };
-    if (message.type === 'den-ready' || message.id !== current.playlist) return;
-    if (message.type === 'den-progress') {
+    if (
+      message.type === 'den-ready' ||
+      message.id !== current.playlist ||
+      message.generation !== castLoadGeneration
+    )
+      return;
+    if (message.type === 'den-autoplay-blocked') {
+      castPlayBlocked = { id: current.playlist, generation: castLoadGeneration };
+    } else if (message.type === 'den-playing') {
+      castPlayBlocked = null;
+    } else if (message.type === 'den-progress') {
       if (Number.isFinite(message.currentTime)) remoteTime = Math.max(0, message.currentTime ?? 0);
       if (Number.isFinite(message.duration)) remoteDuration = Math.max(0, message.duration ?? 0);
       // The receiver's own volume, which Den's volume control now sets.
@@ -3533,7 +3567,7 @@
   // rather than leaving the frame blank.
   $effect(() => {
     const current = session;
-    if (!current?.castOrigin || casting) return;
+    if (!current?.castOrigin || casting || castPlayBlocked) return;
     const wait = setTimeout(() => {
       if (session !== current || played || casting) return;
       const why = `nothing played in the cast page after ${castPlayMs / 1000} s`;
@@ -4625,7 +4659,10 @@
     if (!castView || !current?.castOrigin) return false;
     const frame = readyCastFrame(current.castOrigin);
     if (!frame) return false;
-    frame.postMessage({ ...message, id: current.playlist }, current.castOrigin);
+    frame.postMessage(
+      { ...message, id: current.playlist, generation: castLoadGeneration },
+      current.castOrigin,
+    );
     return true;
   }
 
@@ -5048,6 +5085,7 @@
       avplay = undefined;
     }
     endSession(current, undefined, evidence);
+    castPlayBlocked = null;
     session = null;
   }
 
@@ -5331,6 +5369,13 @@
           (offset) => formattedSubtitleOffset(offset),
         ),
         quiet: true,
+      });
+    const blocked = castPlayBlocked;
+    if (blocked)
+      list.push({
+        text: i18n.text('player.autoplayBlocked'),
+        action: { label: i18n.text('common.play'), run: () => playInCastFrame(blocked) },
+        urgent: true,
       });
     const failed = subtitleLoadFailure;
     if (failed)

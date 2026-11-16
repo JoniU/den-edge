@@ -116,7 +116,7 @@ test.beforeEach(() => {
   dropping = () => false;
 });
 
-async function open({ grants = [], managed } = {}) {
+async function open({ grants = [], managed, blockAutoplay = false } = {}) {
   const browser = await chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     args: [
@@ -131,6 +131,19 @@ async function open({ grants = [], managed } = {}) {
     viewport: { width: 1280, height: 800 },
     ignoreHTTPSErrors: true,
   });
+  if (blockAutoplay)
+    await context.addInitScript((castOrigin) => {
+      if (location.origin !== castOrigin) return;
+      const play = HTMLMediaElement.prototype.play;
+      let first = true;
+      HTMLMediaElement.prototype.play = function () {
+        if (first) {
+          first = false;
+          return Promise.reject(new DOMException('Autoplay is blocked', 'NotAllowedError'));
+        }
+        return play.call(this);
+      };
+    }, CAST);
   const page = await context.newPage();
   await guardNetwork(page);
   await routeTmdb(page, (r) => r.fulfill({ json: { imdb_id: 'tt42' } }));
@@ -299,6 +312,36 @@ test('a Hearth session on the public address plays in the real cast page on its 
       lanOffered: true,
       endReason: 'user_exit',
     });
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a blocked cast-page autoplay asks for another tap without rejecting the release', async () => {
+  const managed = [];
+  const { browser, page } = await open({ managed, blockAutoplay: true });
+  try {
+    const notice = 'Playback needs another tap on this device.';
+    await expect(page.getByRole('status').filter({ hasText: notice })).toBeVisible();
+    await expect(page.getByText('This browser couldn’t play this release.')).toHaveCount(0);
+    expect(managed).toHaveLength(1);
+
+    await page.getByRole('button', { name: 'Play', exact: true }).click();
+    await playingPast(page, 1);
+    await expect(page.getByText(notice)).toHaveCount(0);
+    expect(managed).toHaveLength(1);
+
+    // The same playlist URL is not enough authority: a delayed refusal from an older load generation is ignored.
+    await page
+      .frameLocator('iframe[title="Den Cast player"]')
+      .locator('video')
+      .evaluate((_video, message) => window.parent.postMessage(message, message.parentOrigin), {
+        type: 'den-autoplay-blocked',
+        id: `${MEDIA}${PATH}/master.m3u8`,
+        generation: -1,
+        parentOrigin: ORIGIN,
+      });
+    await expect(page.getByText(notice)).toHaveCount(0);
   } finally {
     await browser.close();
   }

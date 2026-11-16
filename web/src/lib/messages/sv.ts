@@ -74,6 +74,7 @@ export const messages = {
   'common.play': 'Spela',
   'common.resume': 'Fortsätt',
   'common.close': 'Stäng',
+  'player.autoplayBlocked': 'Uppspelningen behöver ett tryck till på den här enheten.',
   'player.subtitleTiming': 'Undertextsynkronisering',
   'player.subtitleEarlier': 'Tidigare',
   'player.subtitleLater': 'Senare',

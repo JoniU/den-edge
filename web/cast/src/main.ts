@@ -61,6 +61,8 @@ interface Media {
 interface LoadMessage {
   type: 'den-load';
   id: string;
+  /** The parent player's exact session-start generation; a playlist URL alone may be reused by a replacement. */
+  generation: number;
   media: Media;
 }
 
@@ -449,7 +451,10 @@ function signedSpeed(media: Media): boolean {
 
 function tell(type: string, fields: Record<string, unknown> = {}): void {
   if (!parentOrigin || !current) return;
-  window.parent.postMessage({ type, id: current.id, ...fields }, parentOrigin);
+  window.parent.postMessage(
+    { type, id: current.id, generation: current.generation, ...fields },
+    parentOrigin,
+  );
 }
 
 /** A message about the Cast button itself, which the player needs before anything is loaded here. */
@@ -658,12 +663,26 @@ async function loadLocal(media: Media, url: string): Promise<void> {
     return;
   }
   describeToSystem(media);
+  await playLocal(current);
+}
+
+/**
+ * Start the media held by this exact parent load. A later load can replace `current` while WebKit is deciding the
+ * promise, so neither its refusal nor its success may be published under the replacement's identity.
+ */
+async function playLocal(load: LoadMessage | null): Promise<void> {
+  if (!load) return;
   try {
     await video.play();
+    if (current !== load) return;
     setStatus(PLAYING_HERE);
-  } catch {
-    // A browser that won't start playback without a tap refuses here. That is its autoplay policy, not a fault, and
-    // the video's own controls already carry the play button, so nothing more is said over the picture.
+    tell('den-playing');
+  } catch (error) {
+    if (current !== load) return;
+    // The parent player's chrome covers the frame's native transport. Name only the browser's explicit autoplay
+    // refusal so it can offer another, immediate user gesture; decoder/network failures keep their existing path.
+    if (error instanceof DOMException && error.name === 'NotAllowedError')
+      tell('den-autoplay-blocked');
   }
 }
 
@@ -1146,7 +1165,14 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
 window.addEventListener('message', (event: MessageEvent<unknown>) => {
   if (!authorizedParent(event)) return;
   const message = event.data as Partial<LoadMessage>;
-  if (message.type !== 'den-load' || typeof message.id !== 'string' || !message.media) return;
+  if (
+    message.type !== 'den-load' ||
+    typeof message.id !== 'string' ||
+    !Number.isSafeInteger(message.generation) ||
+    Number(message.generation) < 0 ||
+    !message.media
+  )
+    return;
   applyInterfaceLanguage(message.media.interfaceLanguage);
   if (
     (message.media.external ? !managedMedia(message.media.url) : !signedMedia(message.media.url)) ||
@@ -1163,7 +1189,12 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
     (message.media.subtitleTrack !== undefined && !validSubtitleTrack(message.media.subtitleTrack))
   ) {
     event.source?.postMessage(
-      { type: 'den-error', id: message.id, message: text('Invalid media URL') },
+      {
+        type: 'den-error',
+        id: message.id,
+        generation: message.generation,
+        message: text('Invalid media URL'),
+      },
       {
         targetOrigin: event.origin,
       },
@@ -1171,7 +1202,7 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
     return;
   }
   parentOrigin = event.origin;
-  if (current?.id === message.id) {
+  if (current?.id === message.id && current.generation === message.generation) {
     const previousSubtitle = current.media.subtitleTrack?.url;
     current = message as LoadMessage;
     if (
@@ -1245,6 +1276,8 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
   if (!authorizedParent(event)) return;
   const message = event.data as {
     type?: string;
+    id?: unknown;
+    generation?: unknown;
     layout?: unknown;
     color?: unknown;
     iconSize?: unknown;
@@ -1267,8 +1300,11 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
     castContext?.endCurrentSession(true);
   } else if (message.type === 'den-play' || message.type === 'den-pause') {
     const pause = message.type === 'den-pause';
+    if (!current || message.id !== current.id || message.generation !== current.generation) return;
     if (castStarted && remotePlayer && remoteController && remotePlayer.isPaused !== pause)
       remoteController.playOrPause();
+    else if (!castStarted && pause) video.pause();
+    else if (!castStarted && video.paused) void playLocal(current);
   } else if (message.type === 'den-volume') {
     if (!castStarted || !remotePlayer || !remoteController) return;
     if (typeof message.level === 'number' && message.level >= 0 && message.level <= 1) {
