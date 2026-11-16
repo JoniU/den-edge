@@ -992,13 +992,19 @@ describe('versionsRow', () => {
 
   it('keeps an absent or older versions route distinct from a transient failure', async () => {
     const older = answering({});
-    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: older })).toBeNull();
+    expect(
+      await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: older }),
+    ).toBeNull();
     const other = answering({ [versionsPath]: { ids: [8] } });
-    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: other })).toBeNull();
+    expect(
+      await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: other }),
+    ).toBeNull();
     const down = (async () => {
       throw new TypeError('offline');
     }) as unknown as typeof fetch;
-    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: down })).toBeUndefined();
+    expect(
+      await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: down }),
+    ).toBeUndefined();
   });
 
   it('asks nothing without atlas', async () => {

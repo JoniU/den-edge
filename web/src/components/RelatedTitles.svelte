@@ -36,8 +36,7 @@
   import BrowseRow from './BrowseRow.svelte';
 
   const cancelled = (error: unknown, signal: AbortSignal) =>
-    signal.aborted ||
-    (error as { failure?: { code?: string } })?.failure?.code === 'cancelled';
+    signal.aborted || (error as { failure?: { code?: string } })?.failure?.code === 'cancelled';
 
   let {
     detail,
