@@ -604,12 +604,51 @@ test('a replacement LOAD on the receiver never ends the Cast session', async () 
   }
 });
 
+test('a refused replacement stops the previously accepted receiver load', async () => {
+  const { browser, page } = await open(chromium, {
+    appId: DEN_APP,
+    sdkOptions: { holdReplacementLoads: true, report: true },
+  });
+  try {
+    await playingPast(page, 2);
+    await reveal(page);
+    await castButton(page).click();
+    await expect.poll(() => receiver(page, 'loads')).toHaveLength(1);
+    const accepted = (await receiver(page, 'loads'))[0].denLoad;
+    const replacement = { id: accepted.id, generation: accepted.generation + 1 };
+    await page.evaluate(
+      ([cast, url, replacement]) =>
+        document.querySelector(`iframe[src^="${cast}"]`).contentWindow.postMessage(
+          {
+            type: 'den-load',
+            ...replacement,
+            media: { url, mode: 'cast', title: 'Refused replacement', external: true },
+          },
+          cast,
+        ),
+      [CAST, TORBOX, replacement],
+    );
+    await expect.poll(() => receiver(page, 'heldLoads').then((loads) => loads.length)).toBe(1);
+    // The accepted load is retired as soon as this exact replacement becomes current. If the replacement is refused,
+    // leaving that old picture on the TV would make it visible with no live Den authority or event owner.
+    await frameOf(page).evaluate(() => window.releaseLoad(0, 'reject'));
+    await expect.poll(() => receiver(page, 'calls')).toContain('stop');
+    await expect.poll(() => receiver(page, 'receiverLoad')).toBeNull();
+  } finally {
+    await browser.close();
+  }
+});
+
 test('reordered same-id receiver LOADs publish only the accepted generation and reject its old diagnostics', async () => {
   const { browser, page } = await open(chromium, {
     appId: DEN_APP,
     sdkOptions: { holdReplacementLoads: true, report: true },
   });
   try {
+    const receiverLogs = [];
+    page.on('console', (message) => {
+      if (message.text().startsWith('[Den receiver]')) receiverLogs.push(message.text());
+    });
     await playingPast(page, 2);
     await reveal(page);
     await castButton(page).click();
@@ -677,6 +716,7 @@ test('reordered same-id receiver LOADs publish only the accepted generation and 
       });
     });
     await expect.poll(() => page.evaluate(() => window.staleReceiverErrors)).toEqual([]);
+    expect(receiverLogs.every((line) => !line.includes(TORBOX))).toBe(true);
     await expect(page.locator('.player video')).toHaveCount(0);
     expect(await receiver(page, 'calls')).not.toEqual(
       expect.arrayContaining([expect.stringMatching(/^(stop|leave)$/)]),

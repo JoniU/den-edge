@@ -98,7 +98,10 @@ function tellSenders(
 ): void {
   const reportedLoad = load === ACTIVE_LOAD ? activeLoad : load;
   const message = { type: 'den-receiver-event', event, ...reportedLoad, ...detail };
-  console.info(`[Den receiver] ${JSON.stringify(message)}`);
+  // `id` is the signed playlist capability. It belongs on Den's private sender/receiver wire for exact ownership,
+  // never in a console a viewer may copy into a report.
+  const { id: _privateLoadId, ...diagnostic } = message;
+  console.info(`[Den receiver] ${JSON.stringify(diagnostic)}`);
   try {
     // No sender id: every sender connected to this receiver hears it.
     context.sendCustomMessage(RECEIVER_NAMESPACE, undefined as unknown as string, message);

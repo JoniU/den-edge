@@ -270,7 +270,16 @@ function hearReceiverEvents(session: CastSession | null | undefined): void {
       return;
     }
     if (message?.type !== 'den-receiver-event') return;
-    const { type: _type, ...event } = message as { type: unknown } & Record<string, unknown>;
+    // The receiver's `id` is the signed playlist capability. Keep it for the exact ownership check below, but never
+    // copy it into a console a viewer may share.
+    const {
+      type: _type,
+      id: _privateLoadId,
+      ...event
+    } = message as {
+      type: unknown;
+      id?: unknown;
+    } & Record<string, unknown>;
     console.info(`[Den receiver] ${JSON.stringify(event)}`);
     const reportedLoad = exactLoad(message.id, message.generation) ? playingLoad : undefined;
     // The codes of the receiver's player error, for den-edge's cast report: numbers only.
@@ -1053,15 +1062,17 @@ async function loadCast(load: LoadMessage | undefined = current): Promise<void> 
     const ownsAttempt = receiverLoadAttempt === attempt;
     if (ownsAttempt) receiverLoadAttempt = undefined;
     if (!ownsCurrent(load) || !ownsAttempt) return;
+    const replacingAcceptedLoad = attempt.replacing && playingLoad !== load;
     castStarted = false;
-    // An older overlapping LOAD can succeed while this exact replacement is pending. If the replacement then
-    // fails, the receiver is playing media which no accepted Den load owns; stop it instead of reporting failure
-    // for the new load while silently leaving the retired one on the TV.
+    // A rejected replacement retires the receiver's previously accepted load. An older overlapping LOAD can also
+    // succeed while this exact replacement is pending. In either case the TV is playing media which no current Den
+    // load owns; stop it instead of reporting failure while silently leaving the retired picture on the TV.
     const stoppedUnownedReceiver =
-      receiverLandedLoad !== undefined && receiverLandedLoad !== playingLoad;
+      replacingAcceptedLoad ||
+      (receiverLandedLoad !== undefined && receiverLandedLoad !== playingLoad);
     if (stoppedUnownedReceiver) castContext?.endCurrentSession(true);
-    // Ordinarily the Cast session is kept so the player decides what is tried next. The exception above is an
-    // overlapping LOAD which demonstrably left retired media on the receiver: that session cannot remain truthful.
+    // An initial LOAD failure leaves the Cast session for the player to decide what is tried next. A failed
+    // replacement cannot: it demonstrably leaves retired media on the receiver, so that session is stopped.
     const message = 'Chromecast could not load this release';
     setStatus(message);
     failFor(load, message, 0, requested);
