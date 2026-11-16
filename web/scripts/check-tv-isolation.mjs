@@ -403,8 +403,8 @@ if (process.argv.includes('--capture')) {
   // owns the reproducibility defect. Recalibrate clean main separately to 121,472 (38-byte margin), then account for
   // #530's matched +756-byte non-translation delta. Allow the smallest 128-byte boundary, retaining 50 bytes.
   // The player's Episodes list adds 1,945 gzip bytes to the complete non-translation graph on matched main/head builds
-  // (120,408 -> 122,353), nearly all in the lazy Player chunk: the list, its season reader and its styles. The
-  // smallest 128-byte boundary would retain 15 bytes, inside #1282's run-to-run variance, so allow two boundaries,
-  // retaining 143 bytes.
-  if (coreTotalDelta > 122496) throw new Error('Browser total JS/CSS budget exceeded');
+  // (120,408 -> 122,353), nearly all in the lazy Player chunk: the list, its season reader and its styles. CI measured
+  // the same head at 122,509 (#1282's run-to-run variance), so allow the boundary above CI's figure plus one more,
+  // retaining 115 bytes there.
+  if (coreTotalDelta > 122624) throw new Error('Browser total JS/CSS budget exceeded');
 }
