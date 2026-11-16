@@ -521,7 +521,6 @@ export function watchPlayback(options: WatchOptions): Watcher {
   on('playing', () => {
     started = true;
     recorder.resumed(now());
-    waitAt = NaN;
   });
   on('waiting', () => stall('wait'));
   on('stalled', () => {
@@ -556,7 +555,6 @@ export function watchPlayback(options: WatchOptions): Watcher {
     const open = recorder.stalling;
     if (open?.kind === 'wait' && !video.paused && time > waitAt + 0.2) {
       recorder.resumed(now());
-      waitAt = NaN;
     }
     const count = video.getVideoPlaybackQuality?.().totalVideoFrames;
     if (count === undefined) return;
