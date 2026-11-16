@@ -1711,6 +1711,7 @@
 
   /** The aired episode after the one playing, preserving why there is not one yet. */
   let following = $state<FollowingEpisode | null>(null);
+  let followingOwner = $state<Target | null>(null);
   let followingGeneration = 0;
   let followingWait: ReturnType<typeof setTimeout> | undefined;
 
@@ -1739,6 +1740,7 @@
   function findFollowing(target: Target): void {
     const generation = ++followingGeneration;
     clearTimeout(followingWait);
+    followingOwner = target;
     if (publishFollowing(target, generation)) return;
     following = { kind: 'loading' };
     // A library-provider request can remain in flight while its Worker reconnects. The request may still complete,
@@ -1763,6 +1765,7 @@
     followingGeneration += 1;
     clearTimeout(followingWait);
     following = null;
+    followingOwner = null;
     if (!target || target.season === undefined || target.episode === undefined) return;
     untrack(() => findFollowing(target));
     return () => clearTimeout(followingWait);
@@ -3414,7 +3417,7 @@
   </div>
 {:else if playing && scout && (scout.playback || remux !== null) && PlayerScreen.current}
   {@const target = playing}
-  {@const followingState = following}
+  {@const followingState = followingOwner === target ? following : null}
   {@const after = followingState?.kind === 'ready' ? followingState.target : null}
   <!-- A session names one source: a shared scout goes with the shared subtitles, a library's with its own. -->
   {@const guestSource = !!sharedInstallOf(scout.install)}
@@ -3456,7 +3459,9 @@
       resume={resumePoint(target)}
       next={after ? `S${after.season} · E${after.episode}` : undefined}
       nextEpisode={after ? { season: after.season, episode: after.episode } : undefined}
-      nextAvailability={followingState?.kind}
+      nextAvailability={target.season !== undefined && target.episode !== undefined
+        ? (followingState?.kind ?? 'loading')
+        : undefined}
       onprogress={(fraction, seconds, at, playing) =>
         void progressed({ title: target.title, ...at }, fraction, seconds, playing)}
       onfinalprogress={(fraction, seconds, at) =>
