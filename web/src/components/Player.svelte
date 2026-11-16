@@ -200,6 +200,7 @@
     resume,
     next,
     nextEpisode,
+    nextAvailability,
     castPlayMs = CAST_PLAY_MS,
     onprogress,
     onfinalprogress,
@@ -208,6 +209,7 @@
     playbackReceiptHandoffAsOwner,
     onplaybackreceipthandoff,
     onnext,
+    onnextretry,
     onclose,
     oncontrols,
   }: {
@@ -248,6 +250,8 @@
     next?: string;
     /** That episode's own numbers, so it can be warmed before the advance (`shouldWarmNext`). */
     nextEpisode?: { season?: number; episode?: number };
+    /** Whether this exact episode has a ready successor, a confirmed end, or metadata still needs recovery. */
+    nextAvailability?: 'loading' | 'ready' | 'finale' | 'unreleased' | 'failed';
     /** Timer seam for the browser fixture; the app always uses the production default. */
     castPlayMs?: number;
     /** Where playback got to, and the episode that is about: one advanced to in place reports as itself. */
@@ -262,6 +266,7 @@
     /** Leaves playback only after handing terminal progress to the host's durable recovery surface. */
     onplaybackreceipthandoff: () => void;
     onnext?: () => void;
+    onnextretry?: () => void;
     onclose: () => void;
     /** The TV shell's paired-inbox receiver installs these while this exact player is mounted. */
     oncontrols?: (
@@ -663,6 +668,8 @@
   let badKey = $state(false);
   /** Seconds until the next episode starts, once this one has ended. */
   let upNext = $state<number | null>(null);
+  /** A natural end still owns next-episode recovery; replay, Stay, close and advance retire it. */
+  let awaitingNext = $state(false);
   let imdb: string | undefined;
   let hls: Hls | undefined;
   let avplay: SamsungAvplayAdapter | undefined;
@@ -3908,7 +3915,12 @@
     // For den-edge's own outcome report (`finish()`): this visit reached a natural end, whether or not there is
     // a next episode to count down to.
     reachedNaturalEnd = true;
-    if (!onnext || ended) return;
+    awaitingNext = nextAvailability !== undefined && nextAvailability !== 'finale';
+    if (!onnext || nextAvailability !== 'ready' || ended) return;
+    startNextCountdown();
+  }
+
+  function startNextCountdown() {
     // A second end (the last seconds replayed, or the cast page's `den-ended` again) starts the count over; left
     // running, the first would advance again every second after it.
     clearInterval(countdown);
@@ -3921,9 +3933,17 @@
     }, 1000);
   }
 
+  // Metadata can settle after the media's one `ended` event. Adopt a ready result only while that exact natural end
+  // still owns recovery; replay and Stay call `stay()` and therefore cannot be advanced by a late answer.
+  $effect(() => {
+    if (nextAvailability === 'ready' && onnext && awaitingNext && upNext === null && !ended)
+      untrack(startNextCountdown);
+  });
+
   function stay() {
     clearInterval(countdown);
     upNext = null;
+    awaitingNext = false;
   }
 
   /**
@@ -5361,6 +5381,25 @@
   /** What playback says as it goes, in the order the TV's stack shows it. */
   const notices = $derived.by(() => {
     const list: Notice[] = [];
+    if (awaitingNext && nextAvailability === 'loading')
+      list.push({
+        text: i18n.phrase('Finding the next episode…'),
+        quiet: true,
+        busy: true,
+      });
+    else if (awaitingNext && nextAvailability === 'failed')
+      list.push({
+        text: i18n.phrase('Couldn’t check for the next episode.'),
+        action: onnextretry
+          ? { label: i18n.phrase('Try again'), run: onnextretry }
+          : undefined,
+        urgent: true,
+      });
+    else if (awaitingNext && nextAvailability === 'unreleased')
+      list.push({
+        text: i18n.phrase('The next episode isn’t available yet.'),
+        urgent: true,
+      });
     if (transitionNotice)
       list.push({ text: i18n.phrase(transitionNotice), quiet: true, busy: true });
     if (hasSubtitleResyncNotice(subtitleResyncNotice))

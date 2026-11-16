@@ -14,6 +14,8 @@
     markWatched,
     updateProgress,
   } from '../src/lib/actions';
+  import { titleKey } from '../src/lib/library';
+  import type { TitleRef } from '../src/lib/libraryServiceProtocol';
   import { parseRoute, type Route } from '../src/lib/route';
   import { activeProfileSession, type ProfileSession } from '../src/lib/profileSession.svelte';
   import { persistentProfileIdentity, visitorVisitId } from '../src/lib/profileIdentity';
@@ -593,6 +595,48 @@
               )
             : library.session,
   );
+  if (params.has('next-metadata-recovery')) {
+    const originalMetadata = session.libraryMetadata.bind(session);
+    let failures = 0;
+    let requests = 0;
+    let releaseHeld = () => {};
+    let held: Promise<void> | undefined;
+    session.libraryMetadata = async (refs: readonly TitleRef[]) => {
+      const ownsSeries = refs.some((ref) => ref.type === 'tv' && ref.id === 2002);
+      if (!ownsSeries) return originalMetadata(refs);
+      requests += 1;
+      await held;
+      if (failures > 0) {
+        failures -= 1;
+        return { titles: [], shapes: [], retryable: [...refs], retryAfterMs: 60_000 };
+      }
+      return originalMetadata(refs);
+    };
+    (
+      window as unknown as {
+        denTestNextEpisodeMetadata: {
+          failOnce: () => void;
+          hold: () => void;
+          release: () => void;
+          requests: () => number;
+        };
+      }
+    ).denTestNextEpisodeMetadata = {
+      failOnce: () => {
+        session.shapes.delete(titleKey({ type: 'tv', id: 2002 }));
+        failures = 1;
+      },
+      hold: () => {
+        session.shapes.delete(titleKey({ type: 'tv', id: 2002 }));
+        held = new Promise<void>((resolve) => (releaseHeld = resolve));
+      },
+      release: () => {
+        releaseHeld();
+        held = undefined;
+      },
+      requests: () => requests,
+    };
+  }
   if (watchlistReplacement)
     (
       window as unknown as { denTestReplaceWatchlistSession: () => void }
@@ -712,6 +756,7 @@
       delete (window as { denTestReleaseProgressReply?: unknown }).denTestReleaseProgressReply;
       delete (window as { denTestProgressOperationIds?: unknown }).denTestProgressOperationIds;
       delete (window as { denTestPlayBoundary?: unknown }).denTestPlayBoundary;
+      delete (window as { denTestNextEpisodeMetadata?: unknown }).denTestNextEpisodeMetadata;
       delete (window as { denTestReleaseFirstWrite?: unknown }).denTestReleaseFirstWrite;
       delete (window as { denTestReplaceWatchlistSession?: unknown })
         .denTestReplaceWatchlistSession;

@@ -1702,26 +1702,60 @@
     },
   });
 
-  /** The aired episode after the one playing, from the series' season layout; none after a movie or the last. */
-  let following = $state<Target | null>(null);
-  $effect(() => {
-    const target = playing;
-    following = null;
-    if (!target || target.season === undefined || target.episode === undefined) return;
-    const at = { season: target.season, episode: target.episode };
+  type FollowingEpisode =
+    | { kind: 'loading' }
+    | { kind: 'ready'; target: Target }
+    | { kind: 'finale' }
+    | { kind: 'unreleased' }
+    | { kind: 'failed' };
+
+  /** The aired episode after the one playing, preserving why there is not one yet. */
+  let following = $state<FollowingEpisode | null>(null);
+  let followingGeneration = 0;
+  let followingWait: ReturnType<typeof setTimeout> | undefined;
+
+  function findFollowing(target: Target): void {
+    const generation = ++followingGeneration;
+    clearTimeout(followingWait);
+    following = { kind: 'loading' };
+    // A library-provider request can remain in flight while its Worker reconnects. The request may still complete,
+    // but the ended player must acquire an actionable state instead of announcing an unbounded wait.
+    followingWait = setTimeout(() => {
+      if (playing === target && followingGeneration === generation)
+        following = { kind: 'failed' };
+    }, 10_000);
     void (async () => {
       if (!session.shapes.has(titleKey(target.title)))
         await promoteLibraryTitle(session, target.title);
+      if (playing !== target || followingGeneration !== generation) return;
+      clearTimeout(followingWait);
       const shape = session.shapes.get(titleKey(target.title));
-      const next = shape && episodeAfter(at, shape);
+      if (!shape) {
+        following = { kind: 'failed' };
+        return;
+      }
+      const at = { season: target.season!, episode: target.episode! };
+      const next = episodeAfter(at, shape);
+      if (!next) {
+        following = { kind: 'finale' };
+        return;
+      }
       // Atlas's dates first: an episode out before TMDB's broadcast slot is next in line the day it is out.
-      const aired = airedThrough(
-        shape?.lastAired,
-        untrack(() => airings.get(target.title.id)),
-      );
-      if (playing === target && next && isAired(next, aired))
-        following = { title: target.title, ...next };
+      const aired = airedThrough(shape.lastAired, untrack(() => airings.get(target.title.id)));
+      following = isAired(next, aired)
+        ? { kind: 'ready', target: { title: target.title, ...next } }
+        : { kind: 'unreleased' };
     })();
+  }
+
+  $effect(() => {
+    const target = playing;
+    followingGeneration += 1;
+    clearTimeout(followingWait);
+    following = null;
+    if (!target || target.season === undefined || target.episode === undefined) return;
+    untrack(() => findFollowing(target));
+    return () => clearTimeout(followingWait);
   });
 
   /** Autoplay and "Next": the profile's policy is asked again before the following episode starts. */
@@ -3370,7 +3404,8 @@
   </div>
 {:else if playing && scout && (scout.playback || remux !== null) && PlayerScreen.current}
   {@const target = playing}
-  {@const after = following}
+  {@const followingState = following}
+  {@const after = followingState?.kind === 'ready' ? followingState.target : null}
   <!-- A session names one source: a shared scout goes with the shared subtitles, a library's with its own. -->
   {@const guestSource = !!sharedInstallOf(scout.install)}
   {@const releaseAuthority = [
@@ -3411,6 +3446,7 @@
       resume={resumePoint(target)}
       next={after ? `S${after.season} · E${after.episode}` : undefined}
       nextEpisode={after ? { season: after.season, episode: after.episode } : undefined}
+      nextAvailability={followingState?.kind}
       onprogress={(fraction, seconds, at, playing) =>
         void progressed({ title: target.title, ...at }, fraction, seconds, playing)}
       onfinalprogress={(fraction, seconds, at) =>
@@ -3420,6 +3456,7 @@
       playbackReceiptHandoffAsOwner={session.administersHousehold}
       onplaybackreceipthandoff={requestPlaybackReceiptHandoff}
       onnext={after ? () => void advance(after) : undefined}
+      onnextretry={() => findFollowing(target)}
       oncontrols={(controls) => (tvControls = controls)}
       onclose={closePlayer}
     />
