@@ -1730,7 +1730,7 @@
    * within the series, so the list neither blinks out nor asks for its season again.
    */
   let playingSeasons = $state.raw<{ number: number; aired: number }[]>();
-  let playingSeasonsOf: string | undefined;
+  let playingSeasonsOf = $state<string>();
 
   function publishFollowing(target: Target, generation: number): boolean {
     if (playing !== target || followingGeneration !== generation) return false;
