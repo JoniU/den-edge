@@ -126,6 +126,7 @@
     display: grid;
     width: var(--tile-w);
     gap: 8px;
+
     /* This is the exact name line that replaces it. TV promotes service names to ten-foot type, so retaining the
        browser's 14px fallback here let a provider result grow the rail after lower shelves had taken their place. */
     font-size: var(--service-name-size, 14px);
