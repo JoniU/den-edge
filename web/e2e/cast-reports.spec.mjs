@@ -457,24 +457,33 @@ test('a held old load cannot publish under a same-id replacement generation', as
 test('an old LAN proof cannot bless a same-id replacement generation', async () => {
   const { browser, page, lanGates } = await open({ holdCastLan: true });
   try {
+    const load = (generation, title) => ({
+      type: 'den-load',
+      id: `${MEDIA}${PATH}/master.m3u8`,
+      generation,
+      castOrigin: CAST,
+      media: {
+        url: `${MEDIA}${PATH}/master.m3u8`,
+        lanUrl: 'https://lan.test:8449/remux/master.m3u8',
+        mode: 'browser',
+        title,
+      },
+    });
+    // The parent intentionally omits the LAN address after its own probe has failed. Send an exact old generation
+    // that does offer it so this test owns the two overlapping cast-document probes it is fencing.
+    await page
+      .locator('iframe[title="Den Cast player"]')
+      .evaluate(
+        (iframe, old) => iframe.contentWindow.postMessage(old, old.castOrigin),
+        load(2, 'Old'),
+      );
     await expect.poll(() => lanGates.length).toBe(1);
     await page
       .locator('iframe[title="Den Cast player"]')
       .evaluate(
         (iframe, replacement) =>
           iframe.contentWindow.postMessage(replacement, replacement.castOrigin),
-        {
-          type: 'den-load',
-          id: `${MEDIA}${PATH}/master.m3u8`,
-          generation: 2,
-          castOrigin: CAST,
-          media: {
-            url: `${MEDIA}${PATH}/master.m3u8`,
-            lanUrl: 'https://lan.test:8449/remux/master.m3u8',
-            mode: 'browser',
-            title: 'Replacement',
-          },
-        },
+        load(3, 'Replacement'),
       );
     await expect.poll(() => lanGates.length).toBe(2);
     lanGates[0].succeed();

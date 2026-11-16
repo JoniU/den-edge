@@ -749,6 +749,7 @@ test('a stale LOAD landing after the current replacement refused is stopped with
     await castButton(page).click();
     await expect.poll(() => receiver(page, 'loads')).toHaveLength(1);
     const accepted = (await receiver(page, 'loads'))[0].denLoad;
+    const replacement = { id: accepted.id, generation: accepted.generation + 2 };
     await page.evaluate(() => {
       window.overlapErrors = [];
       window.addEventListener('message', (event) => {
@@ -756,9 +757,9 @@ test('a stale LOAD landing after the current replacement refused is stopped with
       });
     });
     await page.evaluate(
-      ([cast, url, accepted]) => {
+      ([cast, url, replacement]) => {
         const frame = document.querySelector(`iframe[src^="${cast}"]`);
-        for (const generation of [accepted.generation - 1, accepted.generation])
+        for (const generation of [replacement.generation - 1, replacement.generation])
           frame.contentWindow.postMessage(
             {
               type: 'den-load',
@@ -769,13 +770,13 @@ test('a stale LOAD landing after the current replacement refused is stopped with
             cast,
           );
       },
-      [CAST, TORBOX, accepted],
+      [CAST, TORBOX, replacement],
     );
     await expect.poll(() => receiver(page, 'heldLoads').then((loads) => loads.length)).toBe(2);
     await frameOf(page).evaluate(() => window.releaseLoad(1, 'reject'));
     await expect
       .poll(() => page.evaluate(() => window.overlapErrors))
-      .toContainEqual(expect.objectContaining({ ...accepted, type: 'den-error' }));
+      .toContainEqual(expect.objectContaining({ ...replacement, type: 'den-error' }));
     await frameOf(page).evaluate(() => window.releaseLoad(0));
     await expect.poll(() => receiver(page, 'calls')).toContain('stop');
     await expect.poll(() => receiver(page, 'receiverLoad')).toBeNull();
