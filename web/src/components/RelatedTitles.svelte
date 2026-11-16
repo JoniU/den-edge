@@ -82,7 +82,7 @@
     start: () => Promise<void>;
     cancel: () => void;
   }>();
-  let retryVersions = $state<(() => void)>();
+  let retryVersions = $state<() => void>();
   /** Live BrowseRows already admitted. The one-block substitutes keep the same initial skeleton height. */
   const mountedRows = new SvelteSet<string>();
 
