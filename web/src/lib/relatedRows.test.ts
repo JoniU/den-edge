@@ -22,7 +22,7 @@ import {
 } from './relatedRows';
 import { NO_FACTS } from './titleFacts';
 import { ContentAuthority } from './contentAuthority';
-import type { ContentServiceClientPort } from './contentServiceClient';
+import { ContentServiceError, type ContentServiceClientPort } from './contentServiceClient';
 import { Pager } from './pager.svelte';
 
 const self: Title = { type: 'movie', id: 550, title: 'Fight Club' };
@@ -1026,6 +1026,25 @@ describe('versionsRow', () => {
     await expect(
       versionsRowResult(self, '/atlas', none, { key: 'k' }, replaced.signal),
     ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('propagates the production content client cancellation shape after authority replacement', async () => {
+    const replaced = new AbortController();
+    const content: ContentServiceClientPort = {
+      query: async () => {
+        replaced.abort(new DOMException('title replaced', 'AbortError'));
+        throw new ContentServiceError({
+          code: 'cancelled',
+          message: 'content request was cancelled',
+          retryable: false,
+        });
+      },
+      onStatus: () => () => {},
+    };
+
+    await expect(
+      versionsRowImpl(self, '/atlas', none, { content }, replaced.signal),
+    ).rejects.toMatchObject({ failure: { code: 'cancelled' } });
   });
 });
 

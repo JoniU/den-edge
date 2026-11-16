@@ -801,7 +801,7 @@ export async function versionsRow(
       },
     };
   } catch (error) {
-    if ((error as Error)?.name === 'AbortError') throw error;
+    if (signal?.aborted || (error as Error)?.name === 'AbortError') throw error;
     return { state: 'unavailable' };
   }
 }
