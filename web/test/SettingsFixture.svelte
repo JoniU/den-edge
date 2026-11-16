@@ -268,7 +268,14 @@
         libraryKey: fixtureLibraryKey,
       })
     : undefined;
+  const profileLibrary = playbackAuthorityFixture
+    ? fixtureLibraryService({ log, device: fixtureClock.device, libraryKey: fixtureLibraryKey })
+    : undefined;
+  const replacementProfileLibrary = playbackAuthorityFixture
+    ? fixtureLibraryService({ log, device: fixtureClock.device, libraryKey: fixtureLibraryKey })
+    : undefined;
   let model = $state.raw<LibraryModel>(primaryModel);
+  let activeActivityModel = $state.raw<LibraryModel>(profileLibrary?.model ?? primaryModel);
   const preferenceCommands = { primary: [] as string[], replacement: [] as string[] };
   let preferencePatchStarted = false;
   let releasePreferencePatch = () => {};
@@ -284,7 +291,11 @@
         const value = owner.settings.value?.preferences;
         return value ? { ...structuredClone(value), interfaceLanguage } : undefined;
       },
-      policy: {} as ProfilePolicy,
+      policy: {
+        get settings() {
+          return owner.settings;
+        },
+      } satisfies ProfilePolicy,
       async patch(changes) {
         if (playbackAuthorityFixture && name === 'primary') {
           preferencePatchStarted = true;
@@ -298,9 +309,13 @@
       },
       close() {},
     }) satisfies ProfilePreferences;
-  const primaryPreferences = profilePreferences('primary', primaryModel, 'en');
-  const replacementPreferences = replacementLibrary
-    ? profilePreferences('replacement', replacementLibrary.model, 'sv')
+  const primaryPreferences = profilePreferences(
+    'primary',
+    profileLibrary?.model ?? primaryModel,
+    'en',
+  );
+  const replacementPreferences = replacementProfileLibrary
+    ? profilePreferences('replacement', replacementProfileLibrary.model, 'sv')
     : null;
   let activePreferences = $state.raw<ProfilePreferences | null>(
     playbackAuthorityFixture ? primaryPreferences : null,
@@ -391,10 +406,11 @@
       model = replacementLibrary.model;
     },
     async replacePlaybackHeld() {
-      if (!replacementLibrary || !replacementPreferences) return;
+      if (!replacementLibrary || !replacementProfileLibrary || !replacementPreferences) return;
       heldReplacementConnections = replacementLibrary.holdNextSelection('connections');
-      heldReplacementSimkl = replacementLibrary.holdNextSelection('simkl');
+      heldReplacementSimkl = replacementProfileLibrary.holdNextSelection('simkl');
       activePreferences = replacementPreferences;
+      activeActivityModel = replacementProfileLibrary.model;
       model = replacementLibrary.model;
       await Promise.all([heldReplacementConnections.started, heldReplacementSimkl.started]);
     },
@@ -413,6 +429,12 @@
     },
     presentationLanguages() {
       return [...presentationLanguages];
+    },
+    failPreferenceSettings() {
+      profileLibrary?.failSelection('settings');
+    },
+    async setPresentationLanguage(language: 'en' | 'sv') {
+      await setInterfaceLanguage(language);
     },
     releasePinReply() {
       releasePinReply();
@@ -699,9 +721,11 @@
   {#if contentReady && settingsMounted}<Settings
       {link}
       {model}
-      activityModel={profileTrackerAuthorityFixture || importAuthorityReplacementFixture
-        ? activityModel
-        : model}
+      activityModel={playbackAuthorityFixture
+        ? activeActivityModel
+        : profileTrackerAuthorityFixture || importAuthorityReplacementFixture
+          ? activityModel
+          : model}
       preferences={activePreferences}
       {content}
       local={joinPresentationFixture}

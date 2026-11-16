@@ -543,6 +543,49 @@ test('a held profile replacement disables every Playback input and never crosses
     .toEqual({ primary: [], replacement: ['best'] });
 });
 
+test('a retained profile-policy failure disables Playback and retries its exact activity service', async ({
+  page,
+}) => {
+  await guardNetwork(page);
+  await page.route('**/lib/*/grants', (route) => route.fulfill({ json: { grants: [] } }));
+  await page.route('**/routes', (route) => route.fulfill({ json: {} }));
+  await page.route('**/version', (route) => route.fulfill({ json: { version: 'test' } }));
+  await page.route('**/config', (route) => route.fulfill({ json: {} }));
+  await routeTmdb(page, (route) => route.fulfill({ json: { images: {}, results: [] } }));
+  await page.goto(`${E2E_ORIGIN}/test/settings.html?playback-authority-replacement`);
+
+  const playbackInputs = page.locator('#playback select, #playback input');
+  const source = page.locator('#playback-source-policy select');
+  await expect(playbackInputs).toHaveCount(6);
+  await expect
+    .poll(() => playbackInputs.evaluateAll((inputs) => inputs.every((input) => !input.disabled)))
+    .toBe(true);
+  await expect(source).toHaveValue('remember');
+  await page.evaluate(() => globalThis.fixtureSettingsAuthority.setPresentationLanguage('sv'));
+  await page.evaluate(() => globalThis.fixtureSettingsAuthority.failPreferenceSettings());
+
+  const alert = page.locator('.settings-load[role="alert"]');
+  await expect(alert).toContainText('Det gick inte att ladda dina inställningar.');
+  await expect(alert.getByRole('button', { name: 'Försök igen' })).toBeVisible();
+  // The failed root deliberately retains its last value; it remains visible for continuity but never actionable.
+  await expect(source).toHaveValue('remember');
+  await expect
+    .poll(() => playbackInputs.evaluateAll((inputs) => inputs.every((input) => input.disabled)))
+    .toBe(true);
+  await expect(
+    page.locator('#content, #connections, #sharing, #assistants, #import, #advanced'),
+  ).toHaveCount(0);
+
+  await alert.getByRole('button', { name: 'Försök igen' }).click();
+  await expect(alert).toHaveCount(0);
+  await expect
+    .poll(() => playbackInputs.evaluateAll((inputs) => inputs.every((input) => !input.disabled)))
+    .toBe(true);
+  await expect(
+    page.locator('#content, #connections, #sharing, #assistants, #import, #advanced'),
+  ).toHaveCount(6);
+});
+
 test('a held retired preference save cannot publish language or restore focus into its replacement', async ({
   page,
 }) => {

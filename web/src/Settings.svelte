@@ -172,6 +172,7 @@
   );
   const loadError = $derived(
     authority.model.settings.error ??
+      authority.preferences?.policy.settings.error ??
       authority.connections.snapshot.error ??
       authority.simkl?.snapshot.error,
   );
@@ -393,9 +394,20 @@
     try {
       const current = authority;
       const retries: Promise<unknown>[] = [];
-      if (current.model.connection === 'failed') retries.push(current.model.retry());
+      const preferenceSettingsFailed = !!current.preferences?.policy.settings.error;
+      if (
+        current.model.connection === 'failed' ||
+        current.model.settings.error ||
+        (current.activityModel === current.model && preferenceSettingsFailed)
+      )
+        retries.push(current.model.retry());
       else if (current.connections.snapshot.error) current.connections.rebind();
-      if (current.activityModel !== current.model && current.activityModel.connection === 'failed')
+      if (
+        current.activityModel !== current.model &&
+        (current.activityModel.connection === 'failed' ||
+          current.activityModel.settings.error ||
+          preferenceSettingsFailed)
+      )
         retries.push(current.activityModel.retry());
       else if (current.simkl?.snapshot.error) current.simkl.rebind();
       await Promise.allSettled(retries);
