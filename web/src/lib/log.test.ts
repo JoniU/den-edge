@@ -1087,6 +1087,10 @@ describe('LibraryLog', () => {
     await vi.waitFor(() => expect(posts).toBe(1));
     log.close();
     refuseWrites = false;
+    // The retained op and its rider must be projected after this newer remote row is read, in their original order.
+    // Its older field stamp deliberately loses to the retained add even though its transport sequence is newer.
+    await server.append(row(2, { status: { value: 'none', at: at(500) } }));
+    await server.append(row(3));
 
     let release!: () => void;
     const deferred = new Promise<void>((resolve) => (release = resolve));
@@ -1105,11 +1109,17 @@ describe('LibraryLog', () => {
       const reopened = (await opening)!;
       expect(reopened.title({ type: 'movie', id: 2 })?.status.value).toBe('watchlist');
       expect(reopened.settings('assistant-applied')).toMatchObject({ values });
+      expect(
+        reopened.title({ type: 'movie', id: 3 }),
+        'the completed pull remains invisible until foreground adoption',
+      ).toBeUndefined();
+      expect(posts, 'opening alone does not adopt or send retained work').toBe(1);
 
       await reopened.refresh();
       expect(changes, 'the first foreground refresh shares the opening pass').toBe(2);
       expect(posts, 'the previously refused op and rider are sent together once').toBe(2);
       expect(reopened.pendingActions).toBe(0);
+      expect(reopened.title({ type: 'movie', id: 3 })).toBeDefined();
 
       await reopened.refresh();
       expect(changes).toBe(3);
@@ -1119,6 +1129,168 @@ describe('LibraryLog', () => {
       release();
       policy.mockRestore();
       warn.mockRestore();
+    }
+  });
+
+  it('cancels an unadopted cached pull when its speculative log closes', async () => {
+    const server = await edge([row(1)], [], 'generation-1');
+    const { vault } = memoryVault();
+    let refuseWrites = false;
+    let reads = 0;
+    let posts = 0;
+    let pulled!: () => void;
+    const openingPull = new Promise<void>((resolve) => (pulled = resolve));
+    const connection: typeof fetch = async (input, init) => {
+      if (init?.method === 'POST') {
+        posts++;
+        if (refuseWrites) throw new TypeError('offline');
+      } else if (String(input).includes('/changes?')) {
+        reads++;
+        if (reads === 2) pulled();
+      }
+      return server.fetchImpl(input, init);
+    };
+    const first = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    refuseWrites = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await first.write(row(2));
+    await vi.waitFor(() => expect(posts).toBe(1));
+    first.close();
+    refuseWrites = false;
+
+    const speculative = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    await openingPull;
+    expect(speculative.pendingActions).toBe(1);
+    speculative.close();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(posts, 'close refuses publication/replay before foreground adoption').toBe(1);
+    warn.mockRestore();
+  });
+
+  it('does not replay after deferred policy rejects an otherwise successful opening pull', async () => {
+    const server = await edge([row(1)], [], 'generation-1');
+    const { vault } = memoryVault();
+    let refuseWrites = false;
+    let reads = 0;
+    let posts = 0;
+    const connection: typeof fetch = async (input, init) => {
+      if (init?.method === 'POST') {
+        posts++;
+        if (refuseWrites) throw new TypeError('offline');
+      } else if (String(input).includes('/changes?')) reads++;
+      return server.fetchImpl(input, init);
+    };
+    const first = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    refuseWrites = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await first.write(addToWatchlist(blankTitle({ type: 'movie', id: 2 }, 0), at(1000)));
+    await vi.waitFor(() => expect(posts).toBe(1));
+    first.close();
+    refuseWrites = false;
+
+    const policy = vi
+      .spyOn(syncLoader, 'ensureDeferredSyncPolicy')
+      .mockRejectedValue(new Error('policy unavailable'));
+    const readsBefore = reads;
+    try {
+      await expect(LibraryLog.open(LIBRARY_KEY, connection, undefined, vault)).rejects.toThrow(
+        'policy unavailable',
+      );
+      await vi.waitFor(() => expect(reads).toBe(readsBefore + 1));
+      expect(posts, 'a successful pull cannot replay after its overlay was refused').toBe(1);
+    } finally {
+      policy.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it('retries after the adopted opening pull fails without duplicating or dropping retained work', async () => {
+    const server = await edge([row(1)], [], 'generation-1');
+    const { vault } = memoryVault();
+    let refuseWrites = false;
+    let failOpeningRead = false;
+    let reads = 0;
+    let posts = 0;
+    const connection: typeof fetch = async (input, init) => {
+      if (init?.method === 'POST') {
+        posts++;
+        if (refuseWrites) throw new TypeError('offline');
+      } else if (String(input).includes('/changes?')) {
+        reads++;
+        if (failOpeningRead) {
+          failOpeningRead = false;
+          throw new TypeError('read offline');
+        }
+      }
+      return server.fetchImpl(input, init);
+    };
+    const first = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    refuseWrites = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await first.write(row(2));
+    await vi.waitFor(() => expect(posts).toBe(1));
+    first.close();
+    refuseWrites = false;
+    failOpeningRead = true;
+
+    const reopened = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    const readsAfterOpen = reads;
+    expect(await reopened.refresh()).toBe(false);
+    expect(posts).toBe(1);
+    expect(reopened.pendingActions).toBe(1);
+    expect(await reopened.refresh()).toBe(true);
+    expect(reads).toBe(readsAfterOpen + 1);
+    expect(posts, 'the retry sends the retained row exactly once').toBe(2);
+    expect(reopened.pendingActions).toBe(0);
+    reopened.close();
+    warn.mockRestore();
+  });
+
+  it('starts but does not publish the opening pull for every retained wire shape', async () => {
+    const policy = vi
+      .spyOn(syncLoader, 'ensureDeferredSyncPolicy')
+      .mockRejectedValue(new Error('row work must not need deferred policy'));
+    try {
+      for (const kind of ['one', 'bulk', 'rows', 'restore', 'unreadable'] as const) {
+        const server = await edge([row(1)], [], 'generation-1');
+        const { data, vault } = memoryVault();
+        let reads = 0;
+        let posts = 0;
+        const connection: typeof fetch = async (input, init) => {
+          if (init?.method === 'POST') posts++;
+          else if (String(input).includes('/changes?')) reads++;
+          return server.fetchImpl(input, init);
+        };
+        const first = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+        first.close();
+        const keys = await deriveKeys(Uint8Array.from(atob(LIBRARY_KEY), (c) => c.charCodeAt(0)));
+        const sealed = await seal(keys, currentRows([row(2)])[0]!);
+        const encoded =
+          kind === 'unreadable'
+            ? '{'
+            : JSON.stringify(
+                kind === 'one'
+                  ? sealed
+                  : kind === 'bulk'
+                    ? { bulk: [sealed] }
+                    : kind === 'rows'
+                      ? { rows: [sealed] }
+                      : { restore: [sealed], generation: 'generation-1' },
+              );
+        data.set(`${keys.id}:runtime:pending:${kind}`, new TextEncoder().encode(encoded));
+        const readsBefore = reads;
+        const opened = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+        await vi.waitFor(() => expect(reads, kind).toBe(readsBefore + 1));
+        expect(opened.pendingActions, kind).toBe(1);
+        if (kind !== 'unreadable')
+          expect(opened.title({ type: 'movie', id: 2 }), kind).toBeDefined();
+        expect(posts, `${kind} is not sent before foreground adoption`).toBe(0);
+        opened.close();
+      }
+      expect(policy).not.toHaveBeenCalled();
+    } finally {
+      policy.mockRestore();
     }
   });
 
