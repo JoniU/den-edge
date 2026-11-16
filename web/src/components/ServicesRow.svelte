@@ -60,7 +60,12 @@
 </script>
 
 {#if services.length || pending || empty}
-  <section class="row services-row" aria-label={localizedHeading} bind:this={section}>
+  <section
+    class="row services-row"
+    aria-label={localizedHeading}
+    data-layout-state={pending ? 'pending' : 'settled'}
+    bind:this={section}
+  >
     <h2>{localizedHeading}</h2>
     <div class="track">
       {#each services as { pick, service } (`${service.id}@${pick.country}`)}
@@ -121,7 +126,17 @@
     display: grid;
     width: var(--tile-w);
     gap: 8px;
-    font-size: 14px;
+    /* This is the exact name line that replaces it. TV promotes service names to ten-foot type, so retaining the
+       browser's 14px fallback here let a provider result grow the rail after lower shelves had taken their place. */
+    font-size: var(--service-name-size, 14px);
+  }
+
+  .hold > :last-child {
+    /* ServiceTile's name is one ellipsized line. The unavailable copy must obey the same geometry: on Inter TV it
+       otherwise wraps where the system browser face happens to fit, moving every later Home row. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .plate {
