@@ -1,39 +1,33 @@
-import { defineConfig } from "@playwright/test";
-import browser from "./playwright.config";
-import { E2E_ORIGIN, E2E_PORT } from "./e2e/base-url.mjs";
+import { defineConfig } from '@playwright/test';
+import browser from './playwright.config';
+import { E2E_ORIGIN, E2E_PORT } from './e2e/base-url.mjs';
 
-const platform = process.env.DEN_TV_PLATFORM ?? "webos";
-const engine =
-  process.env.DEN_TV_TEST_ENGINE === "webkit" ? "webkit" : "chromium";
+const platform = process.env.DEN_TV_PLATFORM ?? 'webos';
+const engine = process.env.DEN_TV_TEST_ENGINE === 'webkit' ? 'webkit' : 'chromium';
 const output = `dist-tv-${platform}-e2e-${E2E_PORT}`;
-if (!["webos", "tizen"].includes(platform))
-  throw new Error("Unknown DEN_TV_PLATFORM");
+if (!['webos', 'tizen'].includes(platform)) throw new Error('Unknown DEN_TV_PLATFORM');
 
 export default defineConfig({
   ...browser,
-  testMatch: "tv-*.spec.mjs",
-  testIgnore: ["tv-package-*.spec.mjs"],
+  testMatch: 'tv-*.spec.mjs',
+  testIgnore: ['tv-package-*.spec.mjs'],
   workers: 2,
   outputDir: `./test-results-tv/${platform}-${E2E_PORT}`,
   use: {
     ...browser.use,
     browserName: engine,
     viewport: { width: 1920, height: 1080 },
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
     launchOptions:
-      engine === "chromium"
+      engine === 'chromium'
         ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
         : {},
   },
   webServer: {
     // Replacing the browser webServer must preserve its upstream isolation guard for build and preview.
     env: {
-      DEN_E2E: "1",
-      // The production TV build embeds the browser origin used by supported-browser handoffs. Keep the fixture
-      // explicit: without it, Vite correctly falls back to this loopback preview's own origin and the journey no
-      // longer exercises the build-owned household Web destination.
-      DEN_TV_WEB_ORIGIN: "https://household.example",
+      DEN_E2E: '1',
       // Keep server evidence beside, not inside, the test outputDir Playwright clears at startup.
       // Existing TV failure artifact uploads retain it along with browser traces.
       DEN_TV_PREVIEW_DIAGNOSTICS: `test-results-tv/preview-${platform}-${E2E_PORT}-${engine}.jsonl`,

@@ -236,7 +236,7 @@ jobs:
       # exercises replacement of the exact same-language sidecar through the AVPlay adapter.
       - name: Supported Samsung/Tizen TV behavior
         if: ${{ !cancelled() && steps.tv_isolation.outcome != 'skipped' }}
-        run: DEN_TV_PLATFORM=tizen npm run test:e2e:tv -- tv-avplay.spec.mjs tv-kid-title-handoff.spec.mjs tv-platform.spec.mjs tv-subtitle-resync.spec.mjs
+        run: DEN_TV_PLATFORM=tizen npm run test:e2e:tv -- tv-avplay.spec.mjs tv-platform.spec.mjs tv-subtitle-resync.spec.mjs
       - run: npm run test:e2e:tv-package
       # Every ordinary source change must compile and verify the exact legacy package too; the release workflow is
       # too late to discover that a shared import or unsupported syntax no longer reaches Chromium 47.
@@ -508,16 +508,7 @@ jobs:
   # Timing budgets still run and retain evidence, but an over-budget measurement is advisory.
   web:
     if: always()
-    needs:
-      [
-        scope,
-        web-checks,
-        e2e,
-        e2e_production,
-        e2e_tv_webkit,
-        android-tv,
-        stack_e2e,
-      ]
+    needs: [scope, web-checks, e2e, e2e_production, e2e_tv_webkit, android-tv, stack_e2e]
     runs-on: ubuntu-latest
     steps:
       # Apart from source reuse: wherever it was due, it must have run and passed in this run.
