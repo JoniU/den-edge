@@ -4319,7 +4319,9 @@ export class LibraryLog {
   private async putMember(active: () => boolean, signal?: AbortSignal): Promise<void> {
     const put = async (generation?: string) => {
       if (!active() || signal?.aborted)
-        throw signal?.reason ?? new DOMException('Membership authority was superseded', 'AbortError');
+        throw (
+          signal?.reason ?? new DOMException('Membership authority was superseded', 'AbortError')
+        );
       const response = await this.send(
         `/lib/${this.keys.id}/member`,
         {

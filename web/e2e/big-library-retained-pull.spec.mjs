@@ -41,15 +41,12 @@ async function measureFirstPull(context, edge, { holdDeferred = false } = {}) {
   let deferredAskedAt = null;
   let deferredReleasedAt = null;
   if (holdDeferred)
-    await page.route(
-      /\/den_core_deferred_bg(?:-[\w-]+)?\.wasm$/,
-      async (route) => {
-        deferredAskedAt ??= performance.now();
-        await new Promise((resolve) => setTimeout(resolve, DEFERRED_DELAY_MS));
-        deferredReleasedAt = performance.now();
-        await route.continue();
-      },
-    );
+    await page.route(/\/den_core_deferred_bg(?:-[\w-]+)?\.wasm$/, async (route) => {
+      deferredAskedAt ??= performance.now();
+      await new Promise((resolve) => setTimeout(resolve, DEFERRED_DELAY_MS));
+      deferredReleasedAt = performance.now();
+      await route.continue();
+    });
 
   let firstPull;
   const pulled = new Promise((resolve) => {
@@ -65,10 +62,7 @@ async function measureFirstPull(context, edge, { holdDeferred = false } = {}) {
   await Promise.race([
     pulled,
     new Promise((_, reject) =>
-      setTimeout(
-        () => reject(new Error('cached open made no changes request')),
-        30_000,
-      ),
+      setTimeout(() => reject(new Error('cached open made no changes request')), 30_000),
     ),
   ]);
   const changesMs = Math.round(firstPull - openedAt);
@@ -90,8 +84,7 @@ async function measureFirstPull(context, edge, { holdDeferred = false } = {}) {
   const measured = {
     changesMs,
     deferredAskedMs: deferredAskedAt && Math.round(deferredAskedAt - openedAt),
-    deferredReleasedMs:
-      deferredReleasedAt && Math.round(deferredReleasedAt - openedAt),
+    deferredReleasedMs: deferredReleasedAt && Math.round(deferredReleasedAt - openedAt),
   };
   await page.close();
   return measured;
@@ -110,17 +103,12 @@ async function retainOfflineEdit(context, edge) {
   await context.setOffline(true);
   try {
     await title.hover();
-    await row
-      .getByRole('button', { name: 'Actions for Film 300000' })
-      .first()
-      .click();
+    await row.getByRole('button', { name: 'Actions for Film 300000' }).first().click();
     await page
       .getByRole('menu', { name: 'Actions for Film 300000' })
       .getByRole('menuitemcheckbox', { name: 'Add to watchlist' })
       .click();
-    await expect(
-      page.getByRole('status').filter({ hasText: 'Added “Film 300000”' }),
-    ).toBeVisible({
+    await expect(page.getByRole('status').filter({ hasText: 'Added “Film 300000”' })).toBeVisible({
       timeout: 30_000,
     });
     await expect(
@@ -172,16 +160,10 @@ test('retained work does not hold a cached phone’s first pull behind deferred 
     );
 
     expect
-      .soft(
-        retained.changesMs,
-        'retained first pull starts before deferred policy answers',
-      )
+      .soft(retained.changesMs, 'retained first pull starts before deferred policy answers')
       .toBeLessThan(retained.deferredReleasedMs);
     expect
-      .soft(
-        retained.changesMs - baseline.changesMs,
-        'retained-work overhead over a cached open',
-      )
+      .soft(retained.changesMs - baseline.changesMs, 'retained-work overhead over a cached open')
       .toBeLessThan(RETAINED_OVER_BASELINE_MS);
   } finally {
     await browser.close();
