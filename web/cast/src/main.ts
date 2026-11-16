@@ -1383,7 +1383,15 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
     else if (!castStarted && pause) video.pause();
     else if (!castStarted && !blockedLocalLoad && video.paused) void playLocal(current);
   } else if (message.type === 'den-volume') {
-    if (!castStarted || !remotePlayer || !remoteController) return;
+    if (
+      !current ||
+      message.id !== current.id ||
+      message.generation !== current.generation ||
+      !castStarted ||
+      !remotePlayer ||
+      !remoteController
+    )
+      return;
     if (typeof message.level === 'number' && message.level >= 0 && message.level <= 1) {
       remotePlayer.volumeLevel = message.level;
       remoteController.setVolumeLevel();
