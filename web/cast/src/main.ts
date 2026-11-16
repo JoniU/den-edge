@@ -1068,8 +1068,7 @@ async function loadCast(load: LoadMessage | undefined = current): Promise<void> 
     // succeed while this exact replacement is pending. In either case stop the TV before reporting failure instead
     // of returning playback local while the prior or stale receiver picture continues without active ownership.
     const stoppedUnownedReceiver =
-      attempt.replacing ||
-      (receiverLandedLoad !== undefined && receiverLandedLoad !== playingLoad);
+      attempt.replacing || (receiverLandedLoad !== undefined && receiverLandedLoad !== playingLoad);
     if (stoppedUnownedReceiver) castContext?.endCurrentSession(true);
     // An initial LOAD failure leaves the Cast session for the player to decide what is tried next. A failed
     // replacement cannot: it demonstrably leaves retired media on the receiver, so that session is stopped.
