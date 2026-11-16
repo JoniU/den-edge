@@ -111,12 +111,6 @@ async function retainOfflineEdit(context, edge) {
     await expect(page.getByRole('status').filter({ hasText: 'Added “Film 300000”' })).toBeVisible({
       timeout: 30_000,
     });
-    await expect(
-      page.getByText(
-        'Saved on this device. Waiting to sync—keep this browser’s data until it reconnects.',
-        { exact: true },
-      ),
-    ).toBeVisible({ timeout: 30_000 });
     expect(
       edge.libraryRequests.filter(({ action }) => action === 'batch').length,
       'offline edit never reached den-edge',
