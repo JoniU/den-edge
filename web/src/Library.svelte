@@ -33,8 +33,10 @@
   } from './lib/catalog';
   import { householdQueue, sendToTV, tvListening, type PlayRequest } from './lib/inbox';
   import { playGuard } from './lib/playGuard';
+  import { episodeProgress } from './lib/detailPresentation';
   import { PlayOnTvTracker } from './lib/playOnTv.svelte';
   import {
+    airedSeasons,
     episodeAfter,
     isAired,
     titleKey,
@@ -1704,9 +1706,12 @@
 
   /** The aired episode after the one playing, from the series' season layout; none after a movie or the last. */
   let following = $state<Target | null>(null);
+  /** The playing series' seasons and how much of each has aired, for the player's episode list. */
+  let playingSeasons = $state.raw<{ number: number; aired: number }[]>();
   $effect(() => {
     const target = playing;
     following = null;
+    playingSeasons = undefined;
     if (!target || target.season === undefined || target.episode === undefined) return;
     const at = { season: target.season, episode: target.episode };
     void (async () => {
@@ -1719,8 +1724,9 @@
         shape?.lastAired,
         untrack(() => airings.get(target.title.id)),
       );
-      if (playing === target && next && isAired(next, aired))
-        following = { title: target.title, ...next };
+      if (playing !== target) return;
+      if (next && isAired(next, aired)) following = { title: target.title, ...next };
+      if (shape) playingSeasons = airedSeasons(shape, aired);
     })();
   });
 
@@ -3420,6 +3426,10 @@
       playbackReceiptHandoffAsOwner={session.administersHousehold}
       onplaybackreceipthandoff={requestPlaybackReceiptHandoff}
       onnext={after ? () => void advance(after) : undefined}
+      seasons={playingSeasons}
+      episodeProgress={(season, episode) =>
+        episodeProgress(pageEpisodes.get(`${season}:${episode}`), pageRow)}
+      onepisode={(at) => void advance({ title: target.title, ...at })}
       oncontrols={(controls) => (tvControls = controls)}
       onclose={closePlayer}
     />

@@ -139,7 +139,17 @@
     window.addEventListener('wheel', outsideScrollGesture, { capture: true, passive: true });
     window.addEventListener('touchmove', outsideScrollGesture, { capture: true, passive: true });
     window.addEventListener('keydown', outsideScrollGesture, true);
+    // A menu whose rows change while it is open (a page of the player's options, another season of episodes) is placed
+    // again at its new size, so one above its trigger keeps its foot there rather than its old top.
+    const resized =
+      __DEN_TV__ || typeof ResizeObserver === 'undefined'
+        ? undefined
+        : new ResizeObserver(() => {
+            if (showing()) position();
+          });
+    if (menu) resized?.observe(menu);
     return () => {
+      resized?.disconnect();
       query?.removeEventListener('change', update);
       document.removeEventListener('pointerdown', outsidePointerDown, true);
       document.removeEventListener('click', outsideClick, true);
@@ -285,7 +295,9 @@
       // `showModal()` and its open event do not focus consistently across TV engines. Supply the missing initial
       // focus on the next frame, but never steal back a later choice when a fast remote press has already moved
       // within the menu during that frame.
-      if (!enabled.includes(document.activeElement as HTMLButtonElement)) enabled[0]?.focus();
+      // A menu that marks where its viewer is (the episode playing) opens there rather than at its top.
+      if (!enabled.includes(document.activeElement as HTMLButtonElement))
+        (enabled.find((el) => el.getAttribute('aria-current') === 'true') ?? enabled[0])?.focus();
     });
   }
 
