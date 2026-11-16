@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
   import DetailMedia from './DetailMedia.svelte';
+  import DetailRecovery from './DetailRecovery.svelte';
   import { stableViewportHeight } from '../lib/stableViewportHeight';
   import type { Routes } from '../lib/routes';
   import Loading from './Loading.svelte';
@@ -1360,22 +1361,14 @@
           {ratings?.awards ?? ''}
         </p>{/if}
     </div>
-    {#if extrasFailed.length}
-      <div class="extras-recovery" role="alert" data-spatial-section>
-        <span>{i18n.phrase('Some title details couldn’t be loaded.')}</span>
-        <button
-          bind:this={extrasRetryButton}
-          type="button"
-          disabled={extrasBusy}
-          aria-busy={extrasBusy}
-          onclick={retryExtras}>{i18n.phrase('Try again')}</button
-        >
-      </div>
-    {:else if extrasRecovered}
-      <p bind:this={extrasRecoveryStatus} class="extras-recovered" role="status" tabindex="-1">
-        {i18n.phrase('Title details loaded.')}
-      </p>
-    {/if}
+    <DetailRecovery
+      unavailable={extrasFailed.length > 0}
+      busy={extrasBusy}
+      recovered={extrasRecovered}
+      onretry={retryExtras}
+      bind:button={extrasRetryButton}
+      bind:status={extrasRecoveryStatus}
+    />
     {#if !guestScout}
       <div class="title-sources" hidden={restricted}>
         <TitleSources
@@ -1898,43 +1891,6 @@
     background: none;
     color: var(--fg);
     cursor: pointer;
-  }
-
-  .extras-recovery {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 12px;
-    margin: 0 0 20px;
-    color: var(--danger);
-  }
-
-  .extras-recovery button {
-    border: 1px solid currentcolor;
-    border-radius: 999px;
-    padding: 8px 14px;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    font-weight: 650;
-  }
-
-  .extras-recovery button:focus-visible {
-    outline: var(--ring-width) solid var(--focus-ring);
-    outline-offset: 3px;
-  }
-
-  .extras-recovery button:disabled {
-    opacity: 0.6;
-  }
-
-  .extras-recovered {
-    margin: 0 0 20px;
-    color: var(--muted);
-  }
-
-  .extras-recovered:focus {
-    outline: none;
   }
 
   .placeholder {

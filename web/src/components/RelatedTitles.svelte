@@ -30,10 +30,10 @@
   import { SvelteSet } from 'svelte/reactivity';
   import { yieldTask } from '../lib/taskYield';
   import type { ContentServiceClientPort } from '../lib/contentServiceClient';
-  import { i18n } from '../lib/i18n.svelte';
 
   const regions = new Intl.DisplayNames(['en'], { type: 'region' });
   import BrowseRow from './BrowseRow.svelte';
+  import DetailRecovery from './DetailRecovery.svelte';
 
   let {
     detail,
@@ -79,9 +79,7 @@
     start: () => Promise<void>;
     cancel: () => void;
   }>();
-  let versionsUnavailable = $state(false);
-  let versionsBusy = $state(false);
-  let versionsRecovered = $state(false);
+  let versionsRecovery = $state<'ready' | 'unavailable' | 'busy' | 'recovered'>('ready');
   let versionsRetryButton = $state.raw<HTMLButtonElement>();
   let versionsRecoveryStatus = $state.raw<HTMLParagraphElement>();
   let retryVersions: (() => void) | undefined;
@@ -198,9 +196,7 @@
     const build = ++builds;
     const controller = new AbortController();
     const current = () => live && builds === build && rowsFor === key;
-    versionsUnavailable = false;
-    versionsBusy = false;
-    versionsRecovered = false;
+    versionsRecovery = 'ready';
     let releaseDiscovery!: (start: boolean) => void;
     let discoveryDecided = false;
     const discoveryGate = new Promise<boolean>((resolve) => (releaseDiscovery = resolve));
@@ -232,7 +228,7 @@
     );
     void versionsAnswer.then((answer) => {
       if (!current()) return;
-      versionsUnavailable = answer.state === 'unavailable';
+      if (answer.state === 'unavailable') versionsRecovery = 'unavailable';
     });
     const decideDiscovery = (start: boolean) => {
       if (discoveryDecided) return;
@@ -307,20 +303,17 @@
       ...(regional ? [regional] : []),
     ].map(tracked);
     const retry = () => {
-      if (!current() || versionsBusy) return;
+      if (!current() || versionsRecovery === 'busy') return;
       const returnFocus = document.activeElement === versionsRetryButton;
-      versionsBusy = true;
-      versionsRecovered = false;
+      versionsRecovery = 'busy';
       void loadVersions()
         .then(async (answer) => {
           if (!current()) return;
-          versionsBusy = false;
           if (answer.state === 'unavailable') {
-            versionsUnavailable = true;
+            versionsRecovery = 'unavailable';
             if (returnFocus) requestAnimationFrame(() => versionsRetryButton?.focus());
             return;
           }
-          versionsUnavailable = false;
           const upper = await franchise;
           if (!current()) return;
           const withoutPrevious = rows.filter(({ row }) => row.id !== 'other-versions');
@@ -334,7 +327,7 @@
           } else {
             rows = withoutPrevious;
           }
-          versionsRecovered = returnFocus;
+          versionsRecovery = returnFocus ? 'recovered' : 'ready';
           if (returnFocus)
             requestAnimationFrame(() => {
               if (current()) versionsRecoveryStatus?.focus();
@@ -342,8 +335,7 @@
         })
         .catch((error) => {
           if ((error as Error)?.name === 'AbortError' || !current()) return;
-          versionsBusy = false;
-          versionsUnavailable = true;
+          versionsRecovery = 'unavailable';
         });
     };
     retryVersions = retry;
@@ -420,22 +412,14 @@
 </script>
 
 <div bind:this={root} aria-hidden={!active}>
-  {#if versionsUnavailable}
-    <div class="versions-recovery" role="alert" data-spatial-section>
-      <span>{i18n.phrase('Some title details couldn’t be loaded.')}</span>
-      <button
-        bind:this={versionsRetryButton}
-        type="button"
-        disabled={versionsBusy}
-        aria-busy={versionsBusy}
-        onclick={requestVersionsRetry}>{i18n.phrase('Try again')}</button
-      >
-    </div>
-  {:else if versionsRecovered}
-    <p bind:this={versionsRecoveryStatus} class="versions-recovered" role="status" tabindex="-1">
-      {i18n.phrase('Title details loaded.')}
-    </p>
-  {/if}
+  <DetailRecovery
+    unavailable={versionsRecovery === 'unavailable' || versionsRecovery === 'busy'}
+    busy={versionsRecovery === 'busy'}
+    recovered={versionsRecovery === 'recovered'}
+    onretry={requestVersionsRetry}
+    bind:button={versionsRetryButton}
+    bind:status={versionsRecoveryStatus}
+  />
   {#each rows as { build, row } (`${build}:${row.id}`)}
     {#if mountedRows.has(`${build}:${row.id}`)}
       <BrowseRow {row} {shown} prefetch={false} />
@@ -446,43 +430,6 @@
 </div>
 
 <style>
-  .versions-recovery {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 12px;
-    margin: 0 0 20px;
-    color: var(--danger);
-  }
-
-  .versions-recovery button {
-    border: 1px solid currentcolor;
-    border-radius: 999px;
-    padding: 8px 14px;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    font-weight: 650;
-  }
-
-  .versions-recovery button:focus-visible {
-    outline: var(--ring-width) solid var(--focus-ring);
-    outline-offset: 3px;
-  }
-
-  .versions-recovery button:disabled {
-    opacity: 0.6;
-  }
-
-  .versions-recovered {
-    margin: 0 0 20px;
-    color: var(--muted);
-  }
-
-  .versions-recovered:focus {
-    outline: none;
-  }
-
   .row-reserve {
     --card-w: var(--poster-card-w, clamp(140px, 38vw, 190px));
 
