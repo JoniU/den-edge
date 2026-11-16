@@ -116,7 +116,14 @@ test.beforeEach(() => {
   dropping = () => false;
 });
 
-async function open({ grants = [], managed, blockAutoplay = false } = {}) {
+async function open({
+  grants = [],
+  managed,
+  blockAutoplay = false,
+  holdCastLan = false,
+  trackLocalEvents = false,
+} = {}) {
+  const lanGates = [];
   const browser = await chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     args: [
@@ -131,6 +138,17 @@ async function open({ grants = [], managed, blockAutoplay = false } = {}) {
     viewport: { width: 1280, height: 800 },
     ignoreHTTPSErrors: true,
   });
+  if (trackLocalEvents)
+    await context.addInitScript((castOrigin) => {
+      if (location.origin !== castOrigin) return;
+      window.__denLocalListeners = { loadedmetadata: [], timeupdate: [], ended: [], error: [] };
+      const add = HTMLMediaElement.prototype.addEventListener;
+      HTMLMediaElement.prototype.addEventListener = function (type, listener, options) {
+        if (this.tagName === 'VIDEO' && type in window.__denLocalListeners)
+          window.__denLocalListeners[type].push(listener);
+        return add.call(this, type, listener, options);
+      };
+    }, CAST);
   if (blockAutoplay)
     await context.addInitScript(
       ({ castOrigin, blockAutoplay }) => {
@@ -206,7 +224,18 @@ async function open({ grants = [], managed, blockAutoplay = false } = {}) {
   });
   await context.route(`${MEDIA}/**`, (r) => r.continue());
   // Away from home: the home-network address the session names does not answer.
-  await context.route('https://lan.test:8449/**', (r) => r.abort('addressunreachable'));
+  await context.route('https://lan.test:8449/**', (r) => {
+    if (holdCastLan && r.request().frame()?.url().startsWith(CAST)) {
+      let release;
+      const released = new Promise((resolve) => (release = resolve));
+      lanGates.push({
+        succeed: () => release(r.fulfill({ status: 204 })),
+        fail: () => release(r.abort('addressunreachable')),
+      });
+      return released;
+    }
+    return r.abort('addressunreachable');
+  });
   await context.route(`${CAST}/**`, async (r) => {
     const path = new URL(r.request().url()).pathname;
     const file = path === '/' ? 'index.html' : path.slice(1);
@@ -224,7 +253,7 @@ async function open({ grants = [], managed, blockAutoplay = false } = {}) {
   await page.goto(
     `${ORIGIN}/test/player.html?remux=/remux${managed ? '&playback=/den/config/playback' : ''}`,
   );
-  return { browser, page };
+  return { browser, page, lanGates };
 }
 
 /** The cast page's video, once it is past `seconds`. */
@@ -409,6 +438,88 @@ test('a held old load cannot publish under a same-id replacement generation', as
         window.__rejectHeldPlay(new DOMException('Autoplay is blocked', 'NotAllowedError')),
       );
     await expect(frame.getByRole('button', { name: 'Play', exact: true })).toBeHidden();
+    // A reset sent for the replaced generation cannot tear down the replacement that reused its playlist URL.
+    await page
+      .locator('iframe[title="Den Cast player"]')
+      .evaluate((iframe, reset) => iframe.contentWindow.postMessage(reset, reset.castOrigin), {
+        type: 'den-reset',
+        id: `${MEDIA}${PATH}/master.m3u8`,
+        generation: 1,
+        castOrigin: CAST,
+      });
+    await playingPast(page, 1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('an old LAN proof cannot bless a same-id replacement generation', async () => {
+  const { browser, page, lanGates } = await open({ holdCastLan: true });
+  try {
+    await expect.poll(() => lanGates.length).toBe(1);
+    await page
+      .locator('iframe[title="Den Cast player"]')
+      .evaluate(
+        (iframe, replacement) =>
+          iframe.contentWindow.postMessage(replacement, replacement.castOrigin),
+        {
+          type: 'den-load',
+          id: `${MEDIA}${PATH}/master.m3u8`,
+          generation: 2,
+          castOrigin: CAST,
+          media: {
+            url: `${MEDIA}${PATH}/master.m3u8`,
+            lanUrl: 'https://lan.test:8449/remux/master.m3u8',
+            mode: 'browser',
+            title: 'Replacement',
+          },
+        },
+      );
+    await expect.poll(() => lanGates.length).toBe(2);
+    lanGates[0].succeed();
+    await page.waitForTimeout(0);
+    lanGates[1].fail();
+    await playingPast(page, 1);
+    await expect(
+      page.frameLocator('iframe[title="Den Cast player"]').locator('video'),
+    ).toHaveJSProperty('currentSrc', `${MEDIA}${PATH}/master.m3u8`);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('queued local media events from an old same-id generation cannot mutate its replacement', async () => {
+  const { browser, page } = await open({ trackLocalEvents: true });
+  try {
+    await playingPast(page, 1);
+    const frame = page.frameLocator('iframe[title="Den Cast player"]');
+    await page
+      .locator('iframe[title="Den Cast player"]')
+      .evaluate(
+        (iframe, replacement) =>
+          iframe.contentWindow.postMessage(replacement, replacement.castOrigin),
+        {
+          type: 'den-load',
+          id: `${MEDIA}${PATH}/master.m3u8`,
+          generation: 2,
+          castOrigin: CAST,
+          media: {
+            url: `${MEDIA}${PATH}/master.m3u8`,
+            mode: 'browser',
+            title: 'Replacement',
+          },
+        },
+      );
+    await playingPast(page, 1);
+    await frame.locator('video').evaluate((video) => {
+      for (const type of ['timeupdate', 'ended', 'error']) {
+        const old = window.__denLocalListeners[type][0];
+        old.call(video, new Event(type));
+      }
+    });
+    await playingPast(page, 1);
+    await expect(page.getByText('This browser couldn’t play this release.')).toHaveCount(0);
+    expect(heard.reports.filter((report) => !report.stats)).toEqual([]);
   } finally {
     await browser.close();
   }

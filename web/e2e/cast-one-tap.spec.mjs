@@ -611,6 +611,31 @@ test('a TorBox stream the receiver won’t load is retried once as TorBox, named
   }
 });
 
+test('a receiver error from a stale same-id generation is excluded from cast diagnostics', async () => {
+  const { browser, page, asked } = await open(chromium, {
+    appId: DEN_APP,
+    sdkOptions: { report: true },
+  });
+  try {
+    await castOnce(page, asked);
+    await frameOf(page).evaluate(
+      ([origin, id]) =>
+        window.parent.postMessage(
+          { type: 'den-receiver-error', id, generation: -1, code: 999, shaka: 999 },
+          origin,
+        ),
+      [ORIGIN, TORBOX],
+    );
+    await reveal(page);
+    await page.getByRole('button', { name: 'Close' }).click();
+    await expect.poll(() => asked.castReports).toHaveLength(1);
+    expect(asked.castReports[0]).not.toHaveProperty('rxError');
+    expect(asked.castReports[0]).not.toHaveProperty('rxShaka');
+  } finally {
+    await browser.close();
+  }
+});
+
 // The Chromecast's player took the LOAD, played a second and gave up, and its media session went idle with no reason.
 // The cast page waited on that reason, so the player sat at "Starting Chromecast…" and the TV on Den's idle screen
 // (2026-11-09). Den's receiver says IDLE with ERROR itself, and the player hears it.

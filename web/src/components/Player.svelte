@@ -2892,13 +2892,29 @@
   function castMessage(event: MessageEvent<unknown>): void {
     const frame = castFrame?.contentWindow;
     if (!frame || event.source !== frame || !frameOrigin || event.origin !== frameOrigin) return;
-    const button = event.data as Parameters<typeof castButtonMessage>[0] & { generation?: unknown };
+    const button = event.data as Parameters<typeof castButtonMessage>[0] & {
+      id?: unknown;
+      generation?: unknown;
+    };
     if (button.type === 'den-ready' && castDocumentReady(event.origin, button.generation)) {
       frame.postMessage({ type: 'den-discover', interfaceLanguage }, event.origin);
       sendCastLayout();
     }
-    if (castButtonMessage(button)) return;
     const current = session;
+    // Receiver errors describe one exact LOAD, unlike document-scoped Cast-button state. A delayed receiver event
+    // from a replaced generation must not become the next session's diagnostics merely because its URL was reused.
+    if (button.type === 'den-receiver-error') {
+      if (
+        !current?.castOrigin ||
+        event.origin !== current.castOrigin ||
+        button.id !== current.playlist ||
+        button.generation !== castLoadGeneration
+      )
+        return;
+      castButtonMessage(button);
+      return;
+    }
+    if (castButtonMessage(button)) return;
     if (!current?.castOrigin || event.origin !== current.castOrigin) return;
     const message = event.data as {
       type?: string;
@@ -3498,13 +3514,17 @@
   });
 
   // Back to playing in this page, the frame stays for its button: what it had loaded is let go there.
-  let castFrameLoad: string | undefined;
+  let castFrameLoad: { id: string; generation: number } | undefined;
   $effect(() => {
     const current = session;
-    if (current?.castOrigin) castFrameLoad = current.playlist;
+    if (current?.castOrigin)
+      castFrameLoad = { id: current.playlist, generation: castLoadGeneration };
     else if (castFrameLoad && current && !heldFrame && frameOrigin) {
+      const reset = castFrameLoad;
       castFrameLoad = undefined;
-      untrack(() => readyCastFrame(frameOrigin)?.postMessage({ type: 'den-reset' }, frameOrigin));
+      untrack(() =>
+        readyCastFrame(frameOrigin)?.postMessage({ type: 'den-reset', ...reset }, frameOrigin),
+      );
     }
   });
 

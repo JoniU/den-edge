@@ -418,11 +418,20 @@ let replacingCast = false;
 let loadInFlight = false;
 let castSubtitleAppliedLoad: LoadMessage | undefined;
 let measuredLoad: LoadMessage | undefined;
-/** What this page's video reports to den-remux (`watchPlayback`); stopped before hls.js is destroyed. */
-let watcher: Watcher | undefined;
-/** The connection as this page's segments see it (`resumingLoader`); one per hls.js instance. */
-let link: Link | undefined;
-let linkWatch: ReturnType<typeof setInterval> | undefined;
+interface LocalPlayback {
+  load: LoadMessage;
+  owner: PlayingMedia;
+  watcher?: Watcher;
+  hls?: Hls;
+  link?: Link;
+  linkWatch?: ReturnType<typeof setInterval>;
+  loadedMetadata?: () => void;
+  timeUpdate?: () => void;
+  ended?: () => void;
+  error?: () => void;
+}
+/** Every callback and resource belonging to the exact local LOAD generation. */
+let localPlayback: LocalPlayback | undefined;
 /** Said over the held picture while the connection is down and the buffer has run out. */
 const RECONNECTING = 'Reconnecting…';
 /**
@@ -437,11 +446,11 @@ let naturallyFinished = false;
 const CONTINUE_WAIT_MS = 5_000;
 /** The measured load waiting for the player's `den-continue`. */
 let waiting: { load: LoadMessage; resolve: () => void } | undefined;
-/** The loads whose home-network address answered: they play from it, in this browser and on a Cast receiver alike. */
-const onLan = new Set<string>();
+/** Exact loads whose home-network address answered; a reused playlist URL is not replacement authority. */
+const onLan = new WeakSet<LoadMessage>();
 
-function playUrl(id: string, media: Media): string {
-  return media.lanUrl && onLan.has(id) ? media.lanUrl : media.url;
+function playUrl(load: LoadMessage): string {
+  return load.media.lanUrl && onLan.has(load) ? load.media.lanUrl : load.media.url;
 }
 
 function signedSpeed(media: Media): boolean {
@@ -479,6 +488,12 @@ function tellFor(
 }
 
 const ownsCurrent = (load: LoadMessage | undefined): load is LoadMessage => current === load;
+const ownsLocal = (owner: LocalPlayback): boolean =>
+  localPlayback === owner &&
+  current === owner.load &&
+  playingLoad === owner.load &&
+  playing === owner.owner &&
+  !castStarted;
 
 function clearLocalPlay(load?: LoadMessage): void {
   if (load && blockedLocalLoad !== load) return;
@@ -519,10 +534,11 @@ function failFor(
   message: string,
   code = 0,
   owner: PlayingMedia | undefined = playing,
+  ownerWatcher?: Watcher,
 ): void {
   const lifecycle = denLifecycleMedia(owner);
   if (lifecycle) {
-    watcher?.spent();
+    ownerWatcher?.spent();
     sendReport(reportUrlOf(lifecycle), reportBody(code, message));
   }
   tellFor(load, 'den-error', { message: translateStatus(message) });
@@ -584,13 +600,17 @@ function announceDevices(): void {
 /** Stop this page's hls.js and the connection it was watching. */
 function stopLocal(): void {
   clearLocalPlay();
-  watcher?.stop();
-  watcher = undefined;
-  hls?.destroy();
-  hls = undefined;
-  clearInterval(linkWatch);
-  link?.dispose();
-  link = undefined;
+  const owner = localPlayback;
+  localPlayback = undefined;
+  if (owner?.loadedMetadata) video.removeEventListener('loadedmetadata', owner.loadedMetadata);
+  if (owner?.timeUpdate) video.removeEventListener('timeupdate', owner.timeUpdate);
+  if (owner?.ended) video.removeEventListener('ended', owner.ended);
+  if (owner?.error) video.removeEventListener('error', owner.error);
+  owner?.watcher?.stop();
+  owner?.hls?.destroy();
+  if (hls === owner?.hls) hls = undefined;
+  clearInterval(owner?.linkWatch);
+  owner?.link?.dispose();
   if (statusPill.textContent === text(RECONNECTING)) setStatus('');
 }
 
@@ -599,8 +619,10 @@ function stopLocal(): void {
  * player outside asked to let this browser's address back in (it may have changed, and only that page can say so),
  * and playback carried on from the same second when the segments come back.
  */
-function watchLink(connection: Link, load: LoadMessage): void {
+function watchLink(connection: Link, owner: LocalPlayback): void {
+  const { load } = owner;
   const show = () => {
+    if (!ownsLocal(owner)) return;
     const buffered = video.buffered;
     const ahead = buffered.length ? buffered.end(buffered.length - 1) - video.currentTime : 0;
     const shown = statusPill.textContent === text(RECONNECTING);
@@ -608,13 +630,14 @@ function watchLink(connection: Link, load: LoadMessage): void {
     else if ((!connection.down || ahead >= 0.5) && shown) setStatus('');
   };
   connection.beforeRetry = () => {
-    tellFor(load, 'den-reconnect');
+    if (ownsLocal(owner)) tellFor(load, 'den-reconnect');
     return Promise.resolve();
   };
   connection.subscribe((down) => {
-    clearInterval(linkWatch);
+    if (!ownsLocal(owner)) return;
+    clearInterval(owner.linkWatch);
     show();
-    if (down) linkWatch = setInterval(show, 250);
+    if (down) owner.linkWatch = setInterval(show, 250);
   });
 }
 
@@ -639,32 +662,66 @@ async function loadLocal(load: LoadMessage, url: string): Promise<void> {
   // dropped connection with `resumingLoader`. hls.js is most of this page's script, and a page that is only the Cast
   // button never plays anything itself: it is fetched the first time this page does.
   const loading = playing;
+  const local: LocalPlayback = (localPlayback = { load, owner: loading });
   const Hls = nativeHls(video) ? undefined : (await import('hls.js')).default;
-  if (playing !== loading) return;
+  if (!ownsLocal(local)) return;
+  local.timeUpdate = () => {
+    if (!ownsLocal(local)) return;
+    lastPosition = Math.max(0, video.currentTime);
+    if (Number.isFinite(video.duration)) lastDuration = Math.max(0, video.duration);
+    tellFor(load, 'den-progress', {
+      currentTime: video.currentTime,
+      duration: Number.isFinite(video.duration) ? video.duration : undefined,
+      paused: video.paused,
+    });
+  };
+  local.ended = () => {
+    if (!ownsLocal(local)) return;
+    naturallyFinished = true;
+    tellFor(load, 'den-ended');
+  };
+  local.error = () => {
+    if (!ownsLocal(local)) return;
+    clearLocalPlay(load);
+    failFor(
+      load,
+      video.error?.message || 'Playback failed',
+      video.error?.code ?? 0,
+      loading,
+      local.watcher,
+    );
+  };
+  video.addEventListener('timeupdate', local.timeUpdate);
+  video.addEventListener('ended', local.ended);
+  video.addEventListener('error', local.error);
   if (!Hls) {
     video.src = url;
-    watcher = watchPlayback({ video, reportUrl: media.external ? undefined : reportUrlOf(url) });
+    local.watcher = watchPlayback({
+      video,
+      reportUrl: media.external ? undefined : reportUrlOf(url),
+    });
     // A native player takes a start position once it knows the stream; set before that it is ignored.
-    video.addEventListener(
-      'loadedmetadata',
-      () => {
-        if (start > 0 && Math.abs(video.currentTime - start) > 2) video.currentTime = start;
-        applySubtitle(media.subtitleLanguage, media.subtitleIndex);
-      },
-      { once: true },
-    );
+    local.loadedMetadata = () => {
+      if (!ownsLocal(local)) return;
+      if (start > 0 && Math.abs(video.currentTime - start) > 2) video.currentTime = start;
+      applySubtitle(media.subtitleLanguage, media.subtitleIndex);
+    };
+    video.addEventListener('loadedmetadata', local.loadedMetadata, { once: true });
   } else if (Hls.isSupported()) {
     // The same tolerance as the player outside: a release den-remux converts answers its first segment late.
-    const connection = (link = new Link());
-    watchLink(connection, load);
-    hls = new Hls(hlsConfig(start > 0 ? start : undefined, 'receiver', connection));
-    watcher = watchPlayback({
+    const connection = (local.link = new Link());
+    watchLink(connection, local);
+    const instance = new Hls(hlsConfig(start > 0 ? start : undefined, 'receiver', connection));
+    local.hls = instance;
+    hls = instance;
+    local.watcher = watchPlayback({
       video,
-      hls: { instance: hls, Hls },
+      hls: { instance, Hls },
       reportUrl: media.external ? undefined : reportUrlOf(url),
     });
     let recovered = false;
-    hls.on(Hls.Events.ERROR, (_event, data) => {
+    instance.on(Hls.Events.ERROR, (_event, data) => {
+      if (!ownsLocal(local)) return;
       if (data.frag?.type === 'subtitle')
         console.warn(
           `[Den subtitles] ${JSON.stringify({
@@ -672,14 +729,14 @@ async function loadLocal(load: LoadMessage, url: string): Promise<void> {
             details: data.details,
             fatal: data.fatal,
             httpStatus: data.response?.code ?? null,
-            track: hls?.subtitleTrack ?? null,
+            track: instance.subtitleTrack ?? null,
           })}`,
         );
       if (!data.fatal) return;
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recovered) {
         // A decoder that lost its place: reset the buffer and carry on, once.
         recovered = true;
-        hls?.recoverMediaError();
+        instance.recoverMediaError();
         return;
       }
       // The session ended at den-remux (410), or the connection stayed away until the loader stopped asking: the
@@ -689,25 +746,27 @@ async function loadLocal(load: LoadMessage, url: string): Promise<void> {
         data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR &&
         (code === 410 || (code === 0 && connection.down))
       ) {
-        clearInterval(linkWatch);
+        clearInterval(local.linkWatch);
         setStatus('');
         tellFor(load, 'den-lost', { currentTime: video.currentTime });
         return;
       }
-      if (ownsCurrent(load)) setStatus('Playback failed');
-      failFor(load, `hls.js ${data.type} ${data.details}`, 0, loading);
+      setStatus('Playback failed');
+      failFor(load, `hls.js ${data.type} ${data.details}`, 0, loading, local.watcher);
     });
-    hls.on(Hls.Events.MANIFEST_PARSED, () =>
-      applySubtitle(media.subtitleLanguage, media.subtitleIndex),
-    );
-    hls.loadSource(url);
-    hls.attachMedia(video);
+    instance.on(Hls.Events.MANIFEST_PARSED, () => {
+      if (ownsLocal(local)) applySubtitle(media.subtitleLanguage, media.subtitleIndex);
+    });
+    instance.loadSource(url);
+    instance.attachMedia(video);
   } else {
+    if (!ownsLocal(local)) return;
     const message = 'This browser cannot play HLS';
     setStatus(message);
-    failFor(load, message, 0, loading);
+    failFor(load, message, 0, loading, local.watcher);
     return;
   }
+  if (!ownsLocal(local)) return;
   describeToSystem(media);
   await playLocal(load);
 }
@@ -717,15 +776,16 @@ async function loadLocal(load: LoadMessage, url: string): Promise<void> {
  * promise, so neither its refusal nor its success may be published under the replacement's identity.
  */
 async function playLocal(load: LoadMessage | null): Promise<void> {
-  if (!load) return;
+  const local = localPlayback;
+  if (!load || !local || local.load !== load || !ownsLocal(local)) return;
   try {
     await video.play();
-    if (current !== load) return;
+    if (!ownsLocal(local)) return;
     clearLocalPlay(load);
     setStatus(PLAYING_HERE);
     tellFor(load, 'den-playing');
   } catch (error) {
-    if (current !== load) return;
+    if (!ownsLocal(local)) return;
     if (error instanceof DOMException && error.name === 'NotAllowedError') {
       // Only a gesture in this cross-origin document can satisfy WebKit. Keep repeat refusals recoverable.
       offerLocalPlay(load);
@@ -734,7 +794,7 @@ async function playLocal(load: LoadMessage | null): Promise<void> {
     }
     clearLocalPlay(load);
     setStatus('Playback failed');
-    failFor(load, 'Playback failed');
+    failFor(load, 'Playback failed', 0, local.owner, local.watcher);
   }
 }
 
@@ -878,7 +938,6 @@ function applyCastSubtitle(language: string | null | undefined, subtitleIndex?: 
 
 async function loadCast(load: LoadMessage | undefined = current): Promise<void> {
   if (!load) return;
-  const id = load.id;
   const session = castContext?.getCurrentSession();
   const media = load.media;
   const chrome = window.chrome?.cast;
@@ -887,7 +946,7 @@ async function loadCast(load: LoadMessage | undefined = current): Promise<void> 
     tellFor(load, 'den-cast-request', asking());
     return;
   }
-  const url = playUrl(id, media);
+  const url = playUrl(load);
   const requested = {
     url,
     external: media.external === true,
@@ -1004,25 +1063,26 @@ async function open(message: LoadMessage): Promise<void> {
     lanHttpMedia(message.media.lanUrl ?? '') ||
     (message.media.mode === 'cast' && message.media.lanProven === true && message.media.lanUrl)
   ) {
-    onLan.add(message.id);
+    onLan.add(message);
     if (ownsCurrent(message)) tellFor(message, 'den-lan');
   }
   // Home first: on home Wi-Fi the router never loops a request for the public address back in, so only the
   // home-network address can play. Anywhere else this fails fast and the public address is used as before.
-  if (!onLan.has(message.id) && (await lanReachable(message.media.lanUrl))) {
-    onLan.add(message.id);
+  if (!onLan.has(message) && (await lanReachable(message.media.lanUrl))) {
+    if (!ownsCurrent(message)) return;
+    onLan.add(message);
     // A link limit the player remembered from away doesn't belong here.
     if (ownsCurrent(message)) tellFor(message, 'den-lan');
   }
   if (!ownsCurrent(message)) return;
   // No home upload sits between this browser and den-remux on the LAN, so there is no link to measure.
-  const measured = onLan.has(message.id) ? false : await measure(message);
+  const measured = onLan.has(message) ? false : await measure(message);
   if (measured) await continued(message);
   if (!ownsCurrent(message)) return;
   // A receiver already chosen (the player's offer, `den-choose`) takes the load; asked for in browser mode, `loadCast`
   // has the player ask again for what this receiver plays.
   if (message.media.mode === 'cast' || castContext?.getCurrentSession()) await loadCast(message);
-  else await loadLocal(message, playUrl(message.id, message.media));
+  else await loadLocal(message, playUrl(message));
   if (ownsCurrent(message))
     applySubtitle(message.media.subtitleLanguage, message.media.subtitleIndex);
 }
@@ -1404,10 +1464,9 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
     keepProfile(profile);
     if (castContext?.getCurrentSession()) tell('den-cast-request', asking());
   } else if (message.type === 'den-reset') {
+    if (!current || message.id !== current.id || message.generation !== current.generation) return;
     // The player has gone back to playing in its own page and keeps this one for its Cast button: what was loaded
     // here is let go as a hidden page would let it go (`pagehide`).
-    watcher?.stop();
-    watcher = undefined;
     stopLocal();
     video.removeAttribute('src');
     if (!castStarted) endPlaying();
@@ -1436,9 +1495,7 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
 // The player outside removes this frame when its session ends — closed, restarted, or replaced — and that is this
 // page's hide. The last report goes first, then the end; a receiver still fetches on its own, so its session is left.
 window.addEventListener('pagehide', () => {
-  watcher?.stop();
-  watcher = undefined;
-  link?.dispose();
+  stopLocal();
   if (!castStarted) endPlaying();
 });
 
@@ -1465,23 +1522,4 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
   } else {
     video.currentTime = message.time;
   }
-});
-
-video.addEventListener('timeupdate', () => {
-  lastPosition = Math.max(0, video.currentTime);
-  if (Number.isFinite(video.duration)) lastDuration = Math.max(0, video.duration);
-  tellFor(playingLoad, 'den-progress', {
-    currentTime: video.currentTime,
-    duration: Number.isFinite(video.duration) ? video.duration : undefined,
-    paused: video.paused,
-  });
-});
-video.addEventListener('ended', () => {
-  naturallyFinished = true;
-  tellFor(playingLoad, 'den-ended');
-});
-video.addEventListener('error', () => {
-  clearLocalPlay(playingLoad);
-  if (playingLoad)
-    failFor(playingLoad, video.error?.message || 'Playback failed', video.error?.code ?? 0);
 });
