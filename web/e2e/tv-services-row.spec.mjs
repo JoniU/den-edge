@@ -7,6 +7,7 @@ test('TV Services keeps its reserved height when provider discovery settles unav
   await page.goto(`${E2E_ORIGIN}/test/services-row.html`);
 
   const row = page.getByRole('region', { name: 'Services' });
+  await page.evaluate(() => document.fonts.ready);
   await expect(row).toHaveAttribute('data-layout-state', 'pending');
   const pending = await row.evaluate((section) => {
     const box = section.getBoundingClientRect();
