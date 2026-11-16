@@ -469,6 +469,8 @@ export class LibraryLog {
     adopt: () => void;
     cancel: () => void;
   };
+  /** Cached restore side work shares one revocable lifetime, including membership and the adopted first pull. */
+  private cachedAuthority?: { cancel: () => void };
   private head = 0;
   private generation?: string;
   /** `observedGeneration` as this page set it. */
@@ -880,6 +882,8 @@ export class LibraryLog {
   close(): void {
     this.openingPass?.cancel();
     this.openingPass = undefined;
+    this.cachedAuthority?.cancel();
+    this.cachedAuthority = undefined;
     this.runtimeChannel?.close();
     this.runtimeChannel = undefined;
     // den-core's memory is not the garbage collector's: a read after closing builds the index again.
@@ -2429,13 +2433,26 @@ export class LibraryLog {
       const kept = await log.keptWork();
       const hasRetainedWork = log.pendingActions > 0;
       if (await log.restoreFacts(factManifest.generation, factManifest.head)) {
+        let active = true;
+        let openingResponse: Response | undefined;
+        const cachedRequest = new AbortController();
+        const cancelCachedAuthority = () => {
+          if (!active) return;
+          active = false;
+          cachedRequest.abort(new DOMException('Cached open was superseded', 'AbortError'));
+          void openingResponse?.body?.cancel().catch(() => undefined);
+        };
+        log.cachedAuthority = { cancel: cancelCachedAuthority };
         // Shown without waiting for den-edge: an unanswered request once kept this copy off the screen. A membership
-        // not yet registered is registered beside it, and claimed once den-edge has it.
+        // not yet registered is registered beside it, and claimed once den-edge has it. Registration shares this
+        // cached authority: a delayed response from a closed/replaced instance cannot claim global relay authority.
         if (log.memberRegistered) useLibraryCredential(keys);
         else
-          void log.registerMember().then(() => {
-            if (log.memberRegistered && !log.refused) useLibraryCredential(keys);
-          });
+          void log
+            .registerMember(() => active, cachedRequest.signal)
+            .then(() => {
+              if (active && log.memberRegistered && !log.refused) useLibraryCredential(keys);
+            });
         log.fromCache = true;
         log.projectJournal();
         let overlay: { publish: () => void; refuse: () => void } | undefined;
@@ -2454,15 +2471,12 @@ export class LibraryLog {
           };
           let settleAdoption!: (adopted: boolean) => void;
           let settled = false;
-          let active = true;
-          let openingResponse: Response | undefined;
           const adopted = new Promise<boolean>((resolve) => (settleAdoption = resolve));
           const settle = (value: boolean) => {
             if (settled) return;
             settled = true;
             settleAdoption(value);
           };
-          const openingRequest = new AbortController();
           // Start the first request before mutation policy is ready. Its response cannot update protocol, facts,
           // cursors, visible state, or retained delivery until both the complete overlay is projected and the
           // foreground scheduler adopts this exact pass. Closing a speculative/superseded service aborts the request.
@@ -2470,7 +2484,7 @@ export class LibraryLog {
             ready: Promise.all([overlayReady, adopted]).then(
               ([projected, foreground]) => projected && foreground,
             ),
-            signal: openingRequest.signal,
+            signal: cachedRequest.signal,
             active: () => active,
             response: (value) => (openingResponse = value),
           });
@@ -2478,10 +2492,8 @@ export class LibraryLog {
             result,
             adopt: () => settle(true),
             cancel: () => {
-              active = false;
               settle(false);
-              openingRequest.abort(new DOMException('Cached open was superseded', 'AbortError'));
-              void openingResponse?.body?.cancel().catch(() => undefined);
+              cancelCachedAuthority();
             },
           };
           void result.catch(() => undefined);
@@ -2982,7 +2994,7 @@ export class LibraryLog {
           // The log is here again (or always was): a refused start is over, and the membership stands again.
           if (this.refused || !hasLibraryCredential()) {
             // Register before exposing the proof to relayed requests.
-            await this.registerMember(active);
+            await this.registerMember(active, opening?.signal);
             if (!active()) return null;
             this.refused = false;
             useLibraryCredential(this.keys);
@@ -3012,7 +3024,7 @@ export class LibraryLog {
             // Registered under the generation it now reads: under the old one den-edge refuses it.
             this.generation = page.generation;
             this.writeGeneration = undefined;
-            await this.registerMember(active);
+            await this.registerMember(active, opening?.signal);
             if (!active()) return null;
             this.head = 0;
             for (const entry of this.entries.values()) entry.seq = 0;
@@ -4296,23 +4308,31 @@ export class LibraryLog {
   }
 
   /** Register this browser's membership, once at a time: a cached open starts it while `refresh` may ask too. */
-  private registerMember(active: () => boolean = () => true): Promise<void> {
+  private registerMember(active: () => boolean = () => true, signal?: AbortSignal): Promise<void> {
     if (this.memberRegistered || this.offline) return Promise.resolve();
-    return (this.registering ??= this.putMember(active).finally(
+    return (this.registering ??= this.putMember(active, signal).finally(
       () => (this.registering = undefined),
     ));
   }
 
-  private async putMember(active: () => boolean): Promise<void> {
-    const put = (generation?: string) =>
-      this.send(`/lib/${this.keys.id}/member`, {
-        method: 'PUT',
-        headers: {
-          ...this.headers(),
-          ...(generation ? { 'x-den-generation': generation } : {}),
-          'x-den-library-member': `${this.keys.id}:${this.keys.member}`,
+  private async putMember(active: () => boolean, signal?: AbortSignal): Promise<void> {
+    const put = async (generation?: string) => {
+      const response = await this.send(
+        `/lib/${this.keys.id}/member`,
+        {
+          method: 'PUT',
+          ...(signal ? { signal } : {}),
+          headers: {
+            ...this.headers(),
+            ...(generation ? { 'x-den-generation': generation } : {}),
+            'x-den-library-member': `${this.keys.id}:${this.keys.member}`,
+          },
         },
-      });
+        false,
+      );
+      if (active()) await this.observeProtocol(response, active);
+      return response;
+    };
     try {
       let registered = this.writeGeneration ?? this.generation;
       let res = await put();
@@ -4343,6 +4363,7 @@ export class LibraryLog {
           `den: den-edge did not register this browser's membership (${res.status} ${(await errorCode(res)) ?? ''})`,
         );
     } catch (error) {
+      if (!active()) return;
       // Sync and playback remain usable; a later write/open retries registration.
       console.warn("den: this browser's membership could not be registered", error);
     }

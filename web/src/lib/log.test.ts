@@ -13,7 +13,7 @@ import {
 import { LibraryLog, LibraryUpdateRequiredError } from './log';
 import { LibraryFactStore } from './libraryFactStore';
 import { applyOps, opsFor } from './libraryV4';
-import { forgetLibraryCredential, hasLibraryCredential } from './relayFetch';
+import { credentialVersion, forgetLibraryCredential, hasLibraryCredential } from './relayFetch';
 import * as syncLoader from './syncLoader';
 import { recordTrackerEvent, trackerEvent } from './trackerEvents';
 import { fetchDetailsResult } from './workerTmdbProvider';
@@ -2220,6 +2220,58 @@ describe('LibraryLog', () => {
     expect(members).toBe(1);
     await log.refresh();
     expect(members, 'not asked again').toBe(1);
+    forgetLibraryCredential();
+  });
+
+  it('does not let a delayed closed cached registration replace its successor credential', async () => {
+    const { data, vault } = memoryVault();
+    const server = await edge([row(1)], [], 'generation-1');
+    let phase: 'prime' | 'replace' = 'prime';
+    let members = 0;
+    let releaseOld!: () => void;
+    const oldResponse = new Promise<Response>(
+      (resolve) => (releaseOld = () => resolve(new Response('{}'))),
+    );
+    let oldStarted!: () => void;
+    const oldRegistration = new Promise<void>((resolve) => (oldStarted = resolve));
+    let oldSignal: AbortSignal | null | undefined;
+    const connection: typeof fetch = async (url, init) => {
+      if (init?.method === 'PUT') {
+        members++;
+        if (phase === 'prime') return new Response('{}', { status: 503 });
+        if (members === 1) {
+          oldSignal = init.signal;
+          oldStarted();
+          return oldResponse;
+        }
+        return new Response('{}');
+      }
+      return server.fetchImpl(url, init);
+    };
+    forgetLibraryCredential();
+    await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault);
+    await vi.waitFor(() => expect(keptFacts(data)).toBe(true));
+    forgetLibraryCredential();
+    phase = 'replace';
+    members = 0;
+
+    const old = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    await oldRegistration;
+    old.close();
+    expect(oldSignal?.aborted).toBe(true);
+    const replacement = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    await vi.waitFor(() => expect(hasLibraryCredential()).toBe(true));
+    expect(members).toBe(2);
+    const successorCredential = credentialVersion();
+    releaseOld();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(credentialVersion(), 'the closed registration cannot reinstall global authority').toBe(
+      successorCredential,
+    );
+    expect(hasLibraryCredential()).toBe(true);
+    await replacement.refresh();
+    expect(members, 'the successful successor registration is reused').toBe(2);
+    replacement.close();
     forgetLibraryCredential();
   });
 
