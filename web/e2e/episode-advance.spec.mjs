@@ -307,8 +307,10 @@ const progressOf = (page, episode) =>
     [SERIES, episode],
   );
 
-const nextMetadata = (page, command) =>
-  page.evaluate((command) => window.denTestNextEpisodeMetadata[command](), command);
+const nextMetadata = async (page, command) => {
+  await page.waitForFunction(() => window.denTestNextEpisodeMetadata);
+  return page.evaluate((command) => window.denTestNextEpisodeMetadata[command](), command);
+};
 
 /** Play the series from its page: Season 1's first episode. */
 async function playFirstEpisode(page, { next = true } = {}) {

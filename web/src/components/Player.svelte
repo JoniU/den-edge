@@ -210,7 +210,6 @@
     playbackReceiptHandoffAsOwner,
     onplaybackreceipthandoff,
     onnext,
-    onnextretry,
     seasons,
     episodeProgress,
     onepisode,
@@ -270,7 +269,6 @@
     /** Leaves playback only after handing terminal progress to the host's durable recovery surface. */
     onplaybackreceipthandoff: () => void;
     onnext?: () => void;
-    onnextretry?: () => void;
     /** The series' seasons, Specials last, and how many of each have aired: what the Episodes list offers. */
     seasons?: readonly { number: number; aired: number }[];
     /** How much of an episode this profile has watched, 0 to 1. */
@@ -5499,7 +5497,7 @@
     else if (awaitingNext && nextAvailability === 'failed')
       list.push({
         text: i18n.phrase('Couldn’t check for the next episode.'),
-        action: onnextretry ? { label: i18n.phrase('Try again'), run: onnextretry } : undefined,
+        action: onnext ? { label: i18n.phrase('Try again'), run: onnext } : undefined,
         urgent: true,
       });
     else if (awaitingNext && nextAvailability === 'unreleased')
