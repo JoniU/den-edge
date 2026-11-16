@@ -293,9 +293,10 @@
         retryVersions = undefined;
         answer = await loadVersions().catch(() => null);
       } while (current() && answer === undefined);
-      if (!current()) return;
+      const found = answer;
+      if (!current() || found === undefined) return;
       const upper = await franchise;
-      if (current()) placeVersions(answer, upper);
+      if (current()) placeVersions(found, upper);
     });
     if (rebuild) {
       void Promise.all([
