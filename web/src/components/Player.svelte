@@ -551,6 +551,8 @@
   let castDevice = $state<string>();
   /** A Cast failure in plain words, with a way back when this page can offer one. */
   let castNotice = $state<{ text: string; retry?: () => void } | null>(null);
+  /** The exact cast-page load whose browser asked for another user gesture before local playback may start. */
+  let castPlayBlocked = $state<{ id: string; generation: number } | null>(null);
   /** This move to Cast has spent its one retry of a TorBox stream the receiver couldn't play. */
   let castRetried = false;
   /** Where the Cast button is drawn: Den's own button surface, which the cast page's frame lies exactly over. */
@@ -590,6 +592,8 @@
    */
   let chosenRelease: string | undefined = untrack(() => filename);
   let session = $state<Session | null>(null);
+  /** Stable identity for the accepted session; unlike start attempts, failed replacements do not advance it. */
+  let castLoadGeneration = 0;
   /** Holds a direct Cast handoff until its selected external subtitle has its receiver URL. */
   let castSubtitlePreparing = $state(false);
   /**
@@ -1722,6 +1726,8 @@
     castSubtitlePreparing = result.external === true && subtitleChoice !== null;
     subtitleSelectionGeneration += 1;
     subtitleLoadFailure = null;
+    castPlayBlocked = null;
+    castLoadGeneration += 1;
     session = result;
     if (chosenRelease === result.release.filename && !continuityGroup)
       rememberContinuityChoice(result.release.filename);
@@ -2073,6 +2079,7 @@
     hls?.destroy();
     hls = undefined;
     endSession(current);
+    castPlayBlocked = null;
     session = null;
     showTransition('Resuming…');
     void begin(
@@ -2723,6 +2730,7 @@
       {
         type: 'den-load',
         id: current.playlist,
+        generation: castLoadGeneration,
         media: {
           url: current.playlist,
           ...(current.external
@@ -2884,17 +2892,34 @@
   function castMessage(event: MessageEvent<unknown>): void {
     const frame = castFrame?.contentWindow;
     if (!frame || event.source !== frame || !frameOrigin || event.origin !== frameOrigin) return;
-    const button = event.data as Parameters<typeof castButtonMessage>[0] & { generation?: unknown };
+    const button = event.data as Parameters<typeof castButtonMessage>[0] & {
+      id?: unknown;
+      generation?: unknown;
+    };
     if (button.type === 'den-ready' && castDocumentReady(event.origin, button.generation)) {
       frame.postMessage({ type: 'den-discover', interfaceLanguage }, event.origin);
       sendCastLayout();
     }
-    if (castButtonMessage(button)) return;
     const current = session;
+    // Receiver errors describe one exact LOAD, unlike document-scoped Cast-button state. A delayed receiver event
+    // from a replaced generation must not become the next session's diagnostics merely because its URL was reused.
+    if (button.type === 'den-receiver-error') {
+      if (
+        !current?.castOrigin ||
+        event.origin !== current.castOrigin ||
+        button.id !== current.playlist ||
+        button.generation !== castLoadGeneration
+      )
+        return;
+      castButtonMessage(button);
+      return;
+    }
+    if (castButtonMessage(button)) return;
     if (!current?.castOrigin || event.origin !== current.castOrigin) return;
     const message = event.data as {
       type?: string;
       id?: string;
+      generation?: number;
       currentTime?: number;
       duration?: number;
       paused?: boolean;
@@ -2907,8 +2932,17 @@
       volume?: number;
       muted?: boolean;
     };
-    if (message.type === 'den-ready' || message.id !== current.playlist) return;
-    if (message.type === 'den-progress') {
+    if (
+      message.type === 'den-ready' ||
+      message.id !== current.playlist ||
+      message.generation !== castLoadGeneration
+    )
+      return;
+    if (message.type === 'den-autoplay-blocked') {
+      castPlayBlocked = { id: current.playlist, generation: castLoadGeneration };
+    } else if (message.type === 'den-playing') {
+      castPlayBlocked = null;
+    } else if (message.type === 'den-progress') {
       if (Number.isFinite(message.currentTime)) remoteTime = Math.max(0, message.currentTime ?? 0);
       if (Number.isFinite(message.duration)) remoteDuration = Math.max(0, message.duration ?? 0);
       // The receiver's own volume, which Den's volume control now sets.
@@ -2947,7 +2981,11 @@
           restartForRecovery('Preparing Chromecast…', releaseAfterMeasure(chosenRelease));
         } else
           readyCastFrame(current.castOrigin)?.postMessage(
-            { type: 'den-continue', id: current.playlist },
+            {
+              type: 'den-continue',
+              id: current.playlist,
+              generation: castLoadGeneration,
+            },
             current.castOrigin,
           );
       }
@@ -3005,6 +3043,7 @@
       endCastSession();
       finished();
     } else if (message.type === 'den-error') {
+      castPlayBlocked = null;
       casting = false;
       endCastSession();
       castFailed = true;
@@ -3475,13 +3514,17 @@
   });
 
   // Back to playing in this page, the frame stays for its button: what it had loaded is let go there.
-  let castFrameLoad: string | undefined;
+  let castFrameLoad: { id: string; generation: number } | undefined;
   $effect(() => {
     const current = session;
-    if (current?.castOrigin) castFrameLoad = current.playlist;
+    if (current?.castOrigin)
+      castFrameLoad = { id: current.playlist, generation: castLoadGeneration };
     else if (castFrameLoad && current && !heldFrame && frameOrigin) {
+      const reset = castFrameLoad;
       castFrameLoad = undefined;
-      untrack(() => readyCastFrame(frameOrigin)?.postMessage({ type: 'den-reset' }, frameOrigin));
+      untrack(() =>
+        readyCastFrame(frameOrigin)?.postMessage({ type: 'den-reset', ...reset }, frameOrigin),
+      );
     }
   });
 
@@ -3533,7 +3576,7 @@
   // rather than leaving the frame blank.
   $effect(() => {
     const current = session;
-    if (!current?.castOrigin || casting) return;
+    if (!current?.castOrigin || casting || castPlayBlocked) return;
     const wait = setTimeout(() => {
       if (session !== current || played || casting) return;
       const why = `nothing played in the cast page after ${castPlayMs / 1000} s`;
@@ -4241,6 +4284,7 @@
       {
         type: 'den-subtitle',
         id: current.playlist,
+        generation: castLoadGeneration,
         language: selectedSubtitleLanguage(current),
         track: current.externalSubtitles
           ?.filter((track) => track.value === subtitleChoice && track.castUrl)
@@ -4625,7 +4669,10 @@
     if (!castView || !current?.castOrigin) return false;
     const frame = readyCastFrame(current.castOrigin);
     if (!frame) return false;
-    frame.postMessage({ ...message, id: current.playlist }, current.castOrigin);
+    frame.postMessage(
+      { ...message, id: current.playlist, generation: castLoadGeneration },
+      current.castOrigin,
+    );
     return true;
   }
 
@@ -4800,7 +4847,10 @@
     if (!current?.castOrigin) return false;
     const frame = readyCastFrame(current.castOrigin);
     if (!frame) return false;
-    frame.postMessage({ type: 'den-seek', id: current.playlist, time }, current.castOrigin);
+    frame.postMessage(
+      { type: 'den-seek', id: current.playlist, generation: castLoadGeneration, time },
+      current.castOrigin,
+    );
     return true;
   }
 
@@ -5048,6 +5098,7 @@
       avplay = undefined;
     }
     endSession(current, undefined, evidence);
+    castPlayBlocked = null;
     session = null;
   }
 
@@ -5331,6 +5382,11 @@
           (offset) => formattedSubtitleOffset(offset),
         ),
         quiet: true,
+      });
+    if (castPlayBlocked)
+      list.push({
+        text: i18n.text('player.autoplayBlocked'),
+        urgent: true,
       });
     const failed = subtitleLoadFailure;
     if (failed)
@@ -6740,6 +6796,7 @@
       bind:this={castFrame}
       class="cast-frame"
       class:cast-frame-stage={castStage}
+      class:cast-frame-play-blocked={castStage && !!castPlayBlocked}
       class:cast-frame-unplaced={!castFrameBox}
       class:cast-focused={castFocus === 'keyboard'}
       style:left={castFrameBox ? `${castFrameBox.left}px` : undefined}
@@ -7441,6 +7498,11 @@
     z-index: auto;
     border-radius: 0;
     background: #000;
+  }
+
+  /* A blocked cross-origin player must receive its own trusted Play click, above Den's overlapping chrome. */
+  .cast-frame-stage.cast-frame-play-blocked {
+    z-index: 6;
   }
 
   /* Before it has a place, rendered but unseen, so the Cast SDK in it runs as usual. */
