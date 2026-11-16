@@ -263,11 +263,23 @@ test('Den’s receiver, under its policy, shows Den while idle and tells a sende
     );
     await expect(page.locator('.brand')).toBeVisible();
 
-    // What the TV's player does reaches every sender: the TV's own console is out of reach.
+    // What the TV's player does reaches every sender: the TV's own console is out of reach. A delayed SDK event
+    // without media identity must remain unidentified even after two identified LOADs; otherwise it is falsely
+    // attributed to whichever load happens to be active when the callback arrives.
     await page.evaluate(() => {
       window.__player.load({
-        requestData: { media: { contentType: 'application/x-mpegurl', hlsSegmentFormat: 'fmp4' } },
+        requestData: {
+          media: { contentType: 'application/x-mpegurl', hlsSegmentFormat: 'fmp4' },
+          customData: { denLoad: { id: 'same', generation: 1 } },
+        },
       });
+      window.__player.load({
+        requestData: {
+          media: { contentType: 'application/x-mpegurl', hlsSegmentFormat: 'fmp4' },
+          customData: { denLoad: { id: 'same', generation: 2 } },
+        },
+      });
+      window.__player.mediastatus({ mediaStatus: { playerState: 'PLAYING' } });
       window.__player.buffering({ isBuffering: true });
       window.__player.error({ detailedErrorCode: 311, error: { shakaErrorCode: 1001 } });
     });
@@ -280,11 +292,24 @@ test('Den’s receiver, under its policy, shows Den while idle and tells a sende
       {
         type: 'den-receiver-event',
         event: 'load',
+        id: 'same',
+        generation: 1,
         contentType: 'application/x-mpegurl',
         hlsSegmentFormat: 'fmp4',
         hlsVideoSegmentFormat: null,
         streamType: null,
       },
+      {
+        type: 'den-receiver-event',
+        event: 'load',
+        id: 'same',
+        generation: 2,
+        contentType: 'application/x-mpegurl',
+        hlsSegmentFormat: 'fmp4',
+        hlsVideoSegmentFormat: null,
+        streamType: null,
+      },
+      { type: 'den-receiver-event', event: 'state', state: 'PLAYING', idleReason: null },
       { type: 'den-receiver-event', event: 'buffering', buffering: true },
       {
         type: 'den-receiver-event',

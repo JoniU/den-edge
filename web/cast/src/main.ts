@@ -417,6 +417,8 @@ let castDevices: boolean | undefined;
  * must not end replacement state before that media's own INTERRUPTED arrives: read as a stop, it ended the session.
  */
 let receiverLoadAttempt: { load: LoadMessage; replacing: boolean; settled?: boolean } | undefined;
+/** The last LOAD whose sender promise succeeded, even if a newer load had already retired its authority. */
+let receiverLandedLoad: LoadMessage | undefined;
 let castSubtitleAppliedLoad: LoadMessage | undefined;
 let measuredLoad: LoadMessage | undefined;
 interface LocalPlayback {
@@ -1001,6 +1003,7 @@ async function loadCast(load: LoadMessage | undefined = current): Promise<void> 
   receiverLoadAttempt = attempt;
   try {
     await session.loadMedia(request);
+    receiverLandedLoad = load;
     // Overlapping LOAD promises may settle out of order. A stale completion has no authority to publish ownership,
     // end the accepted media, or clear a newer attempt. If it landed on the receiver last, reassert the current load.
     if (!ownsCurrent(load) || receiverLoadAttempt !== attempt) {
@@ -1043,7 +1046,14 @@ async function loadCast(load: LoadMessage | undefined = current): Promise<void> 
     if (ownsAttempt) receiverLoadAttempt = undefined;
     if (!ownsCurrent(load) || !ownsAttempt) return;
     castStarted = false;
-    // The Cast session is kept: the player decides what is tried next, and only Stop casting ends it.
+    // An older overlapping LOAD can succeed while this exact replacement is pending. If the replacement then
+    // fails, the receiver is playing media which no accepted Den load owns; stop it instead of reporting failure
+    // for the new load while silently leaving the retired one on the TV.
+    const stoppedUnownedReceiver =
+      receiverLandedLoad !== undefined && receiverLandedLoad !== playingLoad;
+    if (stoppedUnownedReceiver) castContext?.endCurrentSession(true);
+    // Ordinarily the Cast session is kept so the player decides what is tried next. The exception above is an
+    // overlapping LOAD which demonstrably left retired media on the receiver: that session cannot remain truthful.
     const message = 'Chromecast could not load this release';
     setStatus(message);
     failFor(load, message, 0, requested);
@@ -1185,6 +1195,7 @@ function initializeCast(): boolean {
       });
     } else if (state === 'SESSION_ENDED') {
       receiverPlayable = undefined;
+      receiverLandedLoad = undefined;
     }
     if (state === 'SESSION_ENDED' && castStarted) {
       console.info(`[Den cast] ${JSON.stringify({ event: 'receiver-session-ended' })}`);

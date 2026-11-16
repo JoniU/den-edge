@@ -82,6 +82,7 @@ context.addCustomMessageListener(RECEIVER_NAMESPACE, (event) => {
  * own console is out of reach on a Chromecast, and a LOAD that never plays says nothing to the sender otherwise.
  */
 let activeLoad: ReceiverLoad | undefined;
+const ACTIVE_LOAD = Symbol('active receiver load');
 function loadFor(event: PlayerEvent): ReceiverLoad | undefined {
   return (
     receiverLoad(event.requestData?.customData) ??
@@ -93,9 +94,10 @@ function loadFor(event: PlayerEvent): ReceiverLoad | undefined {
 function tellSenders(
   event: string,
   detail: Record<string, unknown>,
-  load: ReceiverLoad | undefined = activeLoad,
+  load: ReceiverLoad | undefined | typeof ACTIVE_LOAD = ACTIVE_LOAD,
 ): void {
-  const message = { type: 'den-receiver-event', event, ...load, ...detail };
+  const reportedLoad = load === ACTIVE_LOAD ? activeLoad : load;
+  const message = { type: 'den-receiver-event', event, ...reportedLoad, ...detail };
   console.info(`[Den receiver] ${JSON.stringify(message)}`);
   try {
     // No sender id: every sender connected to this receiver hears it.

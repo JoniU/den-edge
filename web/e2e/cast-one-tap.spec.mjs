@@ -72,7 +72,8 @@ const sdk = ({
   window.calls = [];
   window.states = [];
   window.heldLoads = [];
-  window.releaseLoad = (index) => window.heldLoads[index]?.();
+  window.receiverLoad = null;
+  window.releaseLoad = (index, outcome = 'resolve') => window.heldLoads[index]?.(outcome);
   window.chrome = window.chrome || {};
   window.chrome.cast = {
     AutoJoinPolicy: { PAGE_SCOPED: 'page_scoped' },
@@ -129,6 +130,7 @@ const sdk = ({
       window.calls.push(stop ? 'stop' : 'leave');
       session = null;
       loaded = false;
+      window.receiverLoad = null;
       player.isConnected = false;
       fire('sessionstatechanged', { sessionState: 'SESSION_ENDED' });
       setState(present ? 'NOT_CONNECTED' : 'NO_DEVICES_AVAILABLE');
@@ -149,8 +151,10 @@ const sdk = ({
             window.loads.push({ url: request.media.contentId, currentTime: request.currentTime, denLoad });
             if (${refuse}) return Promise.reject('load_failed');
             if (${holdReplacementLoads} && loaded)
-              return new Promise((resolve) => window.heldLoads.push(() => {
+              return new Promise((resolve, reject) => window.heldLoads.push((outcome) => {
+                if (outcome === 'reject') return reject('load_failed');
                 loaded = true;
+                window.receiverLoad = denLoad;
                 player.currentTime = request.currentTime || 0;
                 player.isPaused = false;
                 resolve();
@@ -163,9 +167,13 @@ const sdk = ({
                 player.playerState = 'IDLE';
                 changes.forEach((fn) => fn());
                 idleReason = null;
-                setTimeout(resolve, 100);
+                setTimeout(() => {
+                  window.receiverLoad = denLoad;
+                  resolve();
+                }, 100);
               }, 100));
             loaded = true;
+            window.receiverLoad = denLoad;
             player.currentTime = request.currentTime || 0;
             player.isPaused = false;
             if (${JSON.stringify(report ?? null)} === 'fails')
@@ -652,10 +660,67 @@ test('reordered same-id receiver LOADs publish only the accepted generation and 
       },
       [TORBOX, 98],
     );
+    await frameOf(page).evaluate(() => {
+      window.receiverSays({
+        type: 'den-receiver-event',
+        event: 'error',
+        detailedErrorCode: 998,
+        error: { shakaErrorCode: 998 },
+      });
+      window.receiverSays({
+        type: 'den-receiver-event',
+        event: 'state',
+        state: 'IDLE',
+        idleReason: 'ERROR',
+      });
+    });
     await expect.poll(() => page.evaluate(() => window.staleReceiverErrors)).toEqual([]);
+    await expect(page.locator('.player video')).toHaveCount(0);
     expect(await receiver(page, 'calls')).not.toEqual(
       expect.arrayContaining([expect.stringMatching(/^(stop|leave)$/)]),
     );
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a refused replacement stops a stale overlapping LOAD which landed on the receiver', async () => {
+  const { browser, page } = await open(chromium, {
+    appId: DEN_APP,
+    sdkOptions: { holdReplacementLoads: true, report: true },
+  });
+  try {
+    await playingPast(page, 2);
+    await reveal(page);
+    await castButton(page).click();
+    await expect.poll(() => receiver(page, 'loads')).toHaveLength(1);
+    await page.evaluate(
+      ([cast, url]) => {
+        const frame = document.querySelector(`iframe[src^="${cast}"]`);
+        for (const generation of [98, 99])
+          frame.contentWindow.postMessage(
+            {
+              type: 'den-load',
+              id: url,
+              generation,
+              media: { url, mode: 'cast', title: `Fixture ${generation}`, external: true },
+            },
+            cast,
+          );
+      },
+      [CAST, TORBOX],
+    );
+    await expect.poll(() => receiver(page, 'heldLoads').then((loads) => loads.length)).toBe(2);
+    await frameOf(page).evaluate(() => window.releaseLoad(0));
+    await expect.poll(() => receiver(page, 'receiverLoad')).toEqual({ id: TORBOX, generation: 98 });
+    await frameOf(page).evaluate(() => window.releaseLoad(1, 'reject'));
+    await expect.poll(() => receiver(page, 'calls')).toContain('stop');
+    await expect.poll(() => receiver(page, 'receiverLoad')).toBeNull();
+    await expect(
+      page.getByText(
+        'The Chromecast couldn’t play this TorBox release, so it’s playing here again.',
+      ),
+    ).toBeVisible({ timeout: 15_000 });
   } finally {
     await browser.close();
   }
