@@ -368,6 +368,7 @@
             '[data-route-page][data-active="true"]',
           );
           const pageRect = activePage?.getBoundingClientRect();
+          const scrollRoot = document.scrollingElement ?? document.documentElement;
           const target = window as Window & { __denScrollRestoreTimeline?: unknown[] };
           const timeline = (target.__denScrollRestoreTimeline ??= []);
           timeline.push({
@@ -376,8 +377,8 @@
             requested: { x: current.x, y: current.y },
             resulting: { x: window.scrollX, y: window.scrollY },
             max: {
-              x: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
-              y: Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
+              x: Math.max(0, scrollRoot.scrollWidth - scrollRoot.clientWidth),
+              y: Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight),
             },
             routePage: activePage
               ? {
