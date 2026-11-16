@@ -177,16 +177,21 @@
       authority.connections.snapshot.error ??
       authority.simkl?.snapshot.error,
   );
-  // A failed selector may retain its previous value for diagnosis, but that stale authority must not keep Settings
-  // actionable or hide the retry control while a fresh binding is required.
-  const ready = $derived(
-    exactAuthority &&
-      !!settings &&
+  // Keep a complete presentation mounted across a ready-to-ready authority swap. Props invalidate exactAuthority
+  // before the pre-effect can publish the replacement bundle; using exactAuthority as the block's mount condition
+  // would therefore destroy and recreate every section for that internal handoff. Commands and controls still use
+  // exact `ready`, so the old presentation cannot act during that boundary. An actually opening or failed replacement
+  // has no complete presentation and remains withheld.
+  const authorityLoaded = $derived(
+    !!settings &&
       !!effectivePreferences &&
       !!connections &&
       (__DEN_TV_LEGACY_JS_CORE__ || !!simkl) &&
       !loadError,
   );
+  // A failed selector may retain its previous value for diagnosis, but that stale authority must not keep Settings
+  // actionable or hide the retry control while a fresh binding is required.
+  const ready = $derived(exactAuthority && authorityLoaded);
   /** Tells Den's own plugins apart, so they're listed by name rather than by a LAN address. */
   let routes = $state.raw<Routes>({});
   /** Whether /routes has answered (or failed): until then an install on another of the deployment's names is unplaced. */
@@ -543,7 +548,7 @@
     {#if !__DEN_TV_LEGACY_JS_CORE__ && prefs}
       <PlaybackSection {prefs} {disabled} save={savePrefs} />
     {/if}
-    {#if ready}
+    {#if authorityLoaded}
       {#if !__DEN_TV_LEGACY_JS_CORE__}
         {#key authority.model}<ContentSection
             prefs={prefs!}
