@@ -629,7 +629,11 @@
   }
   if (import.meta.env.DEN_E2E) {
     (window as unknown as { denTestReplacePlayingTitle?: () => void }).denTestReplacePlayingTitle =
-      () => playerAddress({ title: { type: 'movie', id: 1001, title: 'Film 1001' } }, true);
+      () =>
+        playerAddress(
+          { title: { type: 'movie', id: 1001, title: ['Film', 1001].join(' ') } },
+          true,
+        );
     onDestroy(
       () =>
         delete (window as unknown as { denTestReplacePlayingTitle?: unknown })

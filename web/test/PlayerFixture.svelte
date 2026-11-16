@@ -134,6 +134,7 @@
     resume={{ fraction: resumeSeconds ? resumeSeconds / 60 : 0, seconds: resumeSeconds }}
     next={hasNext ? 'S1 · E2' : undefined}
     {nextEpisode}
+    nextAvailability={nextEpisode ? 'ready' : undefined}
     {castPlayMs}
     onmanagedplayback={receiptBoundary
       ? async (signal) => {
