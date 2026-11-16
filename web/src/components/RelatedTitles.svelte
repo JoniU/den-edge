@@ -35,9 +35,6 @@
   const regions = new Intl.DisplayNames(['en'], { type: 'region' });
   import BrowseRow from './BrowseRow.svelte';
 
-  const cancelled = (error: unknown, signal: AbortSignal) =>
-    signal.aborted || (error as { failure?: { code?: string } })?.failure?.code === 'cancelled';
-
   let {
     detail,
     content,
@@ -218,12 +215,11 @@
       const row = await versionsRow(self, atlas, franchise, options, controller.signal);
       return row ? firstScreen(tracked(row, true), shown) : row;
     };
+    // versionsRow turns every transient provider error into undefined. Only cancellation escapes, and cancellation
+    // belongs to the retired build rather than its recovery UI.
     const versionsAnswer = discoveryGate
       .then((start) => (start ? loadVersions() : null))
-      .catch((error) => {
-        if (cancelled(error, controller.signal)) return null;
-        throw error;
-      });
+      .catch(() => null);
     const decideDiscovery = (start: boolean) => {
       if (discoveryDecided) return;
       discoveryDecided = true;
@@ -299,20 +295,14 @@
     const retry = async () => {
       if (!current() || retryVersions !== retry) return;
       retryVersions = undefined;
-      try {
-        const answer = await loadVersions();
-        if (!current()) return;
-        if (answer === undefined) {
-          retryVersions = retry;
-          return;
-        }
-        const upper = await franchise;
-        if (!current()) return;
-        placeVersions(answer, upper);
-      } catch (error) {
-        if (cancelled(error, controller.signal) || !current()) return;
+      const answer = await loadVersions().catch(() => null);
+      if (!current()) return;
+      if (answer === undefined) {
         retryVersions = retry;
+        return;
       }
+      const upper = await franchise;
+      if (current()) placeVersions(answer, upper);
     };
     void versionsAnswer.then((answer) => {
       if (current() && answer === undefined) retryVersions = retry;
