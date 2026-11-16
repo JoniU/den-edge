@@ -796,7 +796,12 @@ export async function versionsRow(
       load: async (page) => (page === 1 ? titles : []),
     };
   } catch (error) {
-    if (signal?.aborted || (error as Error)?.name === 'AbortError') throw error;
+    if (
+      signal?.aborted ||
+      (error as Error)?.name === 'AbortError' ||
+      (error as { failure?: { code?: string } })?.failure?.code === 'cancelled'
+    )
+      throw error;
     return undefined;
   }
 }

@@ -1027,7 +1027,6 @@ describe('versionsRow', () => {
     const replaced = new AbortController();
     const content: ContentServiceClientPort = {
       query: async () => {
-        replaced.abort(new DOMException('title replaced', 'AbortError'));
         throw new ContentServiceError({
           code: 'cancelled',
           message: 'content request was cancelled',
