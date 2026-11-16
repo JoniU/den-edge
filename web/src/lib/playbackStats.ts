@@ -1,4 +1,4 @@
-// What a browser saw while playing a den-remux session — how its segments arrived, where playback stalled and how
+// What a browser saw while playing a den-remux session — how its segments arrived, how playback stalled and how
 // much of each track was buffered then, what it dropped and what went wrong — posted to the session's `/report` for
 // den-remux's log. The server sees requests only: whether a frozen picture was a slow link or a hole in the video
 // buffer is visible from here and nowhere else. Shared by the player and the cast page's own player.
@@ -453,8 +453,8 @@ export function watchPlayback(options: WatchOptions): Watcher {
   let started = false;
   let sources: { video?: SourceBuffer; audio?: SourceBuffer } = {};
   /**
-   * The last time the decoded frame count moved: where the play head was, and what was buffered ahead of it then — a
-   * frozen stall is placed there, so its buffer is read there too, not seconds later when it is noticed.
+   * The last time the decoded frame count moved: the playhead kept only inside this watcher, and what was buffered
+   * ahead of it then. A frozen stall reads that earlier buffer, not the one seconds later when it is noticed.
    */
   let frames: { count: number; at: number; buffered?: Pick<Stall, 'videoAhead' | 'audioAhead'> } = {
     count: -1,

@@ -92,6 +92,50 @@ describe('watchPlayback', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('uses the exact playhead only to recognize local wait recovery', () => {
+    vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }));
+    vi.stubGlobal('HTMLMediaElement', { HAVE_FUTURE_DATA: 3 });
+    const video = Object.assign(new EventTarget(), {
+      currentTime: 7_349_281.5,
+      paused: false,
+      seeking: false,
+      readyState: 2,
+      duration: 8_000_000,
+      error: null,
+      buffered: ranges([7_349_281, 7_349_300]),
+      played: ranges([0, 30]),
+      getVideoPlaybackQuality: () => ({ totalVideoFrames: 1, droppedVideoFrames: 0 }),
+    }) as unknown as HTMLVideoElement & { currentTime: number };
+    let clock = 1_000;
+    const sent: string[] = [];
+    const watcher = watchPlayback({
+      video,
+      reportUrl: '/r',
+      send: (_url, body) => sent.push(body),
+      now: () => clock,
+    });
+    video.dispatchEvent(new Event('playing'));
+    video.dispatchEvent(new Event('waiting'));
+    clock = 1_400;
+    video.currentTime += 0.25;
+    video.dispatchEvent(new Event('timeupdate'));
+    watcher.stop();
+
+    const text = sent.at(-1)!;
+    const stats = (JSON.parse(text) as { stats: PlaybackStats }).stats;
+    expect(stats.stalls).toEqual([
+      {
+        kind: 'wait',
+        videoAhead: 18.5,
+        audioAhead: 18.5,
+        loading: null,
+        idleMs: null,
+        ms: 400,
+      },
+    ]);
+    expect(text).not.toContain('7349281');
+  });
+
   it('hands on hls.js’s bandwidth estimate and the fragments behind it as it stops', () => {
     vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }));
     vi.stubGlobal('HTMLMediaElement', { HAVE_FUTURE_DATA: 3 });
