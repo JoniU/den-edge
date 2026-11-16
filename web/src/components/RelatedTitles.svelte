@@ -82,10 +82,7 @@
     start: () => Promise<void>;
     cancel: () => void;
   }>();
-  let versionsUnavailable = $state(false);
-  let versionsRetrying = false;
-  let retryVersions: (() => void) | undefined;
-  const requestVersionsRetry = () => retryVersions?.();
+  let retryVersions = $state<(() => void)>();
   /** Live BrowseRows already admitted. The one-block substitutes keep the same initial skeleton height. */
   const mountedRows = new SvelteSet<string>();
 
@@ -197,7 +194,16 @@
     const build = ++builds;
     const controller = new AbortController();
     const current = () => live && builds === build && rowsFor === key;
-    versionsUnavailable = versionsRetrying = false;
+    const placeVersions = (other: RowDef | null, upper: RowDef | null) => {
+      const next = rows.filter(({ row }) => row.id !== 'other-versions');
+      if (other)
+        next.splice(upper ? next.findIndex(({ row }) => row.id === upper.id) + 1 : 0, 0, {
+          build,
+          row: other,
+        });
+      rows = next;
+    };
+    retryVersions = undefined;
     let releaseDiscovery!: (start: boolean) => void;
     let discoveryDecided = false;
     const discoveryGate = new Promise<boolean>((resolve) => (releaseDiscovery = resolve));
@@ -218,10 +224,6 @@
         if (cancelled(error, controller.signal)) return null;
         throw error;
       });
-    void versionsAnswer.then((answer) => {
-      if (!current()) return;
-      versionsUnavailable = answer === undefined;
-    });
     const decideDiscovery = (start: boolean) => {
       if (discoveryDecided) return;
       discoveryDecided = true;
@@ -295,46 +297,34 @@
       ...(regional ? [regional] : []),
     ].map((row, index) => tracked(row, index === 0));
     const retry = async () => {
-      if (!current() || versionsRetrying) return;
-      versionsRetrying = true;
-      versionsUnavailable = false;
+      if (!current() || retryVersions !== retry) return;
+      retryVersions = undefined;
       try {
         const answer = await loadVersions();
         if (!current()) return;
         if (answer === undefined) {
-          versionsUnavailable = true;
+          retryVersions = retry;
           return;
         }
         const upper = await franchise;
         if (!current()) return;
-        const withoutPrevious = rows.filter(({ row }) => row.id !== 'other-versions');
-        if (answer) {
-          const at = upper ? withoutPrevious.findIndex(({ row }) => row.id === upper.id) + 1 : 0;
-          rows = [
-            ...withoutPrevious.slice(0, at),
-            { build, row: answer },
-            ...withoutPrevious.slice(at),
-          ];
-        } else rows = withoutPrevious;
-        versionsUnavailable = false;
+        placeVersions(answer, upper);
       } catch (error) {
         if (cancelled(error, controller.signal) || !current()) return;
-        versionsUnavailable = true;
-      } finally {
-        versionsRetrying = false;
+        retryVersions = retry;
       }
     };
-    retryVersions = retry;
+    void versionsAnswer.then((answer) => {
+      if (current() && answer === undefined) retryVersions = retry;
+    });
     if (rebuild) {
       void Promise.all([
         franchise,
         versionsAnswer,
-        Promise.all(
-          // Only replace content a viewer has already caused to load with another pre-resolved row. Untouched rows
-          // remain cheap definitions and keep the same heading/skeleton geometry when this build is published.
-          defined.map((row) => (preserve.has(row.id) ? firstScreen(row, shown) : row)),
-        ),
-      ] as const).then(([upper, version, rest]) => {
+        // Only replace content a viewer has already caused to load with another pre-resolved row. Untouched rows
+        // remain cheap definitions and keep the same heading/skeleton geometry when this build is published.
+        ...defined.map((row) => (preserve.has(row.id) ? firstScreen(row, shown) : row)),
+      ]).then(([upper, version, ...rest]) => {
         if (!current()) return;
         const next = [upper, version ?? null, ...rest]
           .filter((row): row is RowDef => row !== null)
@@ -361,10 +351,7 @@
         // Other versions sit straight under the franchise, which they are never part of.
         const other = await versionsAnswer;
         if (!current() || !other) return;
-        const at = row
-          ? rows.findIndex((entry) => entry.build === build && entry.row.id === row.id) + 1
-          : 0;
-        rows = [...rows.slice(0, at), { build, row: other }, ...rows.slice(at)];
+        placeVersions(other, row);
       });
     }
     return () => {
@@ -398,13 +385,13 @@
 </script>
 
 <div bind:this={root} aria-hidden={!active}>
-  {#if versionsUnavailable}
+  {#if retryVersions}
     <button
       type="button"
       class="den-button den-button-compact"
       aria-live="assertive"
       data-spatial-section
-      onclick={requestVersionsRetry}>{i18n.phrase('Couldn’t load these. Try again')}</button
+      onclick={retryVersions}>{i18n.phrase('Couldn’t load these. Try again')}</button
     >
   {/if}
   {#each rows as { build, row } (`${build}:${row.id}`)}
