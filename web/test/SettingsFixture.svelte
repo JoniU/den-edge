@@ -37,6 +37,7 @@
     fixtureQuery.has('profile-reset-pending');
   const joinPresentationFixture = fixtureQuery.has('join-presentation');
   const profileTrackerAuthorityFixture = fixtureQuery.has('profile-tracker-authority');
+  const importAuthorityReplacementFixture = fixtureQuery.has('hold-import-reply');
   const profileDirectory = (() => {
     if (!profileResetFixture || fixtureQuery.has('wire5-missing')) return null;
     const stored = structuredClone(profileFixture.migrationBase);
@@ -631,7 +632,9 @@
   {#if contentReady && settingsMounted}<Settings
       {link}
       {model}
-      activityModel={profileTrackerAuthorityFixture ? activityModel : model}
+      activityModel={profileTrackerAuthorityFixture || importAuthorityReplacementFixture
+        ? activityModel
+        : model}
       {content}
       local={joinPresentationFixture}
       onjoin={joinPresentationFixture ? heldJoin : undefined}
