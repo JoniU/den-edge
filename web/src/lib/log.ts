@@ -2454,6 +2454,8 @@ export class LibraryLog {
           };
           let settleAdoption!: (adopted: boolean) => void;
           let settled = false;
+          let active = true;
+          let openingResponse: Response | undefined;
           const adopted = new Promise<boolean>((resolve) => (settleAdoption = resolve));
           const settle = (value: boolean) => {
             if (settled) return;
@@ -2464,18 +2466,22 @@ export class LibraryLog {
           // Start the first request before mutation policy is ready. Its response cannot update protocol, facts,
           // cursors, visible state, or retained delivery until both the complete overlay is projected and the
           // foreground scheduler adopts this exact pass. Closing a speculative/superseded service aborts the request.
-          const result = log.pass(
-            Promise.all([overlayReady, adopted]).then(
+          const result = log.pass({
+            ready: Promise.all([overlayReady, adopted]).then(
               ([projected, foreground]) => projected && foreground,
             ),
-            openingRequest.signal,
-          );
+            signal: openingRequest.signal,
+            active: () => active,
+            response: (value) => (openingResponse = value),
+          });
           log.openingPass = {
             result,
             adopt: () => settle(true),
             cancel: () => {
+              active = false;
               settle(false);
               openingRequest.abort(new DOMException('Cached open was superseded', 'AbortError'));
+              void openingResponse?.body?.cancel().catch(() => undefined);
             },
           };
           void result.catch(() => undefined);
@@ -2909,10 +2915,12 @@ export class LibraryLog {
   }
 
   /** One `refresh` pass: whether it changed what this browser holds, and whether it read the log to its head. */
-  private async pass(
-    beforePublication?: Promise<boolean>,
-    openingSignal?: AbortSignal,
-  ): Promise<{ changed: boolean; reachedHead: boolean }> {
+  private async pass(opening?: {
+    ready: Promise<boolean>;
+    signal: AbortSignal;
+    active: () => boolean;
+    response: (value: Response) => void;
+  }): Promise<{ changed: boolean; reachedHead: boolean }> {
     // Nothing else writes a library kept only here but another tab, whose rows each save takes up (`takeKept`).
     if (this.offline) return { changed: false, reachedHead: false };
     const generationsBefore = this.generationChanges;
@@ -2923,19 +2931,27 @@ export class LibraryLog {
         for (;;) {
           const res = await this.send(
             `/lib/${this.keys.id}/changes?since=${this.head}&limit=1000`,
-            { headers: this.headers(), ...(openingSignal ? { signal: openingSignal } : {}) },
+            { headers: this.headers(), ...(opening ? { signal: opening.signal } : {}) },
             // An opening response belongs to no foreground authority yet. Observe its protocol minimum only after
             // the same adoption barrier as its rows, generation and cursor.
-            beforePublication === undefined,
+            opening === undefined,
           );
+          opening?.response(res);
           // A cached opening read may finish before its retained overlay or foreground owner exists. Do not mutate
           // any visible/log authority from that response until both boundaries accept it. A superseded open cancels
           // the body here, before generation, rows, cursors, projection or replay can escape its private request.
-          if (beforePublication && !(await beforePublication)) {
+          if (opening && (!(await opening.ready) || !opening.active())) {
             await res.body?.cancel();
             return null;
           }
-          if (beforePublication) await this.observeProtocol(res);
+          // Consume an adopted opening body before observing even its headers. `close()` can revoke authority while
+          // that body is held and cancel it; no protocol or row state has escaped at that point.
+          const openingBody = opening ? await res.json().catch(() => undefined) : undefined;
+          if (opening && !opening.active()) return null;
+          if (opening) {
+            await this.observeProtocol(res);
+            if (!opening.active()) return null;
+          }
           if (res.status === 410) this.moved = true;
           if (res.status === 404) {
             // Only the first 404 has rows den-edge acknowledged to put back; an empty relay answers it every time.
@@ -2958,7 +2974,7 @@ export class LibraryLog {
             await this.registerMember();
             useLibraryCredential(this.keys);
           }
-          const page = coherentResponsePage(res, await res.json());
+          const page = coherentResponsePage(res, opening ? openingBody : await res.json());
           if (!page) return null;
           if (
             (this.generation && page.generation && this.generation !== page.generation) ||
@@ -3051,6 +3067,7 @@ export class LibraryLog {
     this.writes = run.catch(() => null);
     const read = await run;
     if (read === null) return { changed: false, reachedHead: false };
+    if (opening && !opening.active()) return { changed: false, reachedHead: false };
     // A generation change in this pass is read from zero, but its write-back (`replay`, below) has yet to land: a
     // reader that must act on a current row waits for the next pass (recovery-code §7).
     const reachedHead = read === 'head' && this.generationChanges === generationsBefore;
@@ -3059,7 +3076,7 @@ export class LibraryLog {
     this.persist();
     // Rows that arrived may carry actions to project; with none, the projections already stand.
     if (changed) this.projectJournal();
-    return { changed: (await this.replay()) || changed, reachedHead };
+    return { changed: (await this.replay(opening?.active)) || changed, reachedHead };
   }
 
   /**
@@ -4159,40 +4176,59 @@ export class LibraryLog {
     const controller = new AbortController();
     const timedOut = () => new DOMException('den-edge stopped answering', 'TimeoutError');
     const deadline = setTimeout(() => controller.abort(timedOut()), answerMs);
-    const stop = () => controller.abort(init.signal?.reason);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const detach = () => init.signal?.removeEventListener('abort', stop);
+    const stop = () => {
+      const reason = init.signal?.reason;
+      controller.abort(reason);
+      void reader?.cancel(reason).catch(() => undefined);
+    };
     init.signal?.addEventListener('abort', stop, { once: true });
     let res: Response;
     try {
       res = await this.fetchImpl(path, { ...init, signal: controller.signal });
+    } catch (error) {
+      detach();
+      throw error;
     } finally {
       clearTimeout(deadline);
-      init.signal?.removeEventListener('abort', stop);
     }
     // Candidate profile libraries remain wire 4. Their headers must never change the household log's wire state.
     if (observeHousehold) await this.observeProtocol(res);
-    if (!res.body) return res;
-    const reader = res.body.getReader();
+    if (!res.body) {
+      detach();
+      return res;
+    }
+    const responseReader = res.body.getReader();
+    reader = responseReader;
+    if (init.signal?.aborted) stop();
     const body = new ReadableStream<Uint8Array>({
       async pull(stream) {
         let stall: ReturnType<typeof setTimeout> | undefined;
         try {
           const next = await Promise.race([
-            reader.read(),
+            responseReader.read(),
             new Promise<never>((_, reject) => {
               stall = setTimeout(() => reject(timedOut()), REQUEST_MS);
             }),
           ]);
-          if (next.done) stream.close();
-          else stream.enqueue(next.value);
+          if (next.done) {
+            detach();
+            stream.close();
+          } else stream.enqueue(next.value);
         } catch (error) {
+          detach();
           controller.abort(error);
-          void reader.cancel(error).catch(() => undefined);
+          void responseReader.cancel(error).catch(() => undefined);
           stream.error(error);
         } finally {
           clearTimeout(stall);
         }
       },
-      cancel: (reason) => reader.cancel(reason),
+      cancel: (reason) => {
+        detach();
+        return responseReader.cancel(reason);
+      },
     });
     return new Response(body, {
       status: res.status,
@@ -4663,17 +4699,18 @@ export class LibraryLog {
    * Send the work kept in this browser (`pendingPrefix`). True when some of it reached den-edge, or when drawing it
    * changed a row here even though it could not be sent (kept by another tab, or den-edge failed the batch).
    */
-  private async replay(): Promise<boolean> {
+  private async replay(active: () => boolean = () => true): Promise<boolean> {
     const projected = this.projected;
+    if (!active()) return false;
     // Kept, and sent once a read finds the log again (`refresh`).
     if (this.refused && Date.now() - this.refusedAt < RECHECK_MS)
-      return this.projectKeptChanged(projected);
+      return this.projectKeptChanged(projected, active);
     // A migration holds the household (`migrationLockedAt`): kept work waits a minute between probes, where the
     // 30-second refresh would otherwise send every piece of it again each time.
     if (this.migrationLockedAt > 0 && Date.now() - this.migrationLockedAt < MIGRATION_RECHECK_MS)
-      return this.projectKeptChanged(projected);
+      return this.projectKeptChanged(projected, active);
     // den-edge's write budget for this library is spent: kept work goes again once the `Retry-After` has passed.
-    if (Date.now() < this.throttledUntil) return this.projectKeptChanged(projected);
+    if (Date.now() < this.throttledUntil) return this.projectKeptChanged(projected, active);
     // Tried again: refused once more, it waits another `RECHECK_MS`.
     this.refused = false;
     const waiting = this.pendingActions;
@@ -4681,8 +4718,11 @@ export class LibraryLog {
     const kept = (await this.keptWork()).sort(
       (a, b) => Number(a.kind === 'restore') - Number(b.kind === 'restore'),
     );
+    if (!active()) return false;
     if (kept.length) await ensureDeferredSyncPolicy();
+    if (!active()) return false;
     for (const work of kept) {
+      if (!active()) return false;
       const { key, kind } = work;
       // Sent by a send that ended since it was read.
       if (this.flushing.has(key) || !this.pending.has(key)) continue;
@@ -4703,8 +4743,16 @@ export class LibraryLog {
       }
       // Every tab's Worker replays the same kept recovery: one sends it, and the others find it gone.
       const release = kind === 'restore' ? await this.holdRestore() : undefined;
+      if (!active()) {
+        release?.();
+        return false;
+      }
       if (release) {
         await this.refreshPending();
+        if (!active()) {
+          release();
+          return false;
+        }
         if (!this.pending.has(key)) {
           release();
           continue;
@@ -4712,6 +4760,7 @@ export class LibraryLog {
       }
       this.flushing.add(key);
       try {
+        if (!active()) return false;
         const { restore, ops } = this.v4Work(work);
         const riders = work.riders ?? [];
         for (const row of [...restore, ...riders]) this.project(row);
@@ -4733,6 +4782,7 @@ export class LibraryLog {
       }
     }
     if (
+      active() &&
       !this.runtimeAvailable &&
       this.recoveryRows &&
       Date.now() - (this.rejected.get(this.pendingPrefix + 'recovery') ?? 0) >= RECHECK_MS
@@ -4765,9 +4815,13 @@ export class LibraryLog {
   }
 
   /** Kept work not sent now is still drawn; true when that changed a row since `projected`. */
-  private async projectKeptChanged(projected: number): Promise<boolean> {
-    await this.projectKept();
-    return this.projected !== projected;
+  private async projectKeptChanged(projected: number, active: () => boolean): Promise<boolean> {
+    const kept = await this.keptWork();
+    if (!active()) return false;
+    if (kept.length) await ensureDeferredSyncPolicy();
+    if (!active()) return false;
+    for (const work of kept) this.projectWork(work);
+    return active() && this.projected !== projected;
   }
 }
 
