@@ -364,8 +364,7 @@
         if (ticket !== revision) return;
         window.scrollTo({ left: current.x, top: current.y, behavior: 'instant' });
         if (import.meta.env.DEN_E2E) {
-          // Read the landing and its limit before row geometry: asking a content-visibility row for its rect can
-          // make WebKit lay it out, and the evidence must preserve where the restore landed before that inspection.
+          // Preserve the landing and its limit before the diagnostic makes any layout-dependent geometry reads.
           const resulting = { x: window.scrollX, y: window.scrollY };
           const scrollRoot = document.scrollingElement ?? document.documentElement;
           const max = {
