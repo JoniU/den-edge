@@ -23,8 +23,7 @@ describe('TV CI independence', () => {
     expect(isolationStep).toContain('id: tv_isolation');
     expect(isolationStep).toContain('continue-on-error: true');
 
-    const behaviorCondition =
-      "if: ${{ !cancelled() && steps.tv_isolation.outcome != 'skipped' }}";
+    const behaviorCondition = "if: ${{ !cancelled() && steps.tv_isolation.outcome != 'skipped' }}";
     const webosStep = workflow.slice(webos, tizen);
     expect(webosStep).toContain(behaviorCondition);
     expect(webosStep).toContain('run: npm run test:e2e:tv');
