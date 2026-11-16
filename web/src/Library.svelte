@@ -1720,7 +1720,7 @@
   });
 
   /** The aired episode after the one playing, preserving why there is not one yet. */
-  let following = $state<Target | 'unreleased' | 'failed' | null>();
+  let following = $state<Target | boolean | null>();
   /**
    * The playing series' seasons and how much of each has aired, for the player's episode list. Kept across an advance
    * within the series, so the list neither blinks out nor asks for its season again.
@@ -1736,11 +1736,10 @@
       void promoteLibraryTitle(session, target.title).then(() => {
         if (playing !== target) return;
         if (session.shapes.has(key)) findFollowing(target);
-        else following = 'failed';
+        else following = true;
       });
       return;
     }
-    const at = { season: target.season!, episode: target.episode! };
     // Atlas's dates first: an episode out before TMDB's broadcast slot is next in line the day it is out.
     const aired = airedThrough(
       shape.lastAired,
@@ -1748,18 +1747,12 @@
     );
     playingSeasons = airedSeasons(shape, aired);
     playingSeasonsOf = key;
-    const next = episodeAfter(at, shape);
-    if (!next) {
-      following = null;
-      return;
-    }
-    following = isAired(next, aired) ? { title: target.title, ...next } : 'unreleased';
+    const next = episodeAfter({ season: target.season!, episode: target.episode! }, shape);
+    following = !next ? null : isAired(next, aired) ? { title: target.title, ...next } : false;
   }
 
   $effect(() => {
     const target = playing;
-    following = undefined;
-    if (!target || playingSeasonsOf !== titleKey(target.title)) playingSeasons = undefined;
     if (!target || target.season === undefined || target.episode === undefined) return;
     untrack(() => findFollowing(target));
   });
@@ -3420,7 +3413,6 @@
 {:else if playing && scout && (scout.playback || remux !== null) && PlayerScreen.current}
   {@const target = playing}
   {@const after = typeof following === 'object' ? following : null}
-  {@const nextAvailability = typeof following === 'string' ? following : undefined}
   <!-- A session names one source: a shared scout goes with the shared subtitles, a library's with its own. -->
   {@const guestSource = !!sharedInstallOf(scout.install)}
   {@const releaseAuthority = [
@@ -3461,11 +3453,10 @@
       preferredPlaybackSource={playbackPrefs.preferredPlaybackSource}
       resume={resumePoint(target)}
       next={after ? `S${after.season} · E${after.episode}` : undefined}
-      nextEpisode={after
-        ? { season: after.season, episode: after.episode }
-        : target.season !== undefined && target.episode !== undefined
-          ? (nextAvailability ?? (following === undefined ? 'loading' : undefined))
-          : undefined}
+      nextEpisode={after ??
+        (target.season !== undefined && target.episode !== undefined && following !== null
+          ? (following ?? 0)
+          : undefined)}
       onprogress={(fraction, seconds, at, playing) =>
         void progressed({ title: target.title, ...at }, fraction, seconds, playing)}
       onfinalprogress={(fraction, seconds, at) =>
@@ -3476,7 +3467,7 @@
       onplaybackreceipthandoff={requestPlaybackReceiptHandoff}
       onnext={after
         ? () => void advance(after)
-        : target.season !== undefined && (following === undefined || nextAvailability === 'failed')
+        : target.season !== undefined && (following === undefined || following === true)
           ? () => findFollowing(target)
           : undefined}
       seasons={playingSeasons}

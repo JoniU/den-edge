@@ -250,8 +250,8 @@
     resume: { fraction: number; seconds?: number };
     /** The episode after this one, as `S2 · E4`, when there is one. */
     next?: string;
-    /** The ready successor's numbers, or why its metadata is not actionable. */
-    nextEpisode?: { season?: number; episode?: number } | 'loading' | 'unreleased' | 'failed';
+    /** The ready successor, zero while loading, or false upcoming / true failed. */
+    nextEpisode?: { season?: number; episode?: number } | 0 | boolean;
     /** Timer seam for the browser fixture; the app always uses the production default. */
     castPlayMs?: number;
     /** Where playback got to, and the episode that is about: one advanced to in place reports as itself. */
@@ -306,7 +306,14 @@
         title: { type: title.type, id: title.id },
         season,
         episode,
-        availability: typeof nextEpisode === 'string' ? nextEpisode : undefined,
+        availability:
+          typeof nextEpisode !== 'object' && nextEpisode !== undefined
+            ? nextEpisode === 0
+              ? 'loading'
+              : nextEpisode
+                ? 'failed'
+                : 'unreleased'
+            : undefined,
         next: typeof nextEpisode === 'object' ? nextEpisode : undefined,
         seasons: seasons?.map(({ number }) => number),
       });
@@ -4011,8 +4018,8 @@
     // For den-edge's own outcome report (`finish()`): this visit reached a natural end, whether or not there is
     // a next episode to count down to.
     reachedNaturalEnd = true;
-    if (nextEpisode === 'loading') waitForNext();
-    else upNext = typeof nextEpisode === 'string' ? 0 : null;
+    if (nextEpisode === 0) waitForNext();
+    else upNext = typeof nextEpisode === 'boolean' ? 0 : null;
     if (typeof nextEpisode !== 'object' || ended) return;
     startNextCountdown();
   }
@@ -4043,7 +4050,7 @@
   $effect(() => {
     if (upNext === null || ended) return;
     if (typeof nextEpisode === 'object') untrack(startNextCountdown);
-    else if (nextEpisode === 'loading' && upNext === 0) untrack(waitForNext);
+    else if (nextEpisode === 0 && upNext === 0) untrack(waitForNext);
   });
 
   function stay() {
@@ -5494,22 +5501,19 @@
   /** What playback says as it goes, in the order the TV's stack shows it. */
   const notices = $derived.by(() => {
     const list: Notice[] = [];
-    if (upNext === -1 && nextEpisode === 'loading')
+    if (upNext === -1)
       list.push({
         text: i18n.phrase('Loading episodes'),
         quiet: true,
         busy: true,
       });
-    else if (
-      upNext !== null &&
-      (nextEpisode === 'failed' || (nextEpisode === 'loading' && upNext === 0))
-    )
+    else if (upNext === 0 && onnext)
       list.push({
         text: i18n.phrase('Couldn’t load this season from TMDB.'),
         action: { label: i18n.phrase('Try again'), run: onnext! },
         urgent: true,
       });
-    else if (upNext === 0 && nextEpisode === 'unreleased')
+    else if (upNext === 0)
       list.push({
         text: i18n.phrase('Upcoming'),
         urgent: true,
