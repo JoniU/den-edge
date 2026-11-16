@@ -126,7 +126,6 @@ test('a transient Other versions failure stays distinct from absence and retries
   const versions = page.getByRole('region', { name: 'Other versions' });
   await expect(versions.getByRole('link', { name: /^The Seed Restaged / })).toBeVisible();
   await expect(retry).toHaveCount(0);
-  await expect(page.getByRole('status')).toHaveText('Title details loaded.');
   expect(asked.filter((path) => path.includes('/versions/'))).toHaveLength(2);
   await page.close();
 });

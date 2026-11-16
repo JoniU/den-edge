@@ -30,14 +30,13 @@
   import { SvelteSet } from 'svelte/reactivity';
   import { yieldTask } from '../lib/taskYield';
   import type { ContentServiceClientPort } from '../lib/contentServiceClient';
+  import { i18n } from '../lib/i18n.svelte';
 
   const regions = new Intl.DisplayNames(['en'], { type: 'region' });
   import BrowseRow from './BrowseRow.svelte';
-  import DetailRecovery from './DetailRecovery.svelte';
 
   const cancelled = (error: unknown, signal: AbortSignal) =>
     signal.aborted ||
-    (error as Error)?.name === 'AbortError' ||
     (error as { failure?: { code?: string } })?.failure?.code === 'cancelled';
 
   let {
@@ -84,9 +83,8 @@
     start: () => Promise<void>;
     cancel: () => void;
   }>();
-  let versionsRecovery = $state<'ready' | 'unavailable' | 'busy' | 'recovered'>('ready');
-  let versionsRetryButton = $state.raw<HTMLButtonElement>();
-  let versionsRecoveryStatus = $state.raw<HTMLParagraphElement>();
+  let versionsUnavailable = $state(false);
+  let versionsRetrying = false;
   let retryVersions: (() => void) | undefined;
   const requestVersionsRetry = () => retryVersions?.();
   /** Live BrowseRows already admitted. The one-block substitutes keep the same initial skeleton height. */
@@ -174,23 +172,22 @@
     const onPage = new Set<string>([titleKey(self)]);
     // The same, as it grows: other versions, which load after You might also like, drop their titles from it then.
     const above = new SvelteSet<string>();
-    const noted = (row: RowDef): RowDef => ({
-      ...row,
-      load: async (page) => {
-        const titles = await row.load(page);
-        for (const title of titles) {
-          onPage.add(titleKey(title));
-          above.add(titleKey(title));
-        }
-        return titles;
-      },
-    });
     /** Mark the first real entry into a row loader, not merely construction of its placeholder. */
-    const tracked = (row: RowDef): RowDef => ({
+    const tracked = (row: RowDef, note = false): RowDef => ({
       ...row,
       load: (page) => {
         started.add(row.id);
-        return row.load(page);
+        const loaded = row.load(page);
+        return note
+          ? loaded.then((titles) => {
+              for (const title of titles) {
+                const key = titleKey(title);
+                onPage.add(key);
+                above.add(key);
+              }
+              return titles;
+            })
+          : loaded;
       },
     });
     // Known to exist once atlas (or TMDB's collection) names its members, so it joins then with placeholders
@@ -201,36 +198,30 @@
     const build = ++builds;
     const controller = new AbortController();
     const current = () => live && builds === build && rowsFor === key;
-    versionsRecovery = 'ready';
+    versionsUnavailable = versionsRetrying = false;
     let releaseDiscovery!: (start: boolean) => void;
     let discoveryDecided = false;
     const discoveryGate = new Promise<boolean>((resolve) => (releaseDiscovery = resolve));
     const franchise = discoveryGate.then((start) =>
       start
         ? franchiseRow(detail.collection, self, atlas, options).then(
-            (row) => row && tracked(noted(row)),
+            (row) => row && tracked(row, true),
           )
         : null,
     );
     const loadVersions = async () => {
-      const answer = await versionsRow(self, atlas, franchise, options, controller.signal);
-      if (answer.state === 'unavailable') return answer;
-      return {
-        state: 'ready' as const,
-        row: answer.row ? await firstScreen(tracked(noted(answer.row)), shown) : null,
-      };
+      const row = await versionsRow(self, atlas, franchise, options, controller.signal);
+      return row ? firstScreen(tracked(row, true), shown) : row;
     };
     const versionsAnswer = discoveryGate
-      .then((start) =>
-        start ? loadVersions() : Promise.resolve({ state: 'ready' as const, row: null }),
-      )
+      .then((start) => (start ? loadVersions() : null))
       .catch((error) => {
-        if (cancelled(error, controller.signal)) return { state: 'cancelled' as const };
+        if (cancelled(error, controller.signal)) return null;
         throw error;
       });
     void versionsAnswer.then((answer) => {
       if (!current()) return;
-      if (answer.state === 'unavailable') versionsRecovery = 'unavailable';
+      versionsUnavailable = answer === undefined;
     });
     const decideDiscovery = (start: boolean) => {
       if (discoveryDecided) return;
@@ -280,7 +271,7 @@
       // Films and series together; curated primary members have their own row and atlas excludes them here.
       // Ask for atlas's whole ranked row: the loader pages this answer into screenfuls before it falls through to
       // the broader plot-neighbour and TMDB sources.
-      noted({ ...similar, load: (page: number) => similar.load(page).finally(similarIn) }),
+      { ...similar, load: (page: number) => similar.load(page).finally(similarIn) },
       ...(affinity
         ? [
             {
@@ -303,38 +294,35 @@
           ].map((row) => withPosters(row, options))
         : []),
       ...(regional ? [regional] : []),
-    ].map(tracked);
+    ].map((row, index) => tracked(row, index === 0));
     const retry = async () => {
-      if (!current() || versionsRecovery === 'busy') return;
-      const returnFocus = document.activeElement === versionsRetryButton;
-      versionsRecovery = 'busy';
+      if (!current() || versionsRetrying) return;
+      versionsRetrying = true;
+      versionsUnavailable = false;
       try {
         const answer = await loadVersions();
         if (!current()) return;
-        if (answer.state === 'unavailable') {
-          versionsRecovery = 'unavailable';
-          if (returnFocus) requestAnimationFrame(() => versionsRetryButton?.focus());
+        if (answer === undefined) {
+          versionsUnavailable = true;
           return;
         }
         const upper = await franchise;
         if (!current()) return;
         const withoutPrevious = rows.filter(({ row }) => row.id !== 'other-versions');
-        if (answer.row) {
+        if (answer) {
           const at = upper ? withoutPrevious.findIndex(({ row }) => row.id === upper.id) + 1 : 0;
           rows = [
             ...withoutPrevious.slice(0, at),
-            { build, row: answer.row },
+            { build, row: answer },
             ...withoutPrevious.slice(at),
           ];
         } else rows = withoutPrevious;
-        versionsRecovery = returnFocus ? 'recovered' : 'ready';
-        if (returnFocus)
-          requestAnimationFrame(() => {
-            if (current()) versionsRecoveryStatus?.focus();
-          });
+        versionsUnavailable = false;
       } catch (error) {
         if (cancelled(error, controller.signal) || !current()) return;
-        versionsRecovery = 'unavailable';
+        versionsUnavailable = true;
+      } finally {
+        versionsRetrying = false;
       }
     };
     retryVersions = retry;
@@ -347,14 +335,14 @@
           // remain cheap definitions and keep the same heading/skeleton geometry when this build is published.
           defined.map((row) => (preserve.has(row.id) ? firstScreen(row, shown) : row)),
         ),
-      ] as const).then(([upper, versionAnswer, rest]) => {
+      ] as const).then(([upper, version, rest]) => {
         if (!current()) return;
-        const next = [upper, versionAnswer.state === 'ready' ? versionAnswer.row : null, ...rest]
+        const next = [upper, version ?? null, ...rest]
           .filter((row): row is RowDef => row !== null)
           .map((row) => ({ build, row }));
         // A transient Atlas failure is not evidence that an already authoritative row became empty. Keep that row
         // until this exact lane answers successfully; Retry below reuses the current title/franchise authority.
-        if (versionAnswer.state === 'unavailable') {
+        if (version === undefined) {
           const keptVersions = rows.find(({ row }) => row.id === 'other-versions');
           if (keptVersions) {
             const at = upper ? next.findIndex(({ row }) => row.id === upper.id) + 1 : 0;
@@ -372,8 +360,7 @@
       void franchise.then(async (row) => {
         if (current() && row) rows = [{ build, row }, ...rows];
         // Other versions sit straight under the franchise, which they are never part of.
-        const versionAnswer = await versionsAnswer;
-        const other = versionAnswer.state === 'ready' ? versionAnswer.row : null;
+        const other = await versionsAnswer;
         if (!current() || !other) return;
         const at = row
           ? rows.findIndex((entry) => entry.build === build && entry.row.id === row.id) + 1
@@ -412,12 +399,15 @@
 </script>
 
 <div bind:this={root} aria-hidden={!active}>
-  <DetailRecovery
-    state={versionsRecovery}
-    onretry={requestVersionsRetry}
-    bind:button={versionsRetryButton}
-    bind:status={versionsRecoveryStatus}
-  />
+  {#if versionsUnavailable}
+    <button
+      type="button"
+      class="den-button den-button-compact"
+      aria-live="assertive"
+      data-spatial-section
+      onclick={requestVersionsRetry}>{i18n.phrase('Couldn’t load these. Try again')}</button
+    >
+  {/if}
   {#each rows as { build, row } (`${build}:${row.id}`)}
     {#if mountedRows.has(`${build}:${row.id}`)}
       <BrowseRow {row} {shown} prefetch={false} />

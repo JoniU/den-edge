@@ -78,15 +78,12 @@ const versionsRowResult = (
   options: FixtureOptions,
   signal?: AbortSignal,
 ) => versionsRowImpl(title, atlas, franchise, fixtureOptions(options), signal);
-const versionsRow = async (
+const versionsRow = (
   title: Parameters<typeof versionsRowImpl>[0],
   atlas: Parameters<typeof versionsRowImpl>[1],
   franchise: Parameters<typeof versionsRowImpl>[2],
   options: FixtureOptions,
-) => {
-  const result = await versionsRowResult(title, atlas, franchise, options);
-  return result.state === 'ready' ? result.row : null;
-};
+) => versionsRowResult(title, atlas, franchise, options);
 const personRow = (
   person: Parameters<typeof personRowImpl>[0],
   department: Parameters<typeof personRowImpl>[1],
@@ -995,21 +992,13 @@ describe('versionsRow', () => {
 
   it('keeps an absent or older versions route distinct from a transient failure', async () => {
     const older = answering({});
-    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: older })).toEqual({
-      state: 'ready',
-      row: null,
-    });
+    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: older })).toBeNull();
     const other = answering({ [versionsPath]: { ids: [8] } });
-    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: other })).toEqual({
-      state: 'ready',
-      row: null,
-    });
+    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: other })).toBeNull();
     const down = (async () => {
       throw new TypeError('offline');
     }) as unknown as typeof fetch;
-    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: down })).toEqual({
-      state: 'unavailable',
-    });
+    expect(await versionsRowResult(self, '/atlas', none, { key: 'k', fetchImpl: down })).toBeUndefined();
   });
 
   it('asks nothing without atlas', async () => {

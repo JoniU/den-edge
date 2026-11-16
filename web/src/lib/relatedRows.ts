@@ -745,21 +745,17 @@ export async function franchiseRow(
  * franchise comes with the rest of that franchise, each card captioned with the franchise's label ("Wallander
  * (Sweden)"); a remake outside one says "Remake". Atlas leaves out the title's own curated franchise; whatever the
  * franchise row shows is left out here too, since that row can be TMDB's collection instead. One page: atlas answers
- * with every version at once. A ready null means there are none or Atlas predates the route; unavailable remains a
- * distinct retryable lane result, so the page never represents a transport failure as an authoritative empty row.
+ * with every version at once. Null means there are none or Atlas predates the route; undefined is the distinct
+ * retryable unavailable result, so the page never presents a transport failure as an authoritative empty row.
  */
-export type VersionsRowResult = { state: 'ready'; row: RowDef | null } | { state: 'unavailable' };
-const noVersions: VersionsRowResult = { state: 'ready', row: null };
-const versionsUnavailable: VersionsRowResult = { state: 'unavailable' };
-
 export async function versionsRow(
   self: Title,
   atlas: string | null,
   franchise: Promise<RowDef | null>,
   { content }: RelatedOptions,
   signal?: AbortSignal,
-): Promise<VersionsRowResult> {
-  if (!atlas) return noVersions;
+): Promise<RowDef | null | undefined> {
+  if (!atlas) return null;
   try {
     const result = await content.query(
       {
@@ -768,9 +764,9 @@ export async function versionsRow(
       },
       signal,
     );
-    if (result.answer.state === 'unavailable') return versionsUnavailable;
+    if (result.answer.state === 'unavailable') return undefined;
     if (result.answer.state !== 'ready' || result.answer.value.operation !== 'versions')
-      return noVersions;
+      return null;
     const listed = result.answer.value.versions;
     /** What each card says beside its year: its franchise's label, else "Remake" for a remake. */
     const notes = new Map(
@@ -782,29 +778,26 @@ export async function versionsRow(
     );
     elsewhere.add(keyOf(self));
     const wanted = refs.filter((ref) => !elsewhere.has(keyOf(ref)));
-    if (wanted.length === 0) return noVersions;
+    if (wanted.length === 0) return null;
     const titles = await drawRefs(
       wanted,
       listed.map(({ title }) => title),
       content,
       signal,
     );
-    if (titles.length === 0) return noVersions;
+    if (titles.length === 0) return null;
     return {
-      state: 'ready',
-      row: {
-        id: 'other-versions',
-        title: 'Other versions',
-        caption: (t) => {
-          const note = notes.get(keyOf(t));
-          return note ? [t.year, note].filter(Boolean).join(' · ') : undefined;
-        },
-        load: async (page) => (page === 1 ? titles : []),
+      id: 'other-versions',
+      title: 'Other versions',
+      caption: (t) => {
+        const note = notes.get(keyOf(t));
+        return note ? [t.year, note].filter(Boolean).join(' · ') : undefined;
       },
+      load: async (page) => (page === 1 ? titles : []),
     };
   } catch (error) {
     if (signal?.aborted || (error as Error)?.name === 'AbortError') throw error;
-    return versionsUnavailable;
+    return undefined;
   }
 }
 
