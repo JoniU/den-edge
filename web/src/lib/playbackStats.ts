@@ -501,7 +501,7 @@ export function watchPlayback(options: WatchOptions): Watcher {
   };
 
   /** Exact media position used only inside this watcher to recognize recovery; never serialized. */
-  let waitAt: number | undefined;
+  let waitAt = NaN;
   const stall = (
     kind: Stall['kind'],
     at = video.currentTime,
@@ -511,7 +511,7 @@ export function watchPlayback(options: WatchOptions): Watcher {
     const stalled = { kind, ...buffered, ...requests() };
     const early = playedSecondsOf(video.played) < EARLY_PLAYED_SECONDS;
     if (recorder.stalled(now(), stalled, early)) {
-      waitAt = kind === 'wait' ? at : undefined;
+      waitAt = kind === 'wait' ? at : NaN;
       schedule.stall();
     }
   };
@@ -521,7 +521,7 @@ export function watchPlayback(options: WatchOptions): Watcher {
   on('playing', () => {
     started = true;
     recorder.resumed(now());
-    waitAt = undefined;
+    waitAt = NaN;
   });
   on('waiting', () => stall('wait'));
   on('stalled', () => {
@@ -554,9 +554,9 @@ export function watchPlayback(options: WatchOptions): Watcher {
         recorder.idleLow(since);
     }
     const open = recorder.stalling;
-    if (open?.kind === 'wait' && waitAt !== undefined && !video.paused && time > waitAt + 0.2) {
+    if (open?.kind === 'wait' && !video.paused && time > waitAt + 0.2) {
       recorder.resumed(now());
-      waitAt = undefined;
+      waitAt = NaN;
     }
     const count = video.getVideoPlaybackQuality?.().totalVideoFrames;
     if (count === undefined) return;
