@@ -119,9 +119,10 @@
   let failure = $state<string | null>(null);
   let saving = $state(false);
   // A retained Settings page can receive either a replacement household or a replacement Owner activity library.
-  // Publish the complete replacement bundle before retiring every old lease, so tracker presentation and commands
-  // can never fall back to the household control log or remain attached to the previous profile generation.
-  $effect(() => {
+  // Publish the complete replacement bundle before DOM reconciliation and before retiring every old lease, so a
+  // ready replacement keeps retained sections mounted while tracker presentation and commands can never fall back
+  // to the household control log or remain attached to the previous profile generation.
+  $effect.pre(() => {
     const replacementHousehold = model;
     const replacementActivity = activityModel;
     const replacementPreferences = preferences;
