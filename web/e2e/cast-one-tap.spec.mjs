@@ -726,6 +726,48 @@ test('a refused replacement stops a stale overlapping LOAD which landed on the r
   }
 });
 
+test('a stale LOAD landing after the current replacement refused is stopped without retrying it', async () => {
+  const { browser, page } = await open(chromium, {
+    appId: DEN_APP,
+    sdkOptions: { holdReplacementLoads: true, report: true },
+  });
+  try {
+    await playingPast(page, 2);
+    await reveal(page);
+    await castButton(page).click();
+    await expect.poll(() => receiver(page, 'loads')).toHaveLength(1);
+    await page.evaluate(
+      ([cast, url]) => {
+        const frame = document.querySelector(`iframe[src^="${cast}"]`);
+        for (const generation of [98, 99])
+          frame.contentWindow.postMessage(
+            {
+              type: 'den-load',
+              id: url,
+              generation,
+              media: { url, mode: 'cast', title: `Fixture ${generation}`, external: true },
+            },
+            cast,
+          );
+      },
+      [CAST, TORBOX],
+    );
+    await expect.poll(() => receiver(page, 'heldLoads').then((loads) => loads.length)).toBe(2);
+    await frameOf(page).evaluate(() => window.releaseLoad(1, 'reject'));
+    await expect(
+      page.getByText(
+        'The Chromecast couldn’t play this TorBox release, so it’s playing here again.',
+      ),
+    ).toBeVisible({ timeout: 15_000 });
+    await frameOf(page).evaluate(() => window.releaseLoad(0));
+    await expect.poll(() => receiver(page, 'calls')).toContain('stop');
+    await expect.poll(() => receiver(page, 'receiverLoad')).toBeNull();
+    await expect.poll(() => receiver(page, 'loads')).toHaveLength(3);
+  } finally {
+    await browser.close();
+  }
+});
+
 // A TorBox stream stays TorBox: Den Remux only when the viewer picks it. One fresh TorBox stream is tried on the
 // receiver, then the viewer is told and it plays here again, with the Cast session left for Stop casting.
 test('a TorBox stream the receiver won’t load is retried once as TorBox, named, and never remuxed', async () => {

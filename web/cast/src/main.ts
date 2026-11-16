@@ -1008,8 +1008,16 @@ async function loadCast(load: LoadMessage | undefined = current): Promise<void> 
     // end the accepted media, or clear a newer attempt. If it landed on the receiver last, reassert the current load.
     if (!ownsCurrent(load) || receiverLoadAttempt !== attempt) {
       if (receiverLoadAttempt === attempt) receiverLoadAttempt = undefined;
-      if (receiverLoadAttempt?.load !== current || receiverLoadAttempt?.settled === true)
+      const currentAttemptOwns = receiverLoadAttempt?.load === current;
+      const acceptedCurrentOwns = castStarted && playingLoad === current;
+      if (!currentAttemptOwns && !acceptedCurrentOwns) {
+        // The current LOAD has already failed or been retired. This late success is now the TV's only load, but no
+        // live Den authority owns it; stop it rather than retrying a rejected current load or leaving stale media up.
+        castStarted = false;
+        castContext?.endCurrentSession(true);
+      } else if (!currentAttemptOwns || receiverLoadAttempt?.settled === true) {
         void loadCast(current);
+      }
       return;
     }
     // A LOAD replaces the receiver only once it succeeds. Until then its events and lifecycle still belong to
