@@ -196,6 +196,10 @@
     const build = ++builds;
     const controller = new AbortController();
     const current = () => live && builds === build && rowsFor === key;
+    const cancelled = (error: unknown) =>
+      controller.signal.aborted ||
+      (error as Error)?.name === 'AbortError' ||
+      (error as { failure?: { code?: string } })?.failure?.code === 'cancelled';
     versionsRecovery = 'ready';
     let releaseDiscovery!: (start: boolean) => void;
     let discoveryDecided = false;
@@ -220,7 +224,7 @@
         start ? loadVersions() : Promise.resolve({ state: 'ready' as const, row: null }),
       )
       .catch((error) => {
-        if ((error as Error)?.name === 'AbortError') return { state: 'cancelled' as const };
+        if (cancelled(error)) return { state: 'cancelled' as const };
         throw error;
       });
     const versions = versionsAnswer.then((answer) =>
@@ -334,7 +338,7 @@
             });
         })
         .catch((error) => {
-          if ((error as Error)?.name === 'AbortError' || !current()) return;
+          if (cancelled(error) || !current()) return;
           versionsRecovery = 'unavailable';
         });
     };
