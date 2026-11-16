@@ -245,7 +245,7 @@ jobs:
       - run: npm run test:worker-build
       - run: npm run build:cast
       - name: Require TV isolation and bundle budgets
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           TV_ISOLATION: ${{ steps.tv_isolation.outcome }}
         run: test "$TV_ISOLATION" = success
