@@ -5335,7 +5335,14 @@
     swapped = autoSwitch = struggling = slowPick = unchanged = null;
     clearTransition();
     // Named, not "next": one picked from the Episodes list may be any episode of the series.
-    showTransition(`Starting S${at.season} · E${at.episode}…`);
+    showTransition(
+      at.season === undefined || at.episode === undefined
+        ? 'Starting next…'
+        : i18n.format('player.startingEpisode', 'Starting S{season} · E{episode}…', {
+            season: at.season,
+            episode: at.episode,
+          }),
+    );
     switchCount = 0;
     lastSwitchReason = undefined;
     degraded = false;

@@ -3434,7 +3434,11 @@
       onnext={after ? () => void advance(after) : undefined}
       seasons={playingSeasons}
       episodeProgress={(season, episode) =>
-        episodeProgress(pageEpisodes.get(`${season}:${episode}`), pageRow)}
+        // The open page's rows are keyed by season and episode alone, so they are this series' only while its page
+        // is the one open under the player; another series' page would lend its own progress.
+        page?.type === target.title.type && page.id === target.title.id
+          ? episodeProgress(pageEpisodes.get(`${season}:${episode}`), pageRow)
+          : 0}
       onepisode={(at) => void advance({ title: target.title, ...at })}
       oncontrols={(controls) => (tvControls = controls)}
       onclose={closePlayer}
