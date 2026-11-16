@@ -35,6 +35,11 @@
   import BrowseRow from './BrowseRow.svelte';
   import DetailRecovery from './DetailRecovery.svelte';
 
+  const cancelled = (error: unknown, signal: AbortSignal) =>
+    signal.aborted ||
+    (error as Error)?.name === 'AbortError' ||
+    (error as { failure?: { code?: string } })?.failure?.code === 'cancelled';
+
   let {
     detail,
     content,
@@ -196,10 +201,6 @@
     const build = ++builds;
     const controller = new AbortController();
     const current = () => live && builds === build && rowsFor === key;
-    const cancelled = (error: unknown) =>
-      controller.signal.aborted ||
-      (error as Error)?.name === 'AbortError' ||
-      (error as { failure?: { code?: string } })?.failure?.code === 'cancelled';
     versionsRecovery = 'ready';
     let releaseDiscovery!: (start: boolean) => void;
     let discoveryDecided = false;
@@ -224,12 +225,9 @@
         start ? loadVersions() : Promise.resolve({ state: 'ready' as const, row: null }),
       )
       .catch((error) => {
-        if (cancelled(error)) return { state: 'cancelled' as const };
+        if (cancelled(error, controller.signal)) return { state: 'cancelled' as const };
         throw error;
       });
-    const versions = versionsAnswer.then((answer) =>
-      answer.state === 'ready' ? answer.row : null,
-    );
     void versionsAnswer.then((answer) => {
       if (!current()) return;
       if (answer.state === 'unavailable') versionsRecovery = 'unavailable';
@@ -306,41 +304,38 @@
         : []),
       ...(regional ? [regional] : []),
     ].map(tracked);
-    const retry = () => {
+    const retry = async () => {
       if (!current() || versionsRecovery === 'busy') return;
       const returnFocus = document.activeElement === versionsRetryButton;
       versionsRecovery = 'busy';
-      void loadVersions()
-        .then(async (answer) => {
-          if (!current()) return;
-          if (answer.state === 'unavailable') {
-            versionsRecovery = 'unavailable';
-            if (returnFocus) requestAnimationFrame(() => versionsRetryButton?.focus());
-            return;
-          }
-          const upper = await franchise;
-          if (!current()) return;
-          const withoutPrevious = rows.filter(({ row }) => row.id !== 'other-versions');
-          if (answer.row) {
-            const at = upper ? withoutPrevious.findIndex(({ row }) => row.id === upper.id) + 1 : 0;
-            rows = [
-              ...withoutPrevious.slice(0, at),
-              { build, row: answer.row },
-              ...withoutPrevious.slice(at),
-            ];
-          } else {
-            rows = withoutPrevious;
-          }
-          versionsRecovery = returnFocus ? 'recovered' : 'ready';
-          if (returnFocus)
-            requestAnimationFrame(() => {
-              if (current()) versionsRecoveryStatus?.focus();
-            });
-        })
-        .catch((error) => {
-          if (cancelled(error) || !current()) return;
+      try {
+        const answer = await loadVersions();
+        if (!current()) return;
+        if (answer.state === 'unavailable') {
           versionsRecovery = 'unavailable';
-        });
+          if (returnFocus) requestAnimationFrame(() => versionsRetryButton?.focus());
+          return;
+        }
+        const upper = await franchise;
+        if (!current()) return;
+        const withoutPrevious = rows.filter(({ row }) => row.id !== 'other-versions');
+        if (answer.row) {
+          const at = upper ? withoutPrevious.findIndex(({ row }) => row.id === upper.id) + 1 : 0;
+          rows = [
+            ...withoutPrevious.slice(0, at),
+            { build, row: answer.row },
+            ...withoutPrevious.slice(at),
+          ];
+        } else rows = withoutPrevious;
+        versionsRecovery = returnFocus ? 'recovered' : 'ready';
+        if (returnFocus)
+          requestAnimationFrame(() => {
+            if (current()) versionsRecoveryStatus?.focus();
+          });
+      } catch (error) {
+        if (cancelled(error, controller.signal) || !current()) return;
+        versionsRecovery = 'unavailable';
+      }
     };
     retryVersions = retry;
     if (rebuild) {
@@ -377,7 +372,8 @@
       void franchise.then(async (row) => {
         if (current() && row) rows = [{ build, row }, ...rows];
         // Other versions sit straight under the franchise, which they are never part of.
-        const other = await versions;
+        const versionAnswer = await versionsAnswer;
+        const other = versionAnswer.state === 'ready' ? versionAnswer.row : null;
         if (!current() || !other) return;
         const at = row
           ? rows.findIndex((entry) => entry.build === build && entry.row.id === row.id) + 1
@@ -387,7 +383,7 @@
     }
     return () => {
       live = false;
-      controller.abort(new DOMException('related title authority replaced', 'AbortError'));
+      controller.abort();
       if (retryVersions === retry) retryVersions = undefined;
       pendingDiscovery.cancel();
     };
@@ -417,9 +413,7 @@
 
 <div bind:this={root} aria-hidden={!active}>
   <DetailRecovery
-    unavailable={versionsRecovery === 'unavailable' || versionsRecovery === 'busy'}
-    busy={versionsRecovery === 'busy'}
-    recovered={versionsRecovery === 'recovered'}
+    state={versionsRecovery}
     onretry={requestVersionsRetry}
     bind:button={versionsRetryButton}
     bind:status={versionsRecoveryStatus}

@@ -1362,9 +1362,13 @@
         </p>{/if}
     </div>
     <DetailRecovery
-      unavailable={extrasFailed.length > 0}
-      busy={extrasBusy}
-      recovered={extrasRecovered}
+      state={extrasFailed.length
+        ? extrasBusy
+          ? 'busy'
+          : 'unavailable'
+        : extrasRecovered
+          ? 'recovered'
+          : 'ready'}
       onretry={retryExtras}
       bind:button={extrasRetryButton}
       bind:status={extrasRecoveryStatus}

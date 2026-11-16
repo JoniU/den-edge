@@ -749,6 +749,8 @@ export async function franchiseRow(
  * distinct retryable lane result, so the page never represents a transport failure as an authoritative empty row.
  */
 export type VersionsRowResult = { state: 'ready'; row: RowDef | null } | { state: 'unavailable' };
+const noVersions: VersionsRowResult = { state: 'ready', row: null };
+const versionsUnavailable: VersionsRowResult = { state: 'unavailable' };
 
 export async function versionsRow(
   self: Title,
@@ -757,7 +759,7 @@ export async function versionsRow(
   { content }: RelatedOptions,
   signal?: AbortSignal,
 ): Promise<VersionsRowResult> {
-  if (!atlas) return { state: 'ready', row: null };
+  if (!atlas) return noVersions;
   try {
     const result = await content.query(
       {
@@ -766,9 +768,9 @@ export async function versionsRow(
       },
       signal,
     );
-    if (result.answer.state === 'unavailable') return { state: 'unavailable' };
+    if (result.answer.state === 'unavailable') return versionsUnavailable;
     if (result.answer.state !== 'ready' || result.answer.value.operation !== 'versions')
-      return { state: 'ready', row: null };
+      return noVersions;
     const listed = result.answer.value.versions;
     /** What each card says beside its year: its franchise's label, else "Remake" for a remake. */
     const notes = new Map(
@@ -780,14 +782,14 @@ export async function versionsRow(
     );
     elsewhere.add(keyOf(self));
     const wanted = refs.filter((ref) => !elsewhere.has(keyOf(ref)));
-    if (wanted.length === 0) return { state: 'ready', row: null };
+    if (wanted.length === 0) return noVersions;
     const titles = await drawRefs(
       wanted,
       listed.map(({ title }) => title),
       content,
       signal,
     );
-    if (titles.length === 0) return { state: 'ready', row: null };
+    if (titles.length === 0) return noVersions;
     return {
       state: 'ready',
       row: {
@@ -802,7 +804,7 @@ export async function versionsRow(
     };
   } catch (error) {
     if (signal?.aborted || (error as Error)?.name === 'AbortError') throw error;
-    return { state: 'unavailable' };
+    return versionsUnavailable;
   }
 }
 

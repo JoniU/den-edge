@@ -2,35 +2,31 @@
   import { i18n } from '../lib/i18n.svelte';
 
   let {
-    unavailable,
-    busy,
-    recovered,
+    state,
     onretry,
     button = $bindable(),
     status = $bindable(),
   }: {
-    unavailable: boolean;
-    busy: boolean;
-    recovered: boolean;
+    state: 'ready' | 'unavailable' | 'busy' | 'recovered';
     onretry: () => void;
     button?: HTMLButtonElement;
     status?: HTMLParagraphElement;
   } = $props();
 </script>
 
-{#if unavailable}
+{#if state === 'unavailable' || state === 'busy'}
   <div class="detail-recovery" role="alert" data-spatial-section>
     <span>{i18n.phrase('Some title details couldn’t be loaded.')}</span>
     <button
       bind:this={button}
       type="button"
       class="den-button den-button-compact"
-      disabled={busy}
-      aria-busy={busy}
+      disabled={state === 'busy'}
+      aria-busy={state === 'busy'}
       onclick={onretry}>{i18n.phrase('Try again')}</button
     >
   </div>
-{:else if recovered}
+{:else if state === 'recovered'}
   <p bind:this={status} class="detail-recovered" role="status" tabindex="-1">
     {i18n.phrase('Title details loaded.')}
   </p>
