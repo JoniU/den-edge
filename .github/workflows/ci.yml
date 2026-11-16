@@ -395,7 +395,7 @@ jobs:
         run: >-
           DEN_TV_TEST_ENGINE=webkit npm run test:e2e:tv --
           tv-playback.spec.mjs tv-navigation.spec.mjs tv-compatibility.spec.mjs
-          tv-retained-input.spec.mjs tv-presentation.spec.mjs
+          tv-retained-input.spec.mjs tv-presentation.spec.mjs tv-services-row.spec.mjs
       - name: Retain native TV failure evidence
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
