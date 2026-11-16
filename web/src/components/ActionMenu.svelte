@@ -363,7 +363,16 @@
   /** A wheel, a touch drag, or a keyboard page-scroll key, landing outside the menu and its own trigger. */
   function outsideScrollGesture(event: WheelEvent | TouchEvent | KeyboardEvent) {
     if (!showing()) return;
-    if (event instanceof KeyboardEvent && !SCROLL_KEYS.has(event.key)) return;
+    // Focus moves into a browser popover on the next frame. Escape can arrive first, while its target is still the
+    // trigger, so the menu's own key handler is not in the event path. Own that dismissal in capture too: a player
+    // or another containing surface must see the same key as consumed rather than close itself as well.
+    if (event instanceof KeyboardEvent && !SCROLL_KEYS.has(event.key)) {
+      if (!__DEN_TV__ && event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      }
+      return;
+    }
     const target = event.target;
     if (target instanceof Node && (menu?.contains(target) || trigger?.contains(target))) return;
     close();

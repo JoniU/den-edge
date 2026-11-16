@@ -105,6 +105,49 @@ async function openPlaying(page, query = '') {
   return video;
 }
 
+/** Open the player's options while holding its deferred focus frame, then send Escape from the trigger. */
+async function dismissOptionsBeforeFocus(page, touch) {
+  if (touch) await showControls(page);
+  else {
+    await page.mouse.move(195, 300);
+    await expect(page.getByRole('navigation', { name: 'Playback controls' })).toBeVisible();
+  }
+  const trigger = page.getByRole('button', { name: 'More playback options' });
+  await trigger.focus();
+  await page.evaluate(() => {
+    const queued = new Map();
+    const request = window.requestAnimationFrame;
+    const cancel = window.cancelAnimationFrame;
+    let next = 1_000_000;
+    window.requestAnimationFrame = (callback) => {
+      const id = next++;
+      queued.set(id, callback);
+      return id;
+    };
+    window.cancelAnimationFrame = (id) => {
+      if (!queued.delete(id)) cancel(id);
+    };
+    window.__releasePlayerMenuFrames = () => {
+      window.requestAnimationFrame = request;
+      window.cancelAnimationFrame = cancel;
+      queued.forEach((callback) => request(callback));
+      queued.clear();
+    };
+  });
+  await trigger.evaluate((button) => button.click());
+  const menu = page.getByRole('menu', { name: 'More playback options' });
+  await expect(menu).toBeVisible();
+  await expect(trigger).toBeFocused();
+
+  // A real browser key exercises the native popover close request as well as Den's window listeners. The separate
+  // ActionMenu test pins `defaultPrevented`; this one pins the whole Player outcome around the UA lifecycle.
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(page.locator('.player')).toHaveCount(1);
+  await expect(page.getByTestId('player-close-count')).toHaveText('0');
+  await page.evaluate(() => window.__releasePlayerMenuFrames());
+}
+
 /**
  * Every pair of the player's visible controls — top bar, transport, timeline, times, dock, Skip and the up-next card's
  * buttons — whose rectangles intersect.
@@ -205,6 +248,26 @@ for (const [engine, browserType] of engines) {
 
         await expect(page.getByRole('button', { name: 'Stay' })).toBeVisible({ timeout: 30_000 });
         expect(await overlaps(page)).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    });
+  }
+
+  for (const touch of [false, true]) {
+    test(`immediate Escape closes only the options on a ${touch ? 'touch phone' : 'mouse'} (${engine})`, async () => {
+      test.skip(
+        browserType === firefox,
+        'the reported race and acceptance cover Chromium and WebKit',
+      );
+      test.skip(!existsSync(browserType.executablePath()), `${engine} is not installed here`);
+      const browser = await launch(browserType);
+      try {
+        const page = touch
+          ? await touchPage(browser, browserType, { width: 390, height: 844 })
+          : await browser.newPage({ viewport: { width: 1280, height: 720 } });
+        await openPlaying(page);
+        for (let attempt = 0; attempt < 5; attempt++) await dismissOptionsBeforeFocus(page, touch);
       } finally {
         await browser.close();
       }
