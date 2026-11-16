@@ -14,6 +14,7 @@ import { LibraryLog, LibraryUpdateRequiredError } from './log';
 import { LibraryFactStore } from './libraryFactStore';
 import { applyOps, opsFor } from './libraryV4';
 import { forgetLibraryCredential, hasLibraryCredential } from './relayFetch';
+import * as syncLoader from './syncLoader';
 import { recordTrackerEvent, trackerEvent } from './trackerEvents';
 import { fetchDetailsResult } from './workerTmdbProvider';
 import {
@@ -962,12 +963,21 @@ describe('LibraryLog', () => {
       };
       const server = await edge([row(1)], [], 'generation-1');
       let posts = 0;
+      let reads = 0;
       const connection: typeof fetch = async (input, init) => {
         if (init?.method === 'POST') posts++;
+        else if (String(input).includes('/changes?')) reads++;
         return server.fetchImpl(input, init);
       };
       const log = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
-      return { vault, log, posts: () => posts, fail: () => (failing = true) };
+      return {
+        connection,
+        vault,
+        log,
+        posts: () => posts,
+        reads: () => reads,
+        fail: () => (failing = true),
+      };
     }
 
     it('keeps a hand edit pending, and shows it on an offline reopen', async () => {
@@ -986,13 +996,30 @@ describe('LibraryLog', () => {
       log.close();
       warn.mockRestore();
 
-      const reopened = (await LibraryLog.open(LIBRARY_KEY, offline, undefined, vault))!;
-      expect(reopened.pendingActions).toBe(1);
-      expect(reopened.title({ type: 'movie', id: 2 })).toBeDefined();
+      let release!: () => void;
+      const deferred = new Promise<void>((resolve) => (release = resolve));
+      const policy = vi.spyOn(syncLoader, 'ensureDeferredSyncPolicy').mockReturnValue(deferred);
+      try {
+        let opened = false;
+        const opening = LibraryLog.open(LIBRARY_KEY, offline, undefined, vault).then((value) => {
+          opened = true;
+          return value;
+        });
+        await vi.waitFor(() => expect(policy).toHaveBeenCalledOnce());
+        expect(opened, 'semantic work stays behind its atomic projection boundary').toBe(false);
+
+        release();
+        const reopened = (await opening)!;
+        expect(reopened.pendingActions).toBe(1);
+        expect(reopened.title({ type: 'movie', id: 2 })).toBeDefined();
+      } finally {
+        release();
+        policy.mockRestore();
+      }
     });
 
-    it('keeps a written settings row pending, and shows it on an offline reopen', async () => {
-      const { vault, log, posts, fail } = await failingStore();
+    it('opens and shows a retained settings row without starting deferred policy', async () => {
+      const { connection, vault, log, posts, reads, fail } = await failingStore();
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       fail();
       const values = { theme: { v: 'dark', at: at(1000) } };
@@ -1002,10 +1029,97 @@ describe('LibraryLog', () => {
       log.close();
       warn.mockRestore();
 
-      const reopened = (await LibraryLog.open(LIBRARY_KEY, offline, undefined, vault))!;
-      expect(reopened.pendingActions).toBe(1);
-      expect(reopened.settings('prefs')).toMatchObject({ values });
+      const policy = vi
+        .spyOn(syncLoader, 'ensureDeferredSyncPolicy')
+        .mockRejectedValue(new Error('deferred policy is unavailable'));
+      try {
+        const readsBefore = reads();
+        const reopened = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+        expect(policy).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(reads()).toBe(readsBefore + 1));
+        expect(reopened.pendingActions).toBe(1);
+        expect(reopened.settings('prefs')).toMatchObject({ values });
+        await reopened.refresh();
+        expect(reads(), 'the foreground refresh shares the row-only opening pass').toBe(
+          readsBefore + 1,
+        );
+      } finally {
+        policy.mockRestore();
+      }
     });
+  });
+
+  it('starts one cached pull before deferred mixed work is atomically published and replayed', async () => {
+    const server = await edge([row(1)], [], 'generation-1');
+    const { vault } = memoryVault();
+    let refuseWrites = false;
+    let changes = 0;
+    let posts = 0;
+    let pulled!: () => void;
+    const firstPull = new Promise<void>((resolve) => (pulled = resolve));
+    const connection: typeof fetch = async (input, init) => {
+      if (init?.method === 'POST') {
+        posts++;
+        if (refuseWrites) throw new TypeError('offline');
+      } else if (String(input).includes('/changes?')) {
+        changes++;
+        if (changes === 2) pulled();
+      }
+      const response = await server.fetchImpl(input, init);
+      const headers = new Headers(response.headers);
+      headers.set('x-den-wire-min', '4');
+      return new Response(response.body, { status: response.status, headers });
+    };
+    const log = (await LibraryLog.open(LIBRARY_KEY, connection, undefined, vault))!;
+    refuseWrites = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const applied = 'a'.repeat(32);
+    const values = {
+      [applied]: { value: { string: `{"applied":1,"at":1,"grant":"${applied}"}` }, at: at(1000) },
+    };
+    const rider = { kind: 'set', schema: 2, name: 'assistant-applied', values } as SettingsRow;
+    expect(
+      await log.withRider(rider, () =>
+        log.write(addToWatchlist(blankTitle({ type: 'movie', id: 2 }, 0), at(1000))),
+      ),
+    ).toBe(true);
+    await vi.waitFor(() => expect(log.pendingActions).toBe(1));
+    await vi.waitFor(() => expect(posts).toBe(1));
+    log.close();
+    refuseWrites = false;
+
+    let release!: () => void;
+    const deferred = new Promise<void>((resolve) => (release = resolve));
+    const policy = vi.spyOn(syncLoader, 'ensureDeferredSyncPolicy').mockReturnValue(deferred);
+    try {
+      let opened = false;
+      const opening = LibraryLog.open(LIBRARY_KEY, connection, undefined, vault).then((value) => {
+        opened = true;
+        return value;
+      });
+      await firstPull;
+      expect(changes, 'the cached open owns one immediate changes request').toBe(2);
+      expect(opened, 'mixed retained work is not published before semantic policy').toBe(false);
+
+      release();
+      const reopened = (await opening)!;
+      expect(reopened.title({ type: 'movie', id: 2 })?.status.value).toBe('watchlist');
+      expect(reopened.settings('assistant-applied')).toMatchObject({ values });
+
+      await reopened.refresh();
+      expect(changes, 'the first foreground refresh shares the opening pass').toBe(2);
+      expect(posts, 'the previously refused op and rider are sent together once').toBe(2);
+      expect(reopened.pendingActions).toBe(0);
+
+      await reopened.refresh();
+      expect(changes).toBe(3);
+      expect(posts, 'settled work is not sent again').toBe(2);
+      reopened.close();
+    } finally {
+      release();
+      policy.mockRestore();
+      warn.mockRestore();
+    }
   });
 
   it('advertises wire 4 and the generation on every library request', async () => {

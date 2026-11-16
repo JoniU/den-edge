@@ -460,6 +460,8 @@ export class LibraryLog {
   private dirty = false;
   private saving: Promise<void> = Promise.resolve();
   private writes: Promise<unknown> = Promise.resolve();
+  /** The cached open's already-started first pull, shared with the first foreground refresh. */
+  private openingPass?: Promise<{ changed: boolean; reachedHead: boolean }>;
   private head = 0;
   private generation?: string;
   /** `observedGeneration` as this page set it. */
@@ -2417,9 +2419,8 @@ export class LibraryLog {
       // round, an open between the two finds it in neither.
       const kept = await log.keptWork();
       if (await log.restoreFacts(factManifest.generation, factManifest.head)) {
-        // Shown before den-edge is asked anything: an unanswered request kept the kept library off the screen. A
-        // membership not yet registered is registered beside it, and claimed once den-edge has it; `refresh`, which
-        // follows at once, sends the work kept here.
+        // Shown without waiting for den-edge: an unanswered request once kept this copy off the screen. A membership
+        // not yet registered is registered beside it, and claimed once den-edge has it.
         if (log.memberRegistered) useLibraryCredential(keys);
         else
           void log.registerMember().then(() => {
@@ -2427,9 +2428,33 @@ export class LibraryLog {
           });
         log.fromCache = true;
         log.projectJournal();
+        let overlay: { publish: () => void; refuse: (error: unknown) => void } | undefined;
+        if (kept.length) {
+          let publish!: () => void;
+          let refuse!: (error: unknown) => void;
+          const overlayReady = new Promise<void>((resolve, reject) => {
+            publish = resolve;
+            refuse = reject;
+          });
+          overlay = { publish, refuse };
+          // Start the first read before mutation policy is ready. `pass` may fill the private acknowledged/fact
+          // state, but it cannot publish, replay or send retained work until the complete overlay below has been
+          // projected. The foreground scheduler consumes this same pass instead of issuing a duplicate first request.
+          log.openingPass = log.pass(overlayReady);
+          void log.openingPass.catch(() => undefined);
+        }
         // Unsent work is drawn too, without sending it: a reload while den-edge is out of reach showed none of it.
-        if (kept.length) await ensureDeferredSyncPolicy();
-        for (const work of kept) log.projectWork(work);
+        // Rows already carry their complete merge semantics, so do not put the deferred mutation evaluator on this
+        // return-visit boundary unless retained semantic ops actually need it. Keep the original work order atomic:
+        // exposing a cached log before every retained op is drawn would briefly show stale library state.
+        try {
+          if (kept.some((work) => work.kind === 'ops')) await ensureDeferredSyncPolicy();
+          for (const work of kept) log.projectWork(work);
+          overlay?.publish();
+        } catch (error) {
+          overlay?.refuse(error);
+          throw error;
+        }
         return log;
       }
     }
@@ -2809,6 +2834,12 @@ export class LibraryLog {
    * new is false, so what is built from the library is not rebuilt on every 30-second refresh.
    */
   async refresh(waitSeconds = 0, stopWaiting?: AbortSignal): Promise<boolean> {
+    const opening = this.openingPass;
+    if (opening) {
+      const result = await opening;
+      if (this.openingPass === opening) this.openingPass = undefined;
+      return result.changed;
+    }
     if (waitSeconds > 0) await this.awaitChange(waitSeconds, stopWaiting);
     return (await this.pass()).changed;
   }
@@ -2836,7 +2867,9 @@ export class LibraryLog {
   }
 
   /** One `refresh` pass: whether it changed what this browser holds, and whether it read the log to its head. */
-  private async pass(): Promise<{ changed: boolean; reachedHead: boolean }> {
+  private async pass(
+    beforePublication?: Promise<void>,
+  ): Promise<{ changed: boolean; reachedHead: boolean }> {
     // Nothing else writes a library kept only here but another tab, whose rows each save takes up (`takeKept`).
     if (this.offline) return { changed: false, reachedHead: false };
     const generationsBefore = this.generationChanges;
@@ -2964,6 +2997,7 @@ export class LibraryLog {
     this.writes = run.catch(() => null);
     const read = await run;
     if (read === null) return { changed: false, reachedHead: false };
+    await beforePublication;
     // A generation change in this pass is read from zero, but its write-back (`replay`, below) has yet to land: a
     // reader that must act on a current row waits for the next pass (recovery-code §7).
     const reachedHead = read === 'head' && this.generationChanges === generationsBefore;
