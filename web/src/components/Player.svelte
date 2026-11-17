@@ -1295,7 +1295,21 @@
     void (async () => {
       let minutes: number | undefined;
       if (title.type === 'tv' && pickedSeason !== undefined && pickedEpisode !== undefined) {
-        const listed = await seasonEpisodes(pickedSeason, controller.signal);
+        let listed: AiredEpisode[] | null = null;
+        try {
+          const answer = await content.query(
+            { kind: 'season', title: { type: 'tv', id: title.id }, season: pickedSeason },
+            controller.signal,
+          );
+          if (answer.episodes.state === 'ready')
+            listed = withAiring(
+              answer.episodes.value,
+              pickedSeason,
+              untrack(() => airingStore(content).get(title.id)),
+            );
+        } catch {
+          // Detail below can still supply a representative runtime. The TV information panel stays empty.
+        }
         if (controller.signal.aborted) return;
         const exact = listed?.find((item) => item.number === pickedEpisode);
         if (fullTvTransport) tvEpisode = exact ?? null;
