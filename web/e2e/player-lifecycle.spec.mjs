@@ -45,10 +45,19 @@ async function trackIntervals(page) {
 
 async function mockPlayer(
   page,
-  { onSession, onSkip, releases = [], sessionAnswer = session, runtime, episodeRuntime } = {},
+  {
+    onSession,
+    onSkip,
+    onTmdb,
+    releases = [],
+    sessionAnswer = session,
+    runtime,
+    episodeRuntime,
+  } = {},
 ) {
   await guardNetwork(page);
   await routeTmdb(page, (route) => {
+    if (onTmdb) return onTmdb(route);
     const path = new URL(route.request().url()).pathname;
     return route.fulfill({
       json: path.endsWith('/external_ids')
@@ -136,6 +145,65 @@ test('unknown episode duration prefers its exact runtime over the series estimat
   await expect
     .poll(async () => JSON.parse((await page.getByTestId('player-progress').textContent()) ?? '{}'))
     .toMatchObject({ fraction: 31 / 120, seconds: 31, playing: false });
+});
+
+test('late runtime from a replaced episode cannot become the active denominator', async ({
+  page,
+}) => {
+  let releaseFirst;
+  let startFirst;
+  const firstHeld = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const firstStarted = new Promise((resolve) => {
+    startFirst = resolve;
+  });
+  await mockPlayer(page, {
+    sessionAnswer: { ...session, duration: 0 },
+    onTmdb: async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/external_ids')) return route.fulfill({ json: { imdb_id: 'tt42' } });
+      if (path.endsWith('/season/1')) {
+        startFirst();
+        await firstHeld;
+        return route
+          .fulfill({ json: { episodes: [{ episode_number: 1, name: 'Old', runtime: 1 }] } })
+          .catch(() => undefined);
+      }
+      if (path.endsWith('/season/2'))
+        return route.fulfill({
+          json: { episodes: [{ episode_number: 1, name: 'Current', runtime: 3 }] },
+        });
+      return route.fulfill({
+        json: { id: 42, name: 'The Series', first_air_date: '2001-01-01', runtime: 10, genres: [] },
+      });
+    },
+  });
+  await page.goto(`${ORIGIN}/test/player.html?series&replaceEpisode`);
+  await firstStarted;
+  await page.getByTestId('replace-player-episode').click();
+  const video = page.locator('.player video');
+  await page.waitForFunction(() => !document.querySelector('.player video')?.paused, undefined, {
+    timeout: 30_000,
+  });
+  await video.evaluate((element) => {
+    Object.defineProperty(element, 'duration', { configurable: true, get: () => 0 });
+    element.currentTime = 31;
+    element.pause();
+  });
+  await expect
+    .poll(async () => JSON.parse((await page.getByTestId('player-progress').textContent()) ?? '{}'))
+    .toMatchObject({ fraction: 31 / 180, seconds: 31, playing: false });
+
+  releaseFirst();
+  await video.evaluate(async (element) => {
+    await element.play();
+    element.currentTime = 32;
+    element.pause();
+  });
+  await expect
+    .poll(async () => JSON.parse((await page.getByTestId('player-progress').textContent()) ?? '{}'))
+    .toMatchObject({ fraction: 32 / 180, seconds: 32, playing: false });
 });
 
 test('unknown media duration without trustworthy runtime remains fail-closed', async ({ page }) => {
