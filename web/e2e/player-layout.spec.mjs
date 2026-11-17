@@ -711,6 +711,15 @@ for (const [engine, browserType] of engines) {
         await expect(rows.nth(3)).toHaveAttribute('aria-disabled', 'true');
         expect(seasons).toEqual([1]);
         const box = await menu.boundingBox();
+        // Whatever scrolls the list (the popover itself, or a sheet's items) never scrolls sideways.
+        expect(
+          await menu.locator('.episode-list').evaluate((list) => {
+            let scroller = list.parentElement;
+            while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY))
+              scroller = scroller.parentElement;
+            return scroller ? scroller.scrollWidth - scroller.clientWidth : 0;
+          }),
+        ).toBe(0);
         expect(box.y).toBeGreaterThanOrEqual(0);
         expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
         // A popover's foot stays just above its button, however long the season it shows.
