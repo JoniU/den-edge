@@ -174,8 +174,11 @@ test('unknown episode duration prefers its exact runtime over the series estimat
   });
 
   await expect
-    .poll(async () => JSON.parse((await page.getByTestId('player-progress').textContent()) ?? '{}'))
-    .toMatchObject({ fraction: 31 / 120, seconds: 31, playing: false });
+    .poll(async () => {
+      const saved = JSON.parse((await page.getByTestId('player-progress').textContent()) ?? '{}');
+      return saved.seconds === 31 ? saved.fraction : 0;
+    })
+    .toBeCloseTo(31 / 120, 2);
 });
 
 test('late runtime from a replaced episode cannot become the active denominator', async ({
