@@ -35,7 +35,11 @@
   import { interfaceLocale, type InterfaceLanguage } from '../lib/interfaceLanguage';
   import { languageName } from '../lib/languageName';
   import type { Episode as EpisodeDetail } from '../lib/detail';
-  import { PLAYBACK_PROGRESS_SAVE_MS, PlaybackProgressReporter } from '../lib/playbackProgress';
+  import {
+    PLAYBACK_PROGRESS_SAVE_MS,
+    playbackProgressDuration,
+    PlaybackProgressReporter,
+  } from '../lib/playbackProgress';
   import { playable, withoutRefused, type Playable } from '../lib/playable';
   import {
     autoSubtitleLanguage,
@@ -185,6 +189,7 @@
     episode,
     filename,
     content,
+    region = 'US',
     scout,
     releaseAuthority,
     routes = {},
@@ -221,6 +226,8 @@
     episode?: number;
     filename?: string;
     content: ContentServiceClientPort;
+    /** Active profile region, for the title-detail cache key used by the expected-runtime fallback. */
+    region?: string;
     scout: Addon;
     /** Every authority under which Scout's opaque binge group is meaningful. */
     releaseAuthority: ReleaseAuthority;
@@ -552,6 +559,8 @@
   let tvSubtitleTimingOpen = $state(false);
   let subtitleTimingPanel = $state<HTMLElement>();
   let tvEpisode = $state.raw<EpisodeDetail | null>();
+  /** Metadata denominator for the exact playing coordinate. Never becomes the seekable/media duration. */
+  let expectedRuntime = $state.raw<{ coordinate: string; minutes: number }>();
   let castFrame = $state<HTMLIFrameElement>();
   let remoteTime = 0;
   let remoteDuration = 0;
@@ -1270,22 +1279,48 @@
     });
   }
 
-  // tvOS resolves episode metadata after playback has begun. Do the same through the already-open content service:
-  // it enriches the transport and Down panel without joining the source/session critical path.
+  // Resolve metadata after playback has begun, through the already-open/coalescing content service. Besides the TV
+  // transport copy this supplies a bounded progress denominator when a media engine has not reported a duration.
+  // The exact episode wins; only its absence falls back to the series' representative runtime, as native Den does.
   $effect(() => {
     const [pickedSeason, pickedEpisode] = [season, episode];
+    const sourceDuration = session?.duration;
+    const needsRuntime =
+      session !== null && !(Number.isFinite(sourceDuration) && sourceDuration! > 0);
     tvEpisode = undefined;
-    if (
-      !fullTvTransport ||
-      title.type !== 'tv' ||
-      pickedSeason === undefined ||
-      pickedEpisode === undefined
-    )
-      return;
+    expectedRuntime = undefined;
+    if (!needsRuntime && !fullTvTransport) return;
     const controller = new AbortController();
-    void seasonEpisodes(pickedSeason, controller.signal).then(
-      (listed) => (tvEpisode = listed?.find((item) => item.number === pickedEpisode) ?? null),
-    );
+    const coordinate = sourceCoordinate({ season: pickedSeason, episode: pickedEpisode });
+    void (async () => {
+      let minutes: number | undefined;
+      if (title.type === 'tv' && pickedSeason !== undefined && pickedEpisode !== undefined) {
+        const listed = await seasonEpisodes(pickedSeason, controller.signal);
+        if (controller.signal.aborted) return;
+        const exact = listed?.find((item) => item.number === pickedEpisode);
+        if (fullTvTransport) tvEpisode = exact ?? null;
+        minutes = exact?.runtime;
+      }
+      if (needsRuntime && !(Number.isFinite(minutes) && minutes! > 0 && minutes! <= 1_440)) {
+        try {
+          const answer = await content.query(
+            { kind: 'title.detail', title: { type: title.type, id: title.id }, region },
+            controller.signal,
+          );
+          if (answer.detail.state === 'ready') minutes = answer.detail.value.runtime;
+        } catch {
+          return;
+        }
+      }
+      if (
+        !needsRuntime ||
+        controller.signal.aborted ||
+        sourceCoordinate({ season, episode }) !== coordinate ||
+        !(Number.isFinite(minutes) && minutes! > 0 && minutes! <= 1_440)
+      )
+        return;
+      expectedRuntime = { coordinate, minutes: minutes! };
+    })();
     return () => controller.abort();
   });
   /** The season the Episodes list shows: the one playing, until another is picked there. */
@@ -4008,6 +4043,16 @@
     return session?.duration ?? 0;
   }
 
+  /** Exact transport length when known; otherwise only the active title/episode's bounded metadata estimate. */
+  function progressLength(): number {
+    return playbackProgressDuration(
+      length(),
+      expectedRuntime?.coordinate === sourceCoordinate(playingEpisode)
+        ? expectedRuntime.minutes
+        : undefined,
+    );
+  }
+
   /** Pick up where it was left — or where the last session was — unless that was the very start or the credits. */
   function seekToStart() {
     const total = length();
@@ -4037,7 +4082,8 @@
     // Between an advance's two sessions the held video still has the outgoing episode's clock, until it is emptied.
     if (!session) return;
     const at = video?.currentTime ?? remoteTime;
-    if (at > 0) progress.report(at, length(), slack, { creditsReached: reachedCredits(at) });
+    if (at > 0)
+      progress.report(at, progressLength(), slack, { creditsReached: reachedCredits(at) });
   }
 
   /** SkipDB calls an outro "credits"; crossing its aligned start is the same completion evidence tvOS uses. */
@@ -4711,7 +4757,7 @@
     }
     // The first part-way position once playback starts or resumes goes out now, not a minute later.
     if (session && !(video ? video.paused : remotePaused))
-      progress.reportStart(at, length(), { creditsReached: reachedCredits(at) });
+      progress.reportStart(at, progressLength(), { creditsReached: reachedCredits(at) });
     weighDelivery();
     warmNext(at);
     if (!segments.length) return;
@@ -5327,7 +5373,7 @@
     if (session) {
       const at = video?.currentTime ?? remoteTime;
       if (at > 0)
-        progress.final(at, length(), {
+        progress.final(at, progressLength(), {
           creditsReached: reachedCredits(at),
           naturallyFinished: reachedNaturalEnd,
         });
@@ -5451,6 +5497,7 @@
     endCastSession();
     sendReports(watcher?.stats());
     playingEpisode = at;
+    expectedRuntime = undefined;
     progress = reporterFor(at);
     // A group is a season-pack identity. Same-season advance keeps it; crossing a season asks normally unless this
     // exact season has its own retained deliberate choice.

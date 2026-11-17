@@ -13,6 +13,14 @@ export interface PlaybackEvidence {
 
 export const PLAYBACK_PROGRESS_SAVE_MS = 30_000;
 
+/** A source-reported duration wins. Metadata is only a bounded estimate for otherwise unsaveable progress. */
+export function playbackProgressDuration(duration: number, runtimeMinutes?: number): number {
+  if (Number.isFinite(duration) && duration > 0) return duration;
+  return Number.isFinite(runtimeMinutes) && runtimeMinutes! > 0 && runtimeMinutes! <= 1_440
+    ? runtimeMinutes! * 60
+    : 0;
+}
+
 /**
  * The web form of DenKit's PlaybackProgressPersistencePolicy. Storage and authority fencing remain with each
  * client; evidence, accidental-start floors and completion normalization must agree everywhere.
