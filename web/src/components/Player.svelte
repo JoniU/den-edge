@@ -3781,11 +3781,20 @@
         frameOutputsBox = next;
     };
     place();
-    const observer = new ResizeObserver(place);
+    // Placed on the next frame, not inside the observer's callback: placing moves the frame's buttons, and a resize
+    // caused within the callback is the "ResizeObserver loop" the browser reports as an error.
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(place);
+    });
     observer.observe(slot);
     if (slot.parentElement) observer.observe(slot.parentElement);
     observer.observe(stage);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
   });
   $effect(() => {
     // Again whenever the hole moves or the frame's document is a new one.
