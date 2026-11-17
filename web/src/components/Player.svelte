@@ -1279,7 +1279,7 @@
   // transport copy this supplies a bounded progress denominator when a media engine has not reported a duration.
   // The exact episode wins; only its absence falls back to the series' representative runtime, as native Den does.
   $effect(() => {
-    const [pickedSeason, pickedEpisode] = [season, episode];
+    const [pickedSeason, pickedEpisode, pickedRegion] = [season, episode, region];
     const sourceDuration = session?.duration;
     const needsRuntime = !!session && !(sourceDuration! > 0 && sourceDuration! < Infinity);
     const hasEpisode =
@@ -1299,7 +1299,11 @@
       if (needsRuntime && !(minutes! > 0 && minutes! < Infinity)) {
         const answer = await content
           .query(
-            { kind: 'title.detail', title: { type: title.type, id: title.id }, region },
+            {
+              kind: 'title.detail',
+              title: { type: title.type, id: title.id },
+              region: pickedRegion,
+            },
             controller.signal,
           )
           .catch(() => null);
