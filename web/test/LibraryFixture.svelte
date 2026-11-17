@@ -3,6 +3,7 @@
   // page reads them back from. Without them, pressing Remove or Mark watched threw and the page said
   // "Couldn't save that" — so the actions a test most wants to press were the ones it could not.
   import { onMount, tick } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import Library from '../src/Library.svelte';
   import LibraryStatus from '../src/components/LibraryStatus.svelte';
   import '../src/app.css';
@@ -601,7 +602,7 @@
     let requests = 0;
     let releaseHeld = () => {};
     let held: Promise<void> | undefined;
-    const pending = new Set<Promise<Awaited<ReturnType<typeof originalMetadata>>>>();
+    const pending = new SvelteSet<Promise<Awaited<ReturnType<typeof originalMetadata>>>>();
     session.libraryMetadata = (refs: readonly TitleRef[]) => {
       const ownsSeries = refs.some((ref) => ref.type === 'tv' && ref.id === 2002);
       if (!ownsSeries) return originalMetadata(refs);
