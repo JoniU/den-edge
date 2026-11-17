@@ -62,7 +62,7 @@ test('a final managed-source failure is redacted, actionable, and accessible', a
     await page.goto(`${ORIGIN}/test/player.html?playback=managed`);
 
     const alert = page.getByRole('alert');
-    await expect(alert).toContainText('available playback paths');
+    await expect(alert).toContainText('couldn’t prepare this release');
     await expect(alert).not.toContainText('torbox-secret');
     await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
     expect(requests).toHaveLength(1);
@@ -101,12 +101,12 @@ test('a TorBox rate limit waits out Retry-After before a new operation', async (
   try {
     await page.goto(`${ORIGIN}/test/player.html?playback=managed`);
 
-    await expect(page.getByRole('status')).toContainText('waiting as requested');
+    await expect(page.getByRole('status')).toContainText('Den is waiting');
     await expect(page.getByRole('status')).toHaveText('TorBox asked Den to wait—trying again…', {
       timeout: 5_000,
     });
     releaseRetry();
-    await expect(page.getByRole('alert')).toContainText('available playback paths', {
+    await expect(page.getByRole('alert')).toContainText('couldn’t prepare this release', {
       timeout: 5_000,
     });
     expect(askedAt).toHaveLength(2);
