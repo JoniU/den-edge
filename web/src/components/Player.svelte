@@ -560,8 +560,6 @@
   let castFrame = $state<HTMLIFrameElement>();
   let remoteTime = 0;
   let remoteDuration = 0;
-
-  const usableDuration = (value: number | undefined) => value! > 0 && value! < Infinity;
   let remotePaused = true;
   let casting = $state(false);
   let castMode = false;
@@ -1282,31 +1280,31 @@
   // The exact episode wins; only its absence falls back to the series' representative runtime, as native Den does.
   $effect(() => {
     const [pickedSeason, pickedEpisode, pickedRegion] = [season, episode, region];
-    const needsRuntime = !!session && !usableDuration(session.duration);
+    const sourceDuration = session?.duration;
+    const needsRuntime = !!session && !(sourceDuration! > 0 && sourceDuration! < Infinity);
     const hasEpisode =
       title.type === 'tv' && pickedSeason !== undefined && pickedEpisode !== undefined;
     tvEpisode = undefined;
     expectedRuntime = 0;
     if (!needsRuntime && !(fullTvTransport && hasEpisode)) return;
     const controller = new AbortController();
-    const { signal } = controller;
     void (async () => {
       let minutes: number | undefined;
       if (hasEpisode) {
-        const listed = await seasonEpisodes(pickedSeason, signal);
+        const listed = await seasonEpisodes(pickedSeason, controller.signal);
         const exact = listed?.find((item) => item.number === pickedEpisode);
         if (fullTvTransport) tvEpisode = exact ?? null;
         minutes = exact?.runtime;
       }
-      if (needsRuntime && !usableDuration(minutes)) {
-        minutes = (await titleDetail(content, title, pickedRegion, signal))?.runtime;
+      if (needsRuntime && !(minutes! > 0 && minutes! < Infinity)) {
+        minutes = (await titleDetail(content, title, pickedRegion, controller.signal))?.runtime;
       }
       if (
         !needsRuntime ||
-        signal.aborted ||
+        controller.signal.aborted ||
         season !== pickedSeason ||
         episode !== pickedEpisode ||
-        !usableDuration(minutes)
+        !(minutes! > 0 && minutes! < Infinity)
       )
         return;
       expectedRuntime = minutes! * 60;
@@ -2140,7 +2138,7 @@
       } catch (error) {
         // A request a suspended page never got the answer to (an iPhone's tab put in the background): the session
         // playing carries on, as for any refusal.
-        console.warn('A switch to another release got no answer; this one carries on.', error);
+        console.warn('den: release switch failed; keeping current', error);
         moved = false;
       }
       if (moved === true) {
@@ -4039,7 +4037,7 @@
   /** Exact transport length when known; otherwise only the active title/episode's trusted metadata estimate. */
   function progressLength(): number {
     const total = length();
-    return usableDuration(total) ? total : expectedRuntime;
+    return total > 0 && total < Infinity ? total : expectedRuntime;
   }
 
   /** Pick up where it was left — or where the last session was — unless that was the very start or the credits. */
@@ -5160,7 +5158,7 @@
       ) =>
         void begin(asking, { transcode: 'never' }, current, delivery, null, compatibleSubtitles)
           .catch((error: unknown): Failure => {
-            console.warn('A requested player change got no answer; this stream carries on.', error);
+            console.warn('den: player change failed; keeping current', error);
             return 'unreachable';
           })
           .then((moved) => {
@@ -5179,7 +5177,7 @@
     }
     void begin(pick, {}, undefined, delivery, null, compatibleSubtitles)
       .catch((error: unknown): Failure => {
-        console.warn('A requested player change got no answer.', error);
+        console.warn('den: player change failed', error);
         return 'unreachable';
       })
       .then((moved) => {
@@ -5222,7 +5220,7 @@
       current.external ? 'fallback' : 'direct',
     )
       .catch((error: unknown): Failure => {
-        console.warn(`A switch to ${to} got no answer; this one carries on.`, error);
+        console.warn(`den: ${to} switch failed; keeping current`, error);
         return 'unreachable';
       })
       .then((moved) => {
@@ -5272,7 +5270,7 @@
       compatibleSubtitles,
     )
       .catch((error: unknown) => {
-        console.warn(`The requested ${source} source got no answer.`, error);
+        console.warn(`den: ${source} source failed`, error);
         return false;
       })
       .then((moved) => {
@@ -6306,7 +6304,7 @@
         () =>
           void element
             .play()
-            .catch((error: unknown) => console.warn('The system’s Play was refused.', error)),
+            .catch((error: unknown) => console.warn('den: system play refused', error)),
       ],
       ['pause', () => element.pause()],
       ['seekbackward', (d) => seek(element.currentTime - (d.seekOffset ?? SKIP_SECS))],
@@ -6698,7 +6696,7 @@
               if (__DEN_TV_PLATFORM__ === 'tizen')
                 void broke(video.error.code, video.error.message, avplay?.failureKind());
               else void broke();
-            } else console.warn('The video fired an error with no MediaError; it plays on.');
+            } else console.warn('den: video error missing MediaError; continuing');
           }}
         >
           <!-- WebKit does not reliably reload cues when only an existing track element's src changes. Re-key on
