@@ -557,7 +557,6 @@
   let tvEpisode = $state.raw<EpisodeDetail | null>();
   /** Metadata denominator for the exact playing coordinate. Never becomes the seekable/media duration. */
   let expectedRuntime = 0;
-  const usableDuration = (value?: number): number => (value! > 0 && value! < Infinity ? value! : 0);
   let castFrame = $state<HTMLIFrameElement>();
   let remoteTime = 0;
   let remoteDuration = 0;
@@ -1281,22 +1280,23 @@
   // The exact episode wins; only its absence falls back to the series' representative runtime, as native Den does.
   $effect(() => {
     const [pickedSeason, pickedEpisode, pickedRegion] = [season, episode, region];
-    const needsRuntime = session !== null && !usableDuration(session.duration);
-    const hasEpisode = title.type === 'tv' && pickedSeason != null && pickedEpisode != null;
+    const sourceDuration = session?.duration;
+    const needsRuntime = !!session && !(sourceDuration! > 0 && sourceDuration! < Infinity);
+    const hasEpisode =
+      title.type === 'tv' && pickedSeason !== undefined && pickedEpisode !== undefined;
     tvEpisode = undefined;
     expectedRuntime = 0;
     if (!needsRuntime && !(fullTvTransport && hasEpisode)) return;
     const controller = new AbortController();
-    const signal = controller.signal;
     void (async () => {
       let minutes: number | undefined;
       if (hasEpisode) {
-        const listed = await seasonEpisodes(pickedSeason, signal);
+        const listed = await seasonEpisodes(pickedSeason, controller.signal);
         const exact = listed?.find((item) => item.number === pickedEpisode);
         if (fullTvTransport) tvEpisode = exact ?? null;
         minutes = exact?.runtime;
       }
-      if (needsRuntime && !usableDuration(minutes)) {
+      if (needsRuntime && !(minutes! > 0 && minutes! < Infinity)) {
         const answer = await content
           .query(
             {
@@ -1304,17 +1304,17 @@
               title: { type: title.type, id: title.id },
               region: pickedRegion,
             },
-            signal,
+            controller.signal,
           )
           .catch(() => null);
         if (answer?.detail.state === 'ready') minutes = answer.detail.value.runtime;
       }
       if (
         !needsRuntime ||
-        signal.aborted ||
+        controller.signal.aborted ||
         season !== pickedSeason ||
         episode !== pickedEpisode ||
-        !usableDuration(minutes)
+        !(minutes! > 0 && minutes! < Infinity)
       )
         return;
       expectedRuntime = minutes! * 60;
@@ -4047,7 +4047,7 @@
   /** Exact transport length when known; otherwise only the active title/episode's trusted metadata estimate. */
   function progressLength(): number {
     const total = length();
-    return usableDuration(total) || expectedRuntime;
+    return total > 0 && total < Infinity ? total : expectedRuntime;
   }
 
   /** Pick up where it was left — or where the last session was — unless that was the very start or the credits. */
