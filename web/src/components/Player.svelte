@@ -4048,9 +4048,7 @@
   // Metadata can settle after the media's one `ended` event. Adopt a ready result only while that exact natural end
   // still owns recovery; replay and Stay call `stay()` and therefore cannot be advanced by a late answer.
   $effect(() => {
-    if (upNext === null || ended) return;
-    if (typeof nextEpisode === 'object') untrack(startNextCountdown);
-    else if (nextEpisode === 0 && upNext === 0) untrack(waitForNext);
+    if (upNext !== null && !ended && typeof nextEpisode === 'object') untrack(startNextCountdown);
   });
 
   function stay() {
@@ -4686,15 +4684,16 @@
     if (!shouldWarmNext(at, length(), NEXT_DETAIL_LEAD_SECS)) return;
     const request = new AbortController();
     nextDetailRequest = request;
-    const asked = { season: to.season, episode: to.episode };
+    const askedSeason = to.season;
+    const askedEpisode = to.episode;
     content
       .query(
-        { kind: 'season', title: { type: 'tv', id: title.id }, season: asked.season },
+        { kind: 'season', title: { type: 'tv', id: title.id }, season: askedSeason },
         request.signal,
       )
       .then(({ episodes }) => {
         if (request.signal.aborted || episodes.state !== 'ready') return;
-        nextDetail = episodes.value.find((item) => item.number === asked.episode) ?? null;
+        nextDetail = episodes.value.find((item) => item.number === askedEpisode) ?? null;
       })
       .catch((error: unknown) => {
         if (!request.signal.aborted) reportNextDetailFailure(error);
@@ -5507,15 +5506,18 @@
         quiet: true,
         busy: true,
       });
-    else if (upNext === 0 && onnext)
-      list.push({
-        text: i18n.phrase('Couldn’t load this season from TMDB.'),
-        action: { label: i18n.phrase('Try again'), run: onnext! },
-        urgent: true,
-      });
     else if (upNext === 0)
       list.push({
-        text: i18n.phrase('Upcoming'),
+        text: i18n.phrase(onnext ? 'Couldn’t load this season from TMDB.' : 'Upcoming'),
+        action: onnext
+          ? {
+              label: i18n.phrase('Try again'),
+              run: () => {
+                waitForNext();
+                onnext();
+              },
+            }
+          : undefined,
         urgent: true,
       });
     if (transitionNotice)
@@ -7935,19 +7937,14 @@
     color: rgb(255 255 255 / 0.78);
   }
 
-  .notice:last-of-type {
+  .notices .notice:last-of-type {
     margin-bottom: 10px;
   }
 
   .cast-status .notice {
-    box-sizing: border-box;
     width: 100%;
     min-height: 76px;
     pointer-events: auto;
-  }
-
-  .cast-status .notice:last-of-type {
-    margin-bottom: 0;
   }
 
   /* A notice with nothing to dismiss still sits the same height as one with. A release name has no spaces to break
@@ -8172,10 +8169,6 @@
     pointer-events: none;
   }
 
-  .web-top > * {
-    pointer-events: auto;
-  }
-
   .web-heading {
     display: flex;
     flex: 1;
@@ -8210,10 +8203,6 @@
 
   /* Empty, the box only holds the place. Away from home the cast page is the picture and draws its own Cast button in
      its corner, under this box, which took that press whenever the controls showed. */
-  .web-top > .web-output-empty {
-    pointer-events: none;
-  }
-
   /* Every control is a bare glyph on a 44px target; only Play is filled. Pressed, a faint circle behind it. */
   .web-custom-player :global(.web-glyph) {
     --button-icon-size: 24px;
@@ -8267,11 +8256,8 @@
     animation: status-spin 800ms linear infinite;
   }
 
-  .web-custom-player :global(.web-glyph:active)::before {
-    opacity: 1;
-  }
-
   /* A tap would leave a hover state stuck: only a mouse draws one. */
+  .web-custom-player :global(.web-glyph:active)::before,
   .web-custom-player:not(.web-touch-player) :global(.web-glyph:hover)::before {
     opacity: 1;
   }
@@ -8301,7 +8287,8 @@
     opacity: 1;
   }
 
-  .web-custom-player .icon .filled {
+  .web-custom-player .icon .filled,
+  .web-custom-player .transport-icon .filled {
     fill: currentcolor;
     stroke: none;
   }
@@ -8330,11 +8317,6 @@
     font-size: 15px;
     font-weight: 750;
     text-anchor: middle;
-  }
-
-  .web-custom-player .transport-icon .filled {
-    fill: currentcolor;
-    stroke: none;
   }
 
   /* A label beside the glyph where there is room for one: on its side, a tablet, a wide window. */
@@ -8438,10 +8420,6 @@
     cursor: auto;
   }
 
-  .web-toasts .notice:last-of-type {
-    margin-bottom: 0;
-  }
-
   .web-toasts .notice-copy {
     display: -webkit-box;
     overflow: hidden;
@@ -8491,6 +8469,7 @@
     display: flex;
   }
 
+  .web-top > *,
   .web-centre > *,
   .web-bar > *,
   .web-floating > * {
@@ -8976,6 +8955,7 @@
   }
 
   /* Invisible controls cannot intercept a pointer meant for the picture. Keyboard focus reveals them before it acts. */
+  .web-top > .web-output-empty,
   .web-custom-player.web-controls-hidden .web-top > *,
   .web-custom-player.web-controls-hidden .web-centre > *,
   .web-custom-player.web-controls-hidden .web-bar > * {

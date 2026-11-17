@@ -625,7 +625,7 @@
         replace,
       );
     following = undefined;
-    if (playingSeasonsOf !== titleKey(target.title)) playingSeasons = undefined;
+    if (playingSeasonsOf !== target.title) playingSeasons = undefined;
     playbackIntent += 1;
     playing = target;
   }
@@ -1720,13 +1720,13 @@
   });
 
   /** The aired episode after the one playing, preserving why there is not one yet. */
-  let following = $state<Target | boolean | null>();
+  let following = $state<{ season: number; episode: number } | boolean | null>();
   /**
    * The playing series' seasons and how much of each has aired, for the player's episode list. Kept across an advance
    * within the series, so the list neither blinks out nor asks for its season again.
    */
   let playingSeasons = $state.raw<{ number: number; aired: number }[]>();
-  let playingSeasonsOf: string | undefined;
+  let playingSeasonsOf: Title | undefined;
 
   function findFollowing(target: Target): void {
     const key = titleKey(target.title);
@@ -1746,9 +1746,9 @@
       untrack(() => airings.get(target.title.id)),
     );
     playingSeasons = airedSeasons(shape, aired);
-    playingSeasonsOf = key;
+    playingSeasonsOf = target.title;
     const next = episodeAfter({ season: target.season!, episode: target.episode! }, shape);
-    following = !next ? null : isAired(next, aired) ? { title: target.title, ...next } : false;
+    following = !next ? null : isAired(next, aired) ? next : false;
   }
 
   $effect(() => {
@@ -3453,10 +3453,9 @@
       preferredPlaybackSource={playbackPrefs.preferredPlaybackSource}
       resume={resumePoint(target)}
       next={after ? `S${after.season} · E${after.episode}` : undefined}
-      nextEpisode={after ??
-        (target.season !== undefined && target.episode !== undefined && following !== null
-          ? (following ?? 0)
-          : undefined)}
+      nextEpisode={target.season !== undefined && target.episode !== undefined && following !== null
+        ? (following ?? 0)
+        : undefined}
       onprogress={(fraction, seconds, at, playing) =>
         void progressed({ title: target.title, ...at }, fraction, seconds, playing)}
       onfinalprogress={(fraction, seconds, at) =>
@@ -3466,7 +3465,7 @@
       playbackReceiptHandoffAsOwner={session.administersHousehold}
       onplaybackreceipthandoff={requestPlaybackReceiptHandoff}
       onnext={after
-        ? () => void advance(after)
+        ? () => void advance({ title: target.title, ...after })
         : target.season !== undefined && (following === undefined || following === true)
           ? () => findFollowing(target)
           : undefined}
