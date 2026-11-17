@@ -4128,7 +4128,9 @@
     const outcome = nextEpisode;
     if (untrack(() => upNext === null || ended)) return;
     if (typeof outcome === 'object') untrack(startNextCountdown);
-    else {
+    else if (outcome === 0) {
+      if (untrack(() => upNext !== -1)) untrack(waitForNext);
+    } else {
       clearInterval(countdown);
       upNext = typeof outcome === 'boolean' ? 0 : null;
     }
