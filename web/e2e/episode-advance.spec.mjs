@@ -453,9 +453,7 @@ test('a failed next-episode lookup is distinct from a finale and Retry advances 
     await expect(recovery).toBeVisible();
     await nextMetadata(page, 'hold');
     await recovery.getByRole('button', { name: 'Try again' }).click();
-    await expect(
-      page.getByRole('status').filter({ hasText: 'Loading episodes' }),
-    ).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Loading episodes' })).toBeVisible();
     await expect.poll(() => nextMetadata(page, 'requests')).toBe(1);
     await nextMetadata(page, 'release');
     await expect(player(page).getByRole('link', { name: 'Next episode: S1 · E2' })).toBeVisible();
@@ -543,9 +541,7 @@ test('a late next-episode answer is adopted only while the ended player still ow
     await playingPast(page, 1);
     await pageVideo(page).evaluate((video) => (video.currentTime = video.duration - 1.5));
     await expect(pageVideo(page)).toHaveJSProperty('ended', true);
-    await expect(
-      page.getByRole('status').filter({ hasText: 'Loading episodes' }),
-    ).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Loading episodes' })).toBeVisible();
 
     await optionsButton(page).click();
     await optionsMenu(page).getByRole('menuitem', { name: 'Play from beginning' }).click();
