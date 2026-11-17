@@ -2,7 +2,6 @@
 // after the first failure: ordinary startup, playback and navigation pay no listener, timer or queue cost.
 
 import { currentClientPlatform } from './clientPlatform';
-import { apiUrl } from './runtimeUrl';
 
 export type FailureOperation =
   | 'playback'
@@ -355,16 +354,13 @@ export class FailureReporter {
         const timeout = this.#setTimer(() => controller.abort(), 8_000);
         let retry = false;
         try {
-          const response = await this.#fetch(
-            __DEN_TV_API_ORIGIN__ ? apiUrl('/diagnostics/failure') : '/diagnostics/failure',
-            {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify(item.report),
-              keepalive: true,
-              signal: controller.signal,
-            },
-          );
+          const response = await this.#fetch(`${__DEN_TV_API_ORIGIN__}/diagnostics/failure`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(item.report),
+            keepalive: true,
+            signal: controller.signal,
+          });
           retry = response.status >= 500;
         } catch {
           retry = true;
