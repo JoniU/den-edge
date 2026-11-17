@@ -451,8 +451,13 @@ test('a failed next-episode lookup is distinct from a finale and Retry advances 
       hasText: 'Couldn’t load this season from TMDB.',
     });
     await expect(recovery).toBeVisible();
+    await nextMetadata(page, 'hold');
     await recovery.getByRole('button', { name: 'Try again' }).click();
-    await expect.poll(() => nextMetadata(page, 'requests')).toBe(2);
+    await expect(
+      page.getByRole('status').filter({ hasText: 'Loading episodes' }),
+    ).toBeVisible();
+    await expect.poll(() => nextMetadata(page, 'requests')).toBe(1);
+    await nextMetadata(page, 'release');
     await expect(player(page).getByRole('link', { name: 'Next episode: S1 · E2' })).toBeVisible();
     await expect.poll(() => asked.playback.map(itemOf), { timeout: 20_000 }).toEqual(['e1', 'e2']);
     await page.waitForTimeout(1_100);
