@@ -103,11 +103,37 @@ async function mockPlayer(
   });
 }
 
-test('unknown media duration uses bounded title runtime only for the saved fraction', async ({
+test('unknown media duration uses trusted title runtime only for the saved fraction', async ({
   page,
 }) => {
-  await mockPlayer(page, { sessionAnswer: { ...session, duration: 0 }, runtime: 2 });
+  let releaseRuntime;
+  let startRuntime;
+  const held = new Promise((resolve) => {
+    releaseRuntime = resolve;
+  });
+  const started = new Promise((resolve) => {
+    startRuntime = resolve;
+  });
+  await mockPlayer(page, {
+    sessionAnswer: { ...session, duration: 0 },
+    onTmdb: async (route) => {
+      if (new URL(route.request().url()).pathname.endsWith('/external_ids'))
+        return route.fulfill({ json: { imdb_id: 'tt42' } });
+      startRuntime();
+      await held;
+      return route.fulfill({
+        json: {
+          id: 42,
+          title: 'The Movie',
+          release_date: '2001-01-01',
+          runtime: 2,
+          genres: [],
+        },
+      });
+    },
+  });
   await page.goto(`${ORIGIN}/test/player.html`);
+  await started;
   const video = page.locator('.player video');
   await page.waitForFunction(() => !document.querySelector('.player video')?.paused, undefined, {
     timeout: 30_000,
@@ -117,6 +143,8 @@ test('unknown media duration uses bounded title runtime only for the saved fract
     element.currentTime = 31;
     element.pause();
   });
+  await expect(page.getByTestId('player-progress-writes')).toHaveText('0');
+  releaseRuntime();
 
   await expect
     .poll(async () => JSON.parse((await page.getByTestId('player-progress').textContent()) ?? '{}'))

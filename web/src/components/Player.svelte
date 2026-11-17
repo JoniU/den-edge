@@ -1336,6 +1336,9 @@
       )
         return;
       expectedRuntime = { coordinate, seconds: expectedSeconds };
+      // A pause can precede a slow cached/provider answer and stops the periodic timer. Persist it as soon as the
+      // denominator arrives rather than waiting for teardown or another explicit resume.
+      report();
     })();
     return () => controller.abort();
   });
