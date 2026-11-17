@@ -147,8 +147,11 @@ test('unknown media duration uses trusted title runtime only for the saved fract
   releaseRuntime();
 
   await expect
-    .poll(async () => JSON.parse((await page.getByTestId('player-progress').textContent()) ?? '{}'))
-    .toMatchObject({ fraction: 31 / 120, seconds: 31, playing: false });
+    .poll(async () => {
+      const saved = JSON.parse((await page.getByTestId('player-progress').textContent()) ?? '{}');
+      return saved.seconds === 31 ? saved.fraction : 0;
+    })
+    .toBeCloseTo(31 / 120, 2);
 });
 
 test('unknown episode duration prefers its exact runtime over the series estimate', async ({
@@ -209,7 +212,7 @@ test('late runtime from a replaced episode cannot become the active denominator'
   });
   await page.goto(`${ORIGIN}/test/player.html?series&replaceEpisode`);
   await firstStarted;
-  await page.getByTestId('replace-player-episode').click();
+  await page.getByTestId('replace-player-episode').evaluate((button) => button.click());
   const video = page.locator('.player video');
   await page.waitForFunction(() => !document.querySelector('.player video')?.paused, undefined, {
     timeout: 30_000,

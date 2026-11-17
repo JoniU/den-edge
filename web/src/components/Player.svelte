@@ -151,7 +151,7 @@
   } from '../lib/binge';
   import { fetchSourceList, prepareSource, type SourceListResult } from '../lib/titleSources';
   import type { Routes } from '../lib/routes';
-  import { titleAllowed } from '../lib/playGuard';
+  import { titleAllowed, titleDetail } from '../lib/playGuard';
   import { lanReachable, privateLanRemuxPlaylist } from '../lib/localNetwork';
   import { named } from '../lib/pageTitle';
   import { nameTab } from '../lib/tabName.svelte';
@@ -1297,17 +1297,7 @@
         minutes = exact?.runtime;
       }
       if (needsRuntime && !(minutes! > 0 && minutes! < Infinity)) {
-        const answer = await content
-          .query(
-            {
-              kind: 'title.detail',
-              title: { type: title.type, id: title.id },
-              region: pickedRegion,
-            },
-            controller.signal,
-          )
-          .catch(() => null);
-        if (answer?.detail.state === 'ready') minutes = answer.detail.value.runtime;
+        minutes = (await titleDetail(content, title, pickedRegion, controller.signal))?.runtime;
       }
       if (
         !needsRuntime ||
