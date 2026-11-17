@@ -4128,8 +4128,10 @@
     const outcome = nextEpisode;
     if (untrack(() => upNext === null || ended)) return;
     if (typeof outcome === 'object') untrack(startNextCountdown);
-    else if (typeof outcome === 'boolean') upNext = 0;
-    else upNext = null;
+    else {
+      clearInterval(countdown);
+      upNext = typeof outcome === 'boolean' ? 0 : null;
+    }
   });
 
   function stay() {
