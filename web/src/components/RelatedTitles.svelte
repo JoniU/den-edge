@@ -73,10 +73,7 @@
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- read and written only by loader closures.
   let startedRows = new Set<string>();
   let root: HTMLDivElement;
-  let discovery = $state<{
-    start: () => Promise<void>;
-    cancel: () => void;
-  }>();
+  let discovery = $state<() => void>();
   let retryVersions = $state<() => Promise<void>>();
   /** Live BrowseRows already admitted. The one-block substitutes keep the same initial skeleton height. */
   const mountedRows = new SvelteSet<string>();
@@ -91,10 +88,10 @@
     let cancelIdle = () => {};
     const start = () => {
       cancelIdle();
-      void pending.start();
+      pending();
     };
     const stopNear = observeNearViewport(root, (near) => near && start(), '800px 0px');
-    cancelIdle = whenIdle(pending.start);
+    cancelIdle = whenIdle(pending);
     return () => {
       cancelIdle();
       stopNear();
@@ -189,12 +186,6 @@
     const controller = new AbortController();
     const { signal } = controller;
     const current = () => !signal.aborted;
-    const placeVersions = (other: RowDef | null, upper: RowDef | null) => {
-      const next = rows.filter(({ row }) => row.id !== 'other-versions');
-      if (other)
-        next.splice(upper && next[0]?.row.id === upper.id ? 1 : 0, 0, { build, row: other });
-      rows = next;
-    };
     let decideDiscovery!: (start: boolean) => void;
     // Promise settlement itself makes repeated near/idle/cleanup decisions harmless.
     const discoveryGate = new Promise<boolean>((resolve) => (decideDiscovery = resolve));
@@ -212,28 +203,22 @@
     // versionsRow turns every transient provider error into undefined. Only cancellation escapes, and cancellation
     // belongs to the retired build rather than its recovery UI.
     const versionsAnswer = discoveryGate.then((start) => (start ? loadVersions() : null));
-    const retry = async () => {
+    const placeVersions = async (request = versionsAnswer) => {
       retryVersions = undefined;
-      const answer = await loadVersions();
+      const answer = await request;
       if (!current()) return;
-      if (answer === undefined) retryVersions = retry;
-      else {
-        const upper = await franchise;
-        if (current()) placeVersions(answer, upper);
+      if (answer === undefined) {
+        retryVersions = () => placeVersions(loadVersions());
+        return;
       }
+      const upper = await franchise;
+      if (!current()) return;
+      const next = rows.filter(({ row }) => row.id !== 'other-versions');
+      if (answer)
+        next.splice(upper && next[0]?.row.id === upper.id ? 1 : 0, 0, { build, row: answer });
+      rows = next;
     };
-    void versionsAnswer.then((answer) => {
-      if (answer === undefined && current()) retryVersions = retry;
-    });
-    const settledDiscovery = Promise.all([franchise, versionsAnswer]).then(() => undefined);
-    const pendingDiscovery = {
-      start: () => {
-        decideDiscovery(true);
-        return settledDiscovery;
-      },
-      cancel: () => decideDiscovery(false),
-    };
-    discovery = pendingDiscovery;
+    discovery = () => decideDiscovery(true);
     const author = atlas ? authorRow(known, self, content) : null;
     // Closest first: what is like this title and what its fans also love, then what else came from its source
     // author's books, the people who made it, then the same of its strongest mood, its studio, network and country or
@@ -295,19 +280,17 @@
     if (rebuild) {
       void Promise.all([
         franchise,
-        versionsAnswer,
         // Only replace content a viewer has already caused to load with another pre-resolved row. Untouched rows
         // remain cheap definitions and keep the same heading/skeleton geometry when this build is published.
         ...defined.map((row) => (preserve.has(row.id) ? firstScreen(row, shown) : row)),
-      ]).then(([upper, version, ...rest]) => {
+      ]).then(([upper, ...rest]) => {
         if (!current()) return;
-        const next = [upper, version ?? null, ...rest]
+        const next = [upper, ...rest]
           .filter((row): row is RowDef => row !== null)
           .map((row) => ({ build, row }));
         // A transient Atlas failure is not evidence that an already authoritative row became empty. Keep that row
         // until this exact lane answers successfully; Retry below reuses the current title/franchise authority.
-        const keptVersions =
-          version === undefined && rows.find(({ row }) => row.id === 'other-versions');
+        const keptVersions = rows.find(({ row }) => row.id === 'other-versions');
         if (keptVersions)
           next.splice(upper && next[0]?.row.id === upper.id ? 1 : 0, 0, keptVersions);
         // A rebuild with no atlas has none to suggest: the suggestions already shown for this title stay, under
@@ -317,21 +300,20 @@
           : rows.find(({ row }) => row.id === 'you-might-also-like');
         if (kept) next.splice(next.findIndex(({ row }) => row.id === similar.id) + 1, 0, kept);
         rows = next;
+        void placeVersions();
       });
     } else {
       rows = defined.map((row) => ({ build, row }));
-      void franchise.then(async (row) => {
+      void franchise.then((row) => {
         if (current() && row) rows = [{ build, row }, ...rows];
-        // Other versions sit straight under the franchise, which they are never part of.
-        const other = await versionsAnswer;
-        if (!current() || !other) return;
-        placeVersions(other, row);
       });
+      // Other versions sit straight under the franchise, which they are never part of.
+      void placeVersions();
     }
     return () => {
       controller.abort();
       retryVersions = undefined;
-      pendingDiscovery.cancel();
+      decideDiscovery(false);
     };
   });
 
