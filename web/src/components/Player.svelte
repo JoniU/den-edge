@@ -9033,6 +9033,14 @@
     scrollbar-width: none;
   }
 
+  /* The negative margins above reach a popover's 6px padding, where the list scrolls in the menu itself. A phone
+     sheet scrolls its unpadded items instead, so there they would push the row 6px past both edges and the whole list
+     would scroll sideways. */
+  :global(.menu.sheet) .episode-seasons {
+    top: 0;
+    margin: 0 0 6px;
+  }
+
   .episode-season {
     flex: none;
     min-width: 34px;
