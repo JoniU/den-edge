@@ -115,6 +115,7 @@
     season={playingAt.season}
     episode={playingAt.episode}
     {content}
+    region="US"
     scout={{ install: scoutInstall, base: '/scout/config' }}
     releaseAuthority={[
       'fixture:owner',

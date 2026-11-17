@@ -185,7 +185,7 @@
     episode,
     filename,
     content,
-    region = 'US',
+    region,
     scout,
     releaseAuthority,
     routes = {},
@@ -223,7 +223,7 @@
     filename?: string;
     content: ContentServiceClientPort;
     /** Active profile region, for the title-detail cache key used by the expected-runtime fallback. */
-    region?: string;
+    region: string;
     scout: Addon;
     /** Every authority under which Scout's opaque binge group is meaningful. */
     releaseAuthority: ReleaseAuthority;
@@ -1296,8 +1296,7 @@
         if (fullTvTransport) tvEpisode = exact ?? null;
         minutes = exact?.runtime;
       }
-      let expectedSeconds = Number(minutes) * 60;
-      if (needsRuntime && !(expectedSeconds > 0 && expectedSeconds < Infinity)) {
+      if (needsRuntime && !(minutes! > 0 && minutes! < Infinity)) {
         const answer = await content
           .query(
             { kind: 'title.detail', title: { type: title.type, id: title.id }, region },
@@ -1305,17 +1304,16 @@
           )
           .catch(() => null);
         if (answer?.detail.state === 'ready') minutes = answer.detail.value.runtime;
-        expectedSeconds = Number(minutes) * 60;
       }
       if (
         !needsRuntime ||
         controller.signal.aborted ||
         season !== pickedSeason ||
         episode !== pickedEpisode ||
-        !(expectedSeconds > 0 && expectedSeconds < Infinity)
+        !(minutes! > 0 && minutes! < Infinity)
       )
         return;
-      expectedRuntime = expectedSeconds;
+      expectedRuntime = minutes! * 60;
       // A pause can precede a slow cached/provider answer and stops the periodic timer. Persist it as soon as the
       // denominator arrives rather than waiting for teardown or another explicit resume.
       report();
