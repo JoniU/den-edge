@@ -560,6 +560,8 @@
   let castFrame = $state<HTMLIFrameElement>();
   let remoteTime = 0;
   let remoteDuration = 0;
+
+  const usableDuration = (value: number | undefined) => value! > 0 && value! < Infinity;
   let remotePaused = true;
   let casting = $state(false);
   let castMode = false;
@@ -1280,31 +1282,31 @@
   // The exact episode wins; only its absence falls back to the series' representative runtime, as native Den does.
   $effect(() => {
     const [pickedSeason, pickedEpisode, pickedRegion] = [season, episode, region];
-    const sourceDuration = session?.duration;
-    const needsRuntime = !!session && !(sourceDuration! > 0 && sourceDuration! < Infinity);
+    const needsRuntime = !!session && !usableDuration(session.duration);
     const hasEpisode =
       title.type === 'tv' && pickedSeason !== undefined && pickedEpisode !== undefined;
     tvEpisode = undefined;
     expectedRuntime = 0;
     if (!needsRuntime && !(fullTvTransport && hasEpisode)) return;
     const controller = new AbortController();
+    const { signal } = controller;
     void (async () => {
       let minutes: number | undefined;
       if (hasEpisode) {
-        const listed = await seasonEpisodes(pickedSeason, controller.signal);
+        const listed = await seasonEpisodes(pickedSeason, signal);
         const exact = listed?.find((item) => item.number === pickedEpisode);
         if (fullTvTransport) tvEpisode = exact ?? null;
         minutes = exact?.runtime;
       }
-      if (needsRuntime && !(minutes! > 0 && minutes! < Infinity)) {
-        minutes = (await titleDetail(content, title, pickedRegion, controller.signal))?.runtime;
+      if (needsRuntime && !usableDuration(minutes)) {
+        minutes = (await titleDetail(content, title, pickedRegion, signal))?.runtime;
       }
       if (
         !needsRuntime ||
-        controller.signal.aborted ||
+        signal.aborted ||
         season !== pickedSeason ||
         episode !== pickedEpisode ||
-        !(minutes! > 0 && minutes! < Infinity)
+        !usableDuration(minutes)
       )
         return;
       expectedRuntime = minutes! * 60;
@@ -4037,7 +4039,7 @@
   /** Exact transport length when known; otherwise only the active title/episode's trusted metadata estimate. */
   function progressLength(): number {
     const total = length();
-    return total > 0 && total < Infinity ? total : expectedRuntime;
+    return usableDuration(total) ? total : expectedRuntime;
   }
 
   /** Pick up where it was left — or where the last session was — unless that was the very start or the credits. */

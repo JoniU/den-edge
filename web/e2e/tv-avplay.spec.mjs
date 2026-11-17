@@ -100,6 +100,9 @@ test('Samsung AVPlay saves exact progress with metadata when the engine duration
   await expect.poll(() => callsNamed(page, 'play')).toHaveLength(1);
   await page.evaluate(() => window.__avplayFixture.latest().oncurrentplaytime(31_000));
   expect(await remoteKey(page, 'Unidentified', 19)).toBe(true);
+  await expect
+    .poll(() => page.locator('.player video').evaluate((element) => element.paused))
+    .toBe(true);
 
   await expect
     .poll(async () => JSON.parse((await page.getByTestId('player-progress').textContent()) ?? '{}'))
