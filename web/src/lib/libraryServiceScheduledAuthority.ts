@@ -29,6 +29,8 @@ export interface LibraryMaintenanceResult {
 /** The scheduler depends on one semantic maintenance operation, not LibraryLog internals. */
 export interface LibraryMaintenance {
   readonly mode: 'online' | 'local';
+  /** Post-foreground bounded upgrade work; false keeps a local authority scheduled until every page succeeds. */
+  upgrade?(): Promise<boolean>;
   /** `waitSeconds` holds the read until something changes; `stopWaiting` ends that hold early. */
   run(options?: {
     waitSeconds?: number;
@@ -223,10 +225,12 @@ export class ScheduledLibraryServiceAuthority implements LibraryServiceAuthority
     const started = this.#now();
     let changed = false;
     let read = 0;
+    let upgradeComplete = true;
     const holding = new AbortController();
     this.#holding = holding;
     const running = (async () => {
       try {
+        if (this.#foregroundReady) upgradeComplete = (await this.maintenance.upgrade?.()) ?? true;
         const result = await this.maintenance.run({
           waitSeconds: this.#lifecycle.playbackActive
             ? ACTIVE_PLAYBACK_REFRESH_MS / 1000
@@ -274,7 +278,11 @@ export class ScheduledLibraryServiceAuthority implements LibraryServiceAuthority
       if (this.#holding === holding) this.#holding = undefined;
       this.#deliveryWaitsForMaintenance = false;
       this.#requestDelivery();
-      if (!this.#closed && this.#eligible() && this.maintenance.mode === 'online')
+      if (
+        !this.#closed &&
+        this.#eligible() &&
+        (this.maintenance.mode === 'online' || !upgradeComplete)
+      )
         this.#schedule(this.#nextDelay(changed, read, Math.max(0, this.#now() - started)));
     });
     return running;
@@ -348,6 +356,8 @@ export function libraryLogMaintenance(
 ): LibraryMaintenance {
   return {
     mode,
+    // A failed bounded page is not marked complete, so a later foreground maintenance pass retries it.
+    upgrade: () => log.cleanupRetiredOwnerSplitRecords(),
     async run(options) {
       let changed =
         mode === 'online' ? await log.refresh(options?.waitSeconds, options?.stopWaiting) : false;
