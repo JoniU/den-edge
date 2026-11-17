@@ -42,7 +42,10 @@ async function drawRefs(
   signal?: AbortSignal,
 ): Promise<Title[]> {
   const byKey = new Map(cards.map((t) => [keyOf(t), t]));
-  const missing = refs.filter((ref) => !byKey.get(keyOf(ref))?.posterPath);
+  // Keep the service request to its narrow ref contract even when a caller can reuse richer cards for ordering.
+  const missing = refs
+    .filter((ref) => !byKey.get(keyOf(ref))?.posterPath)
+    .map(({ type, id }) => ({ type, id }));
   const normalized = missing.length
     ? (await content.query({ kind: 'titles', titles: missing }, signal)).titles
     : [];

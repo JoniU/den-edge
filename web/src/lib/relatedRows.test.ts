@@ -1040,6 +1040,30 @@ describe('versionsRow', () => {
       versionsRowImpl(self, '/atlas', none, { content }, replaced.signal),
     ).rejects.toMatchObject({ failure: { code: 'cancelled' } });
   });
+
+  it('sends exact title refs rather than versions presentation cards', async () => {
+    const asked: unknown[] = [];
+    const card: Title = { type: 'movie', id: 2, title: 'Needs one', year: 2024 };
+    const content: ContentServiceClientPort = {
+      query: async (request) => {
+        if (request.kind === 'atlas.related')
+          return {
+            kind: 'atlas.related',
+            answer: {
+              state: 'ready',
+              value: { operation: 'versions', versions: [{ title: card, note: 'Remake' }] },
+            },
+          } as never;
+        if (request.kind !== 'titles') throw new Error('unexpected content query');
+        asked.push(request.titles);
+        return { kind: 'titles', titles: [card], retryable: [] } as never;
+      },
+      onStatus: () => () => {},
+    };
+
+    await versionsRowImpl(self, '/atlas', none, { content });
+    expect(asked).toEqual([[{ type: 'movie', id: 2 }]]);
+  });
 });
 
 describe('studioRow', () => {

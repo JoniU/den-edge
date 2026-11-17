@@ -206,17 +206,15 @@
         : null,
     );
     const loadVersions = async () => {
-      const row = await versionsRow(self, atlas, franchise, options, signal);
+      const row = await versionsRow(self, atlas, franchise, options, signal).catch(() => null);
       return row ? firstScreen(tracked(row, true), shown) : row;
     };
     // versionsRow turns every transient provider error into undefined. Only cancellation escapes, and cancellation
     // belongs to the retired build rather than its recovery UI.
-    const versionsAnswer = discoveryGate
-      .then((start) => (start ? loadVersions() : null))
-      .catch(() => null);
+    const versionsAnswer = discoveryGate.then((start) => (start ? loadVersions() : null));
     const retry = async () => {
       retryVersions = undefined;
-      const answer = await loadVersions().catch(() => null);
+      const answer = await loadVersions();
       if (!current()) return;
       if (answer === undefined) retryVersions = retry;
       else {
