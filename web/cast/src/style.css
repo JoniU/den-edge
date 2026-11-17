@@ -95,7 +95,8 @@ video {
 /* Where this page plays the session itself, the Cast button floats over the picture's corner, as Den's player
    buttons do. */
 .cast-button,
-.airplay-button {
+.airplay-button,
+.fullscreen-button {
   position: absolute;
   top: 0.5rem;
   right: 0.5rem;
@@ -115,18 +116,21 @@ video {
 
 .cast-button[hidden],
 .airplay-button[hidden],
+.fullscreen-button[hidden],
 .outputs[hidden] {
   display: none;
 }
 
 .cast-button:focus-visible,
-.airplay-button:focus-visible {
+.airplay-button:focus-visible,
+.fullscreen-button:focus-visible {
   outline: 3px solid #fff;
   outline-offset: 3px;
 }
 
 .cast-button svg,
-.airplay-button svg {
+.airplay-button svg,
+.fullscreen-button svg {
   width: var(--cast-icon, 22px);
   height: var(--cast-icon, 22px);
   fill: none;
@@ -209,7 +213,8 @@ html.driven .outputs:not([hidden]) {
 }
 
 html.driven .cast-button,
-html.driven .airplay-button {
+html.driven .airplay-button,
+html.driven .fullscreen-button {
   position: static;
   flex: none;
   border-color: transparent;
@@ -217,6 +222,7 @@ html.driven .airplay-button {
 }
 
 html.driven .cast-button:hover,
-html.driven .airplay-button:hover {
+html.driven .airplay-button:hover,
+html.driven .fullscreen-button:hover {
   background: rgb(255 255 255 / 0.14);
 }

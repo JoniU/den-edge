@@ -187,6 +187,7 @@ const castButton = document.querySelector<HTMLButtonElement>('#cast')!;
 const localPlayButton = document.querySelector<HTMLButtonElement>('#play-local')!;
 const outputs = document.querySelector<HTMLElement>('.outputs')!;
 const airPlayButton = document.querySelector<HTMLButtonElement>('#airplay')!;
+const fullscreenButton = document.querySelector<HTMLButtonElement>('#fullscreen')!;
 /** The receiver models the player names (`castCapabilities`); the viewer's pick is kept on this origin. */
 const PROFILES = ['legacy', 'gen3', 'ultra', 'google-tv-hd', 'google-tv-4k', 'streamer'];
 const kept = keptProfile();
@@ -328,6 +329,7 @@ const COPY: Record<Exclude<InterfaceLanguage, 'en'>, Record<string, string>> = {
     Play: 'Reproducir',
     AirPlay: 'AirPlay',
     'Change AirPlay device': 'Cambiar dispositivo AirPlay',
+    Fullscreen: 'Pantalla completa',
   },
   sv: {
     'Cast to a TV': 'Casta till en tv',
@@ -344,6 +346,7 @@ const COPY: Record<Exclude<InterfaceLanguage, 'en'>, Record<string, string>> = {
     Play: 'Spela',
     AirPlay: 'AirPlay',
     'Change AirPlay device': 'Byt AirPlay-enhet',
+    Fullscreen: 'Helskärm',
   },
 };
 const text = (english: string): string =>
@@ -417,6 +420,16 @@ if (typeof airPlayVideo.webkitShowPlaybackTargetPicker === 'function') {
 }
 airPlayButton.addEventListener('click', () => airPlayVideo.webkitShowPlaybackTargetPicker?.());
 
+/**
+ * An iPhone, where no element can be made fullscreen and the player's own fullscreen cannot reach this frame's video:
+ * only `webkitEnterFullscreen`, called from a press in this document, fills the screen. Everywhere else the player
+ * makes itself fullscreen, this frame included.
+ */
+const fullscreenVideo = video as HTMLVideoElement & { webkitEnterFullscreen?: () => void };
+const videoFullscreenOnly =
+  !document.fullscreenEnabled && typeof fullscreenVideo.webkitEnterFullscreen === 'function';
+fullscreenButton.addEventListener('click', () => fullscreenVideo.webkitEnterFullscreen?.());
+
 /** Whether the player has given the output buttons a place (`den-outputs-slot`). */
 let outputsSlotted = false;
 /** The output buttons shown, sent with every change so the player sizes the hole it leaves for them. */
@@ -434,7 +447,14 @@ function renderOutputs(): void {
   airPlayButton.setAttribute('aria-pressed', String(wireless));
   airPlayButton.setAttribute('aria-label', text(wireless ? 'Change AirPlay device' : 'AirPlay'));
   airPlayButton.title = airPlayButton.getAttribute('aria-label')!;
-  const shown = { cast: !castButton.hidden, airplay: !airPlayButton.hidden };
+  fullscreenButton.hidden = !driven || !videoFullscreenOnly;
+  fullscreenButton.setAttribute('aria-label', text('Fullscreen'));
+  fullscreenButton.title = text('Fullscreen');
+  const shown = {
+    cast: !castButton.hidden,
+    airplay: !airPlayButton.hidden,
+    fullscreen: !fullscreenButton.hidden,
+  };
   const report = JSON.stringify(shown);
   if (!driven || report === reportedOutputs) return;
   reportedOutputs = report;

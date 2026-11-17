@@ -3030,6 +3030,7 @@
     back?: unknown;
     cast?: unknown;
     airplay?: unknown;
+    fullscreen?: unknown;
   }): boolean {
     switch (message.type) {
       case 'den-cast-state':
@@ -3092,8 +3093,13 @@
         castTab(message.back === true);
         return true;
       case 'den-outputs':
-        // The frame's own output buttons, drawn in the hole left for them in the top bar (`frameOutputsSlot`).
-        frameOutputs = (message.cast === true ? 1 : 0) + (message.airplay === true ? 1 : 0);
+        // The frame's own output buttons, drawn in the hole left for them in the top bar (`frameOutputsSlot`). On an
+        // iPhone that includes fullscreen, which only a press in the frame can ask of its video.
+        frameFullscreen = message.fullscreen === true;
+        frameOutputs =
+          (message.cast === true ? 1 : 0) +
+          (message.airplay === true ? 1 : 0) +
+          (frameFullscreen ? 1 : 0);
         return true;
       case 'den-activity':
         // The pointer is over the frame, where this page's own pointer events do not reach.
@@ -3736,8 +3742,10 @@
     return () => observer.disconnect();
   });
 
-  /** How many output buttons (Cast, AirPlay) the frame draws in the top bar away from home (`den-outputs`). */
+  /** How many output buttons (Cast, AirPlay, fullscreen) the frame draws in the top bar away from home (`den-outputs`). */
   let frameOutputs = $state(0);
+  /** Whether the frame draws fullscreen among its output buttons, so the player's own (which cannot reach it) hides. */
+  let frameFullscreen = $state(false);
   /** The hole left for them in the top bar: Den's surface, under the frame's buttons, as `castSlot` is for Cast. */
   let frameOutputsSlot = $state<HTMLElement>();
   /** That hole in the stage's pixels, which are the frame's own, while the controls show; null hides the buttons. */
@@ -7444,16 +7452,18 @@
                 onclick={() => void togglePictureInPicture()}>{@render pipIcon()}</button
               >
             {/if}
-            <button
-              class="web-glyph"
-              type="button"
-              aria-label={playerFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-              data-tip={i18n.phrase('Fullscreen')}
-              data-key="F"
-              onclick={() => void toggleFullscreen()}
-            >
-              <ButtonIcon name="fullscreen" />
-            </button>
+            {#if !(castStage && frameFullscreen)}
+              <button
+                class="web-glyph"
+                type="button"
+                aria-label={playerFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                data-tip={i18n.phrase('Fullscreen')}
+                data-key="F"
+                onclick={() => void toggleFullscreen()}
+              >
+                <ButtonIcon name="fullscreen" />
+              </button>
+            {/if}
           {/if}
           <span class="web-tip" data-tip={i18n.phrase('More')}>
             <ActionMenu

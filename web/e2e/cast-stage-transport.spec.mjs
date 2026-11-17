@@ -52,9 +52,18 @@ function launch(browserType) {
   return webkit.launch();
 }
 
-async function open(browserType) {
+async function open(browserType, { iphone = false } = {}) {
   const browser = await launch(browserType);
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  // An iPhone's Safari, which no engine here is: no element can be made fullscreen, and a video can only enter
+  // Apple's own fullscreen player. In every frame, so the cast page sees it too; a press records the call.
+  if (iphone)
+    await context.addInitScript(() => {
+      Object.defineProperty(Document.prototype, 'fullscreenEnabled', { get: () => false });
+      HTMLVideoElement.prototype.webkitEnterFullscreen = function () {
+        window.denEnteredFullscreen = true;
+      };
+    });
   const page = await context.newPage();
   await guardNetwork(page);
   await routeTmdb(page, (r) => r.fulfill({ json: { imdb_id: 'tt42' } }));
@@ -156,6 +165,13 @@ for (const [name, browserType] of engines) {
         expect(await frameVideo(page).evaluate((v) => v.controls)).toBe(false);
         await reveal(page);
         await expect(page.locator('.web-timeline')).toBeVisible();
+        // Where the player can make itself fullscreen, fullscreen is the player's button, not the frame's.
+        await expect(
+          page.getByRole('button', { name: 'Enter fullscreen', exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.frameLocator('iframe[title="Den Cast player"]').locator('#fullscreen'),
+        ).toBeHidden();
         // With a mouse the transport is the dock's left end (`.web-dock-transport`).
         const dock = page.locator('.web-dock-transport');
 
@@ -234,6 +250,30 @@ for (const [name, browserType] of engines) {
           timeout: 10_000,
         });
         await expect(outputs).toBeHidden();
+      } finally {
+        await browser.close();
+      }
+    });
+
+    test('on an iPhone fullscreen is the frame’s button, in the hole, and it fills the screen with the frame’s video', async () => {
+      const { browser, page } = await open(browserType, { iphone: true });
+      try {
+        await playingPast(page, 1);
+        await reveal(page);
+        const frame = page.frameLocator('iframe[title="Den Cast player"]');
+        const button = frame.locator('#fullscreen');
+        await expect(button).toBeVisible();
+        // The player's own cannot reach the frame's video there, so it is gone rather than a dead press.
+        await expect(
+          page.getByRole('button', { name: 'Enter fullscreen', exact: true }),
+        ).toHaveCount(0);
+        await expect(page.locator('.frame-outputs')).toHaveCount(1);
+
+        await button.click();
+        const cast = page.frames().find((f) => f.url().startsWith(CAST));
+        await expect
+          .poll(() => cast.evaluate(() => window.denEnteredFullscreen === true))
+          .toBe(true);
       } finally {
         await browser.close();
       }
