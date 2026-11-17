@@ -488,14 +488,11 @@ export function countryRow(
   };
 }
 
-/** A studio or network's row is worth it between these many titles: fewer is no row, more says nothing (Warner Bros.). */
-const PRODUCER_TITLES = { min: 10, max: 300 };
-
 const folded = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '');
 
 /**
  * "More from Showtime": the network a series aired on, then the company that made a title, one row each at most, from
- * atlas's facts. Only the right size to say something (`PRODUCER_TITLES`), and none a curated studio row already shows.
+ * atlas's facts. Only 10–300 titles is specific enough, and none a curated studio row already shows.
  */
 export function producerRows(
   facts: TitleFacts,
@@ -505,8 +502,8 @@ export function producerRows(
 ): RowDef[] {
   const taken = new Set(studios.flatMap((studio) => [studio.id, folded(studio.name)]));
   const fits = (value: Browsable) =>
-    value.titles >= PRODUCER_TITLES.min &&
-    value.titles <= PRODUCER_TITLES.max &&
+    value.titles >= 10 &&
+    value.titles <= 300 &&
     !taken.has(value.id) &&
     !taken.has(folded(value.name));
   const rows: RowDef[] = [];
@@ -541,12 +538,9 @@ function producerRow(
   };
 }
 
-/** A subject or place's row is worth it between these many titles: fewer is a row of a few, more says nothing (New York City). */
-const THEME_TITLES = { min: 8, max: 300 };
-
 /**
  * "More about drug trafficking" and "Set in Baltimore", from atlas's facts: the first subject and the first place the
- * right size to say something (`THEME_TITLES`), films and series together. A place that is the title's own country
+ * right size to say something (8–300 titles), films and series together. A place that is the title's own country
  * (`countryName`) is left to the country row.
  */
 export function themeRows(
@@ -555,8 +549,7 @@ export function themeRows(
   content: ContentServiceClientPort,
   countryName?: string,
 ): RowDef[] {
-  const fits = (value: Browsable) =>
-    value.titles >= THEME_TITLES.min && value.titles <= THEME_TITLES.max;
+  const fits = (value: Browsable) => value.titles >= 8 && value.titles <= 300;
   const rows: RowDef[] = [];
   const subject = facts.subjects.find(fits);
   if (subject) rows.push(themeRow('subject', subject, 'More about ', self, content));
@@ -775,7 +768,6 @@ export async function versionsRow(
   } catch (error) {
     if (
       signal?.aborted ||
-      (error as Error)?.name === 'AbortError' ||
       (error as { failure?: { code?: string } })?.failure?.code === 'cancelled'
     )
       throw error;
@@ -785,14 +777,10 @@ export async function versionsRow(
 
 type Department = 'Directing' | 'Writing' | 'Acting';
 
-/** The most filmography rows one title page shows, and the most of them that are "Starring". */
-const MAX_PERSON_ROWS = 5;
-const MAX_LEAD_ROWS = 3;
-
 /**
  * The filmography rows a title gets, in display order: its director, creator and writer (one row each), then its
  * leads. Each person gets one row, under their first role in that order, so an auteur who wrote and directed is
- * "More from", not also "Written by". Stops at MAX_PERSON_ROWS, so the leads are what a fully credited title gives
+ * "More from", not also "Written by". Stops at five rows, so the leads are what a fully credited title gives
  * up. The TV builds the same rows (DetailModel.personRows).
  */
 export function personRows(
@@ -806,14 +794,14 @@ export function personRows(
     department: Department,
     before: string,
   ) => {
-    if (!person || rows.length >= MAX_PERSON_ROWS || seen.has(person.id)) return;
+    if (!person || rows.length >= 5 || seen.has(person.id)) return;
     seen.add(person.id);
     rows.push({ person, department, before });
   };
   add(detail.directors[0], 'Directing', 'More from ');
   add(fresh(detail.creators)[0], 'Writing', 'Created by ');
   add(fresh(detail.writers)[0], 'Writing', 'Written by ');
-  for (const lead of fresh(detail.cast).slice(0, MAX_LEAD_ROWS)) add(lead, 'Acting', 'Starring ');
+  for (const lead of fresh(detail.cast).slice(0, 3)) add(lead, 'Acting', 'Starring ');
   return rows;
 }
 
