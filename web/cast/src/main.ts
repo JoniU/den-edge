@@ -554,13 +554,17 @@ function failFor(
   code = 0,
   owner: PlayingMedia | undefined = playing,
   ownerWatcher?: Watcher,
+  failure?: 'engine',
 ): void {
   const lifecycle = denLifecycleMedia(owner);
   if (lifecycle) {
     ownerWatcher?.spent();
     sendReport(reportUrlOf(lifecycle), reportBody(code, message));
   }
-  tellFor(load, 'den-error', { message: translateStatus(message) });
+  tellFor(load, 'den-error', {
+    message: translateStatus(message),
+    ...(failure ? { failure } : {}),
+  });
 }
 
 /** End the session this page played, so it stops holding den-remux and the media listener open. */
@@ -638,7 +642,7 @@ function failLocalEngine(owner: LocalPlayback, error: unknown): void {
   if (!ownsLocal(owner)) return;
   reportMediaEngineFailure('hls.js', 'startup', error);
   setStatus('Playback failed');
-  failFor(owner.load, 'Playback failed', 0, owner.owner, owner.watcher);
+  failFor(owner.load, 'Playback failed', 0, owner.owner, owner.watcher, 'engine');
   stopLocal();
 }
 

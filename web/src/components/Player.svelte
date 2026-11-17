@@ -3017,6 +3017,7 @@
       maxBitrate?: number;
       volume?: number;
       muted?: boolean;
+      failure?: unknown;
     };
     if (
       message.type === 'den-ready' ||
@@ -3149,6 +3150,14 @@
         reportFailure(current, 0, message.message);
         lastFailSource = 'cast_page_error';
         failure = 'protocol';
+        return;
+      }
+      // The Cast page's own lazy engine could not load or initialize. This is independent of the release, so trying
+      // another copy would only recreate the frame and repeat the same failed import. Keep the same terminal Reload
+      // recovery as this player's local hls.js/AVPlay startup path.
+      if (message.failure === 'engine') {
+        failure = 'engine';
+        letGo();
         return;
       }
       // A TorBox stream the receiver couldn't play stays TorBox: Den Remux is used only when the viewer picks it. A
