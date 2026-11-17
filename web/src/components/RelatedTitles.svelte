@@ -196,12 +196,8 @@
       rows = next;
     };
     let decideDiscovery!: (start: boolean) => void;
-    const discoveryGate = new Promise<boolean>((resolve) => {
-      decideDiscovery = (start) => {
-        resolve(start);
-        decideDiscovery = () => {};
-      };
-    });
+    // Promise settlement itself makes repeated near/idle/cleanup decisions harmless.
+    const discoveryGate = new Promise<boolean>((resolve) => (decideDiscovery = resolve));
     const franchise = discoveryGate.then((start) =>
       start
         ? franchiseRow(detail.collection, self, atlas, options).then(

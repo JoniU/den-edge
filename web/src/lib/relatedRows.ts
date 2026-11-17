@@ -18,6 +18,12 @@ const CHUNK = 20;
 const keyOf = (t: { type: string; id: number }) => `${t.type}:${t.id}`;
 
 type Ref = { type: MediaType; id: number };
+const UNKNOWN = 0;
+const CARDS = 1;
+const SIMILAR = 2;
+const NEIGHBOURS = 3;
+const RECOMMENDED = 4;
+const DONE = 5;
 
 const titleMessage = (
   id: ParameterMessageId,
@@ -101,17 +107,18 @@ export function moreLikeThisRow(
   seen.add(keyOf(self));
 
   /** `unknown` is atlas not yet asked; whether it has anything for this title decides which way the row goes. */
-  type Source = 'unknown' | 'cards' | 'similar' | 'neighbours' | 'recommended' | 'done';
+  type Source = 0 | 1 | 2 | 3 | 4 | 5;
   /** How far into the paged affinity row (`cardsPath`) the row has read. */
   let cardsSkip = 0;
-  let source: Source = atlas === null ? 'recommended' : 'unknown';
+  let source: Source = atlas === null ? RECOMMENDED : UNKNOWN;
   /** The TMDB page the detail already carried (page 1) is served first, then page 2 on. */
   let recommendedPage = 1;
   let queue: Ref[] | undefined;
 
   async function related(query: ContentRelatedQuery, signal?: AbortSignal) {
     try {
-      return (await content.query({ kind: 'atlas.related', query }, signal)).answer;
+      const answer = (await content.query({ kind: 'atlas.related', query }, signal)).answer;
+      return answer.state === 'ready' ? answer.value : undefined;
     } catch (error) {
       if (signal?.aborted) throw error;
     }
@@ -132,7 +139,7 @@ export function moreLikeThisRow(
       },
       signal,
     );
-    return answer?.state === 'ready' && answer.value.operation === 'refs' ? answer.value.refs : [];
+    return answer?.operation === 'refs' ? answer.refs : [];
   }
 
   /** The one requested seed's row, or null when this Atlas does not implement the affinity contract. */
@@ -146,9 +153,7 @@ export function moreLikeThisRow(
       },
       signal,
     );
-    return answer?.state === 'ready' && answer.value.operation === 'refs'
-      ? answer.value.refs
-      : null;
+    return answer?.operation === 'refs' ? answer.refs : null;
   }
 
   /**
@@ -165,9 +170,8 @@ export function moreLikeThisRow(
       },
       signal,
     );
-    if (answer?.state !== 'ready' || answer.value.operation !== 'cards')
-      return cardsSkip === 0 ? null : undefined;
-    const { refs, titles } = answer.value;
+    if (answer?.operation !== 'cards') return cardsSkip === 0 ? null : undefined;
+    const { refs, titles } = answer;
     if (refs.length === 0) return undefined;
     cardsSkip += refs.length;
     const wanted = refs.filter((ref) => !seen.has(keyOf(ref)));
@@ -188,43 +192,43 @@ export function moreLikeThisRow(
   }
 
   /** Where the row goes once atlas's own answer for it has run out: the wider sources, or nowhere. */
-  const after: Source = fallback ? 'neighbours' : 'done';
+  const after: Source = fallback ? NEIGHBOURS : DONE;
 
   async function step(signal?: AbortSignal): Promise<Title[]> {
-    if (source === 'unknown' && affinity && mixed) {
+    if (source === UNKNOWN && affinity && mixed) {
       const found = await drawCards(signal);
       if (found !== null) {
         if (found) {
-          source = 'cards';
+          source = CARDS;
           return found;
         }
         source = after; // atlas's affinity row for this title is empty
       }
     }
-    if (source === 'cards') {
+    if (source === CARDS) {
       const found = await drawCards(signal);
       if (found) return found;
       source = after;
     }
-    if (source === 'unknown') {
+    if (source === UNKNOWN) {
       queue = affinity
         ? ((await suggested(signal)) ?? (fallback ? await idsFrom('similar', signal) : []))
         : await idsFrom('similar', signal);
-      source = queue.length > 0 ? 'similar' : fallback ? 'recommended' : 'done';
-      if (source !== 'similar') queue = undefined; // atlas has nothing for this title: TMDB alone
+      source = queue.length > 0 ? SIMILAR : fallback ? RECOMMENDED : DONE;
+      if (source !== SIMILAR) queue = undefined; // atlas has nothing for this title: TMDB alone
     }
-    if (source === 'similar') {
+    if (source === SIMILAR) {
       const found = await drawQueued('similar', signal);
       if (found) return found;
       source = after;
       queue = undefined;
     }
-    if (source === 'neighbours') {
+    if (source === NEIGHBOURS) {
       const found = await drawQueued('neighbours', signal);
       if (found) return found;
-      source = 'recommended'; // atlas is exhausted: TMDB pads the end
+      source = RECOMMENDED; // atlas is exhausted: TMDB pads the end
     }
-    if (source === 'recommended') {
+    if (source === RECOMMENDED) {
       if (recommendedPage === 1 && detail.more) {
         recommendedPage = 2;
         return detail.more;
@@ -244,7 +248,7 @@ export function moreLikeThisRow(
       if (signal?.aborted) throw signal;
       recommendedPage++;
       if (page.length > 0) return page;
-      source = 'done';
+      source = DONE;
     }
     return [];
   }
@@ -258,7 +262,7 @@ export function moreLikeThisRow(
       ? { label: 'Explore', href: searchHref('', { chips: [fansId(self)] }) }
       : { label: 'Explore similar', href: searchHref('', { chips: [likeId(self)] }) },
     load: async (_page, signal) => {
-      while (source !== 'done') {
+      while (source !== DONE) {
         const fresh = (await step(signal)).filter((t) => {
           if (seen.has(keyOf(t))) return false;
           seen.add(keyOf(t));
@@ -689,9 +693,7 @@ export async function franchiseRow(
       });
       if (result.answer.state === 'ready' && result.answer.value.operation === 'franchise') {
         const { id, name, members: cards } = result.answer.value;
-        const refs = cards
-          .filter((card) => keyOf(card) !== keyOf(self))
-          .map(({ type, id }) => ({ type, id }));
+        const refs = cards.filter((card) => keyOf(card) !== keyOf(self));
         if (refs.length === 0) return null;
         let members: Promise<Title[]> | undefined;
         return {
@@ -739,29 +741,22 @@ export async function versionsRow(
       return null;
     const listed = result.answer.value.versions;
     /** What each card says beside its year: its franchise's label, else "Remake" for a remake. */
-    const notes = new Map(
-      listed.flatMap(({ title, note }) => (note ? [[keyOf(title), note]] : [])),
-    );
-    const refs = listed.map(({ title }) => ({ type: title.type, id: title.id }));
+    const notes = new Map(listed.map(({ title, note }) => [keyOf(title), note]));
+    const cards = listed.map(({ title }) => title);
     const elsewhere = new Set<string>(
       (await franchise.then((row) => row?.load(1)).catch(() => undefined))?.map(keyOf),
     );
     elsewhere.add(keyOf(self));
-    const wanted = refs.filter((ref) => !elsewhere.has(keyOf(ref)));
+    const wanted = cards.filter((card) => !elsewhere.has(keyOf(card)));
     if (wanted.length === 0) return null;
-    const titles = await drawRefs(
-      wanted,
-      listed.map(({ title }) => title),
-      content,
-      signal,
-    );
+    const titles = await drawRefs(wanted, cards, content, signal);
     if (titles.length === 0) return null;
     return {
       id: 'other-versions',
       title: 'Other versions',
       caption: (t) => {
         const note = notes.get(keyOf(t));
-        return note ? [t.year, note].filter(Boolean).join(' · ') : undefined;
+        return note ? (t.year ? `${t.year} · ${note}` : note) : undefined;
       },
       load: async (page) => (page === 1 ? titles : []),
     };
