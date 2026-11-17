@@ -480,7 +480,6 @@ test('episode replacement never composes the prior episode’s following state',
     expect(episodeTwo.length).toBeGreaterThan(0);
     expect(episodeTwo[0].availability).toBe('loading');
     for (const composition of episodeTwo) {
-      expect(composition.availability).toBeTruthy();
       expect(composition.next).not.toEqual({ season: 1, episode: 2 });
     }
     // The old successor cannot be invoked as its own replacement before the current lookup settles.

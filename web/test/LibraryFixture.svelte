@@ -2,7 +2,7 @@
   // Home and the Watchlist page on a library that already holds something, with writes that land where the
   // page reads them back from. Without them, pressing Remove or Mark watched threw and the page said
   // "Couldn't save that" — so the actions a test most wants to press were the ones it could not.
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import Library from '../src/Library.svelte';
   import LibraryStatus from '../src/components/LibraryStatus.svelte';
   import '../src/app.css';
@@ -601,16 +601,34 @@
     let requests = 0;
     let releaseHeld = () => {};
     let held: Promise<void> | undefined;
-    session.libraryMetadata = async (refs: readonly TitleRef[]) => {
+    const pending = new Set<Promise<Awaited<ReturnType<typeof originalMetadata>>>>();
+    session.libraryMetadata = (refs: readonly TitleRef[]) => {
       const ownsSeries = refs.some((ref) => ref.type === 'tv' && ref.id === 2002);
       if (!ownsSeries) return originalMetadata(refs);
-      requests += 1;
-      await held;
-      if (failures > 0) {
-        failures -= 1;
-        return { titles: [], shapes: [], retryable: [...refs], retryAfterMs: 60_000 };
-      }
-      return originalMetadata(refs);
+      const request = (async () => {
+        requests += 1;
+        await held;
+        if (failures > 0) {
+          failures -= 1;
+          return { titles: [], shapes: [], retryable: [...refs], retryAfterMs: 60_000 };
+        }
+        return originalMetadata(refs);
+      })();
+      pending.add(request);
+      void request.then(
+        () => pending.delete(request),
+        () => pending.delete(request),
+      );
+      return request;
+    };
+    const arm = async () => {
+      // The title route itself promotes metadata. Let that foreground request publish before a test removes its shape
+      // and arms the one playback-owned outcome it intends to observe.
+      await tick();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await Promise.all([...pending]);
+      await tick();
+      requests = 0;
     };
     (
       window as unknown as {
@@ -623,11 +641,13 @@
         };
       }
     ).denTestNextEpisodeMetadata = {
-      failOnce: () => {
+      failOnce: async () => {
+        await arm();
         session.shapes.delete(titleKey({ type: 'tv', id: 2002 }));
         failures = 1;
       },
-      hold: () => {
+      hold: async () => {
+        await arm();
         session.shapes.delete(titleKey({ type: 'tv', id: 2002 }));
         held = new Promise<void>((resolve) => (releaseHeld = resolve));
       },
@@ -635,7 +655,8 @@
         releaseHeld();
         held = undefined;
       },
-      finale: () => {
+      finale: async () => {
+        await arm();
         session.shapes.set(titleKey({ type: 'tv', id: 2002 }), {
           counts: new Map([[1, 1]]),
           lastAired: { season: 1, episode: 1 },
