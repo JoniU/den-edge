@@ -645,11 +645,15 @@
       failOnce: async () => {
         await arm();
         session.shapes.delete(titleKey({ type: 'tv', id: 2002 }));
-        failures = 1;
+        // Keep every lookup before the viewer's explicit Retry failed. Library naming and the player can both
+        // legitimately promote the same missing shape; allowing the second promotion to succeed makes the fixture
+        // restore a ready successor before natural EOF and stops exercising the recovery state altogether.
+        failures = Number.POSITIVE_INFINITY;
       },
       hold: async () => {
         await arm();
         session.shapes.delete(titleKey({ type: 'tv', id: 2002 }));
+        failures = 0;
         held = new Promise<void>((resolve) => (releaseHeld = resolve));
       },
       release: () => {
