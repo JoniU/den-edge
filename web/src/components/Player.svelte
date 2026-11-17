@@ -560,7 +560,7 @@
   let subtitleTimingPanel = $state<HTMLElement>();
   let tvEpisode = $state.raw<EpisodeDetail | null>();
   /** Metadata denominator for the exact playing coordinate. Never becomes the seekable/media duration. */
-  let expectedRuntime = $state.raw<{ coordinate: string; minutes: number }>();
+  let expectedRuntime = $state.raw<{ coordinate: string; seconds: number }>();
   let castFrame = $state<HTMLIFrameElement>();
   let remoteTime = 0;
   let remoteDuration = 0;
@@ -1315,13 +1315,15 @@
         if (fullTvTransport) tvEpisode = exact ?? null;
         minutes = exact?.runtime;
       }
-      if (needsRuntime && !(Number.isFinite(minutes) && minutes! > 0 && minutes! <= 1_440)) {
+      let expectedSeconds = Number(minutes) * 60;
+      if (needsRuntime && !playbackProgressDuration(0, expectedSeconds)) {
         try {
           const answer = await content.query(
             { kind: 'title.detail', title: { type: title.type, id: title.id }, region },
             controller.signal,
           );
           if (answer.detail.state === 'ready') minutes = answer.detail.value.runtime;
+          expectedSeconds = Number(minutes) * 60;
         } catch {
           return;
         }
@@ -1330,10 +1332,10 @@
         !needsRuntime ||
         controller.signal.aborted ||
         sourceCoordinate({ season, episode }) !== coordinate ||
-        !(Number.isFinite(minutes) && minutes! > 0 && minutes! <= 1_440)
+        !playbackProgressDuration(0, expectedSeconds)
       )
         return;
-      expectedRuntime = { coordinate, minutes: minutes! };
+      expectedRuntime = { coordinate, seconds: expectedSeconds };
     })();
     return () => controller.abort();
   });
@@ -4062,7 +4064,7 @@
     return playbackProgressDuration(
       length(),
       expectedRuntime?.coordinate === sourceCoordinate(playingEpisode)
-        ? expectedRuntime.minutes
+        ? expectedRuntime.seconds
         : undefined,
     );
   }
