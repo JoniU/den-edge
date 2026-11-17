@@ -438,13 +438,13 @@
     ...guestLimits,
     none: 'No release of this that plays in a browser is ready right now. Try again later, or play it on your TV.',
     unreachable:
-      'Couldn’t reach Den’s player. Check this device’s connection, then try again. If it continues, ask your host to check Den Hearth.',
+      'Couldn’t reach Den’s player. Check this connection and try again. If it continues, ask your host to check Den Hearth.',
     request:
-      'Den’s player couldn’t use this playback request. Refresh the page. If it continues, ask your host to update Den Hearth.',
+      'Den’s player rejected this playback request. Refresh. If it continues, ask your host to update Den Hearth.',
     sourceUnavailable:
-      'Den couldn’t prepare this release through its available playback paths. Try again. If it continues, check Den Hearth and the home player.',
+      'Den couldn’t prepare this release. Try again. If it continues, check Den Hearth and the home player.',
     protocol:
-      'Den’s player returned an answer this page can’t use. Refresh the page. If it continues, ask your host to update Den Hearth.',
+      'Den’s player returned an unusable answer. Refresh. If it continues, ask your host to update Den Hearth.',
     imdb: 'TMDB has no IMDb id for this, which Den’s sources need.',
     unsupported: 'This browser can’t play video streams.',
     playback: 'This browser couldn’t play this release. Try it on your TV.',
@@ -477,7 +477,7 @@
     torbox_managed_streaming_unavailable_for_plan:
       'Your TorBox plan doesn’t support streaming links. Update the TorBox plan or remove TorBox from this Den Hearth install.',
     torbox_rate_limited:
-      'TorBox asked Den to wait before trying again. The home player could not prepare this release either, so Den is waiting as requested…',
+      'TorBox asked Den to wait, and the home player could not prepare this release. Den is waiting as requested…',
     torbox_item_not_found:
       'TorBox no longer has this release, and the home player could not prepare it either. Try again.',
     torbox_dolby_vision_unsupported:
@@ -5557,14 +5557,14 @@
       else if (visibleBufferLine) list.push({ text: visibleBufferLine, quiet: true, busy: true });
       if (slowPick)
         list.push({
-          text: `${slowPick} needs more than this connection is giving: it may pause now and then to catch up.`,
+          text: `${slowPick} needs more than this connection gives and may pause to catch up.`,
           dismiss: () => (slowPick = null),
           action: { label: 'Try another release', run: tryAnother },
           urgent: true,
         });
       if (struggling)
         list.push({
-          text: `This connection is slower than ${struggling} needs, and no lighter release fits it: it may pause now and then to catch up.`,
+          text: `${struggling} may pause to catch up; no lighter release fits this connection.`,
           dismiss: () => (struggling = null),
         });
       if (unchanged) list.push({ text: unchanged, dismiss: () => (unchanged = null) });
