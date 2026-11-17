@@ -77,7 +77,7 @@
     start: () => Promise<void>;
     cancel: () => void;
   }>();
-  let retryVersions = $state<() => void>();
+  let retryVersions = $state<() => Promise<void>>();
   /** Live BrowseRows already admitted. The one-block substitutes keep the same initial skeleton height. */
   const mountedRows = new SvelteSet<string>();
 
@@ -187,16 +187,21 @@
     // stops either loader from being called by component construction alone.
     const build = ++builds;
     const controller = new AbortController();
-    const current = () => !controller.signal.aborted;
+    const { signal } = controller;
+    const current = () => !signal.aborted;
     const placeVersions = (other: RowDef | null, upper: RowDef | null) => {
       const next = rows.filter(({ row }) => row.id !== 'other-versions');
       if (other)
         next.splice(upper && next[0]?.row.id === upper.id ? 1 : 0, 0, { build, row: other });
       rows = next;
     };
-    retryVersions = undefined;
-    let releaseDiscovery: ((start: boolean) => void) | undefined;
-    const discoveryGate = new Promise<boolean>((resolve) => (releaseDiscovery = resolve));
+    let decideDiscovery!: (start: boolean) => void;
+    const discoveryGate = new Promise<boolean>((resolve) => {
+      decideDiscovery = (start) => {
+        resolve(start);
+        decideDiscovery = () => {};
+      };
+    });
     const franchise = discoveryGate.then((start) =>
       start
         ? franchiseRow(detail.collection, self, atlas, options).then(
@@ -205,7 +210,7 @@
         : null,
     );
     const loadVersions = async () => {
-      const row = await versionsRow(self, atlas, franchise, options, controller.signal);
+      const row = await versionsRow(self, atlas, franchise, options, signal);
       return row ? firstScreen(tracked(row, true), shown) : row;
     };
     // versionsRow turns every transient provider error into undefined. Only cancellation escapes, and cancellation
@@ -213,10 +218,19 @@
     const versionsAnswer = discoveryGate
       .then((start) => (start ? loadVersions() : null))
       .catch(() => null);
-    const decideDiscovery = (start: boolean) => {
-      releaseDiscovery?.(start);
-      releaseDiscovery = undefined;
+    const retry = async () => {
+      retryVersions = undefined;
+      const answer = await loadVersions().catch(() => null);
+      if (!current()) return;
+      if (answer === undefined) retryVersions = retry;
+      else {
+        const upper = await franchise;
+        if (current()) placeVersions(answer, upper);
+      }
     };
+    void versionsAnswer.then((answer) => {
+      if (answer === undefined && current()) retryVersions = retry;
+    });
     const settledDiscovery = Promise.all([franchise, versionsAnswer]).then(() => undefined);
     const pendingDiscovery = {
       start: () => {
@@ -284,20 +298,6 @@
         : []),
       ...(regional ? [regional] : []),
     ].map((row, index) => tracked(row, index === 0));
-    void versionsAnswer.then(async (first) => {
-      if (first !== undefined) return;
-      let answer: RowDef | null | undefined;
-      do {
-        await new Promise<void>((resolve) => (retryVersions = resolve));
-        if (!current()) return;
-        retryVersions = undefined;
-        answer = await loadVersions().catch(() => null);
-      } while (current() && answer === undefined);
-      const found = answer;
-      if (!current() || found === undefined) return;
-      const upper = await franchise;
-      if (current()) placeVersions(found, upper);
-    });
     if (rebuild) {
       void Promise.all([
         franchise,
@@ -336,7 +336,6 @@
     }
     return () => {
       controller.abort();
-      retryVersions?.();
       retryVersions = undefined;
       pendingDiscovery.cancel();
     };
