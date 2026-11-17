@@ -29,6 +29,7 @@
   } from '../lib/castReceiver';
   import { guestGrants } from '../lib/grants.svelte';
   import { hlsConfig } from '../lib/hlsConfig';
+  import { reportMediaEngineFailure } from '../lib/mediaEngineDiagnostics';
   import { retryWithoutHint } from '../lib/ipv4';
   import type { Title } from '../lib/library';
   import { interfaceLocale, type InterfaceLanguage } from '../lib/interfaceLanguage';
@@ -2581,8 +2582,8 @@
         return mounted.start();
       });
       void starting.catch((error: unknown) => {
-        console.warn('Samsung AVPlay could not be started.', error);
         if (gone || ended || session !== current || failure || breaking) return;
+        reportMediaEngineFailure('avplay', 'startup', error);
         failure = 'engine';
         letGo();
       });
@@ -2707,8 +2708,8 @@
     // hls.js is its own chunk, fetched only now: offline, or after a release replaced it, it never comes — and the
     // video sat black with nothing said. The same for an engine that throws as it is set up.
     void starting.catch((error: unknown) => {
-      console.warn('hls.js could not be started.', error);
       if (gone || ended || session !== current) return;
+      reportMediaEngineFailure('hls.js', 'startup', error);
       failure = 'engine';
       letGo();
     });
@@ -3016,6 +3017,7 @@
       maxBitrate?: number;
       volume?: number;
       muted?: boolean;
+      failure?: unknown;
     };
     if (
       message.type === 'den-ready' ||
@@ -3148,6 +3150,14 @@
         reportFailure(current, 0, message.message);
         lastFailSource = 'cast_page_error';
         failure = 'protocol';
+        return;
+      }
+      // The Cast page's own lazy engine could not load or initialize. This is independent of the release, so trying
+      // another copy would only recreate the frame and repeat the same failed import. Keep the same terminal Reload
+      // recovery as this player's local hls.js/AVPlay startup path.
+      if (message.failure === 'engine') {
+        failure = 'engine';
+        letGo();
         return;
       }
       // A TorBox stream the receiver couldn't play stays TorBox: Den Remux is used only when the viewer picks it. A
