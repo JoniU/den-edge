@@ -539,7 +539,7 @@ test('a late next-episode answer is adopted only while the ended player still ow
     await pageVideo(page).evaluate((video) => (video.currentTime = video.duration - 1.5));
     await expect(pageVideo(page)).toHaveJSProperty('ended', true);
     await expect(
-      page.getByRole('status').filter({ hasText: 'Finding the next episode…' }),
+      page.getByRole('status').filter({ hasText: 'Loading episodes' }),
     ).toBeVisible();
 
     await optionsButton(page).click();
@@ -588,7 +588,7 @@ test('a provider-confirmed finale ends without a false recovery error', async ()
     await pageVideo(page).evaluate((video) => (video.currentTime = video.duration - 1.5));
     await expect(pageVideo(page)).toHaveJSProperty('ended', true);
     await expect(page.getByText('Couldn’t check for the next episode.')).toHaveCount(0);
-    await expect(page.getByText('Finding the next episode…')).toHaveCount(0);
+    await expect(page.getByText('Loading episodes')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
     expect(asked.playback.map(itemOf)).toEqual(['e1']);
     expect(await nextMetadata(page, 'requests')).toBe(0);

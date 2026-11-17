@@ -4125,8 +4125,10 @@
   // Metadata can settle after the media's one `ended` event. Adopt a ready result only while that exact natural end
   // still owns recovery; replay and Stay call `stay()` and therefore cannot be advanced by a late answer.
   $effect(() => {
-    const ready = typeof nextEpisode === 'object';
-    if (ready && untrack(() => upNext !== null && !ended)) untrack(startNextCountdown);
+    const outcome = nextEpisode;
+    if (untrack(() => upNext === null || ended)) return;
+    if (typeof outcome === 'object') untrack(startNextCountdown);
+    else if (outcome === true) upNext = 0;
   });
 
   function stay() {
