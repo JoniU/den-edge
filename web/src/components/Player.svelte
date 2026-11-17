@@ -473,31 +473,26 @@
   };
   const managedCauseMessages: Record<PlaybackCause, string> = {
     torbox_authentication_failed:
-      'Your TorBox API key was rejected. Update the key in Den Hearth settings, then try again.',
+      'TorBox rejected your API key. Update it in Den Hearth, then try again.',
     torbox_managed_streaming_unavailable_for_plan:
-      'Your TorBox plan doesn’t support streaming links. Update the TorBox plan or remove TorBox from this Den Hearth install.',
-    torbox_rate_limited:
-      'TorBox asked Den to wait, and the home player could not prepare this release. Den is waiting as requested…',
+      'Your TorBox plan lacks streaming links. Update it or remove TorBox from Den Hearth.',
+    torbox_rate_limited: 'TorBox asked Den to wait. Home playback also failed, so Den is waiting…',
     torbox_item_not_found:
-      'TorBox no longer has this release, and the home player could not prepare it either. Try again.',
+      'TorBox no longer has this release. Home playback also failed. Try again.',
     torbox_dolby_vision_unsupported:
-      'TorBox can’t stream this Dolby Vision release correctly, and the home player could not prepare it either. Try again or pick another release.',
+      'TorBox can’t stream this Dolby Vision release correctly. Home playback also failed. Try again or pick another release.',
     torbox_receiver_unsupported:
-      'The receiver can’t play this release as TorBox streams it, and the home player could not prepare it either. Try another release.',
+      'The receiver can’t play this TorBox release, and home playback also failed. Try another release.',
     torbox_refused:
-      'TorBox refused to prepare this stream, and the home player could not prepare it either. Check your TorBox account, then try again.',
-    torbox_playlist_unavailable:
-      'TorBox’s playlist is temporarily unavailable, and the home player could not prepare this release either. Try again.',
-    torbox_unavailable:
-      'TorBox is temporarily unavailable, and the home player could not prepare this release either. Try again.',
-    torbox_unreachable:
-      'Den could not reach TorBox, and the home player could not prepare this release either. Try again.',
+      'TorBox refused this stream, and home playback also failed. Check your TorBox account, then try again.',
+    torbox_playlist_unavailable: 'TorBox’s playlist and home playback are unavailable. Try again.',
+    torbox_unavailable: 'TorBox and home playback are temporarily unavailable. Try again.',
+    torbox_unreachable: 'Den could not reach TorBox, and home playback also failed. Try again.',
     torbox_malformed_response:
-      'TorBox returned an answer Den could not use, and the home player could not prepare this release either. Try again.',
+      'TorBox returned an unusable answer, and home playback also failed. Try again.',
     torbox_unsafe_stream_url:
-      'TorBox returned a streaming link Den could not use, and the home player could not prepare this release either. Try again.',
-    managed_prepare_timeout:
-      'TorBox took too long to prepare a stream, and the home player could not prepare this release either. Try again.',
+      'TorBox returned an unusable streaming link, and home playback also failed. Try again.',
+    managed_prepare_timeout: 'TorBox took too long, and home playback also failed. Try again.',
     debrid_down: 'TorBox isn’t responding right now. Den will try again when it can…',
     debrid_slow: 'TorBox is slow right now, so this is taking longer to start. Trying again…',
   };
