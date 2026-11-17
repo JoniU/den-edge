@@ -1282,13 +1282,15 @@
     const [pickedSeason, pickedEpisode] = [season, episode];
     const sourceDuration = session?.duration;
     const needsRuntime = !!session && !(sourceDuration! > 0 && sourceDuration! < Infinity);
+    const hasEpisode =
+      title.type === 'tv' && pickedSeason !== undefined && pickedEpisode !== undefined;
     tvEpisode = undefined;
     expectedRuntime = 0;
-    if (!needsRuntime && !fullTvTransport) return;
+    if (!needsRuntime && !(fullTvTransport && hasEpisode)) return;
     const controller = new AbortController();
     void (async () => {
       let minutes: number | undefined;
-      if (title.type === 'tv' && pickedSeason !== undefined && pickedEpisode !== undefined) {
+      if (hasEpisode) {
         const listed = await seasonEpisodes(pickedSeason, controller.signal);
         const exact = listed?.find((item) => item.number === pickedEpisode);
         if (fullTvTransport) tvEpisode = exact ?? null;
