@@ -1,18 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  persistablePlaybackFraction,
-  playbackProgressDuration,
-  PlaybackProgressReporter,
-} from './playbackProgress';
-
-describe('playbackProgressDuration', () => {
-  it('prefers transport evidence and accepts only a bounded positive metadata estimate', () => {
-    expect(playbackProgressDuration(90, 42)).toBe(90);
-    expect(playbackProgressDuration(0, 2_520)).toBe(2_520);
-    expect(playbackProgressDuration(Number.NaN, 0)).toBe(0);
-    expect(playbackProgressDuration(0, Number.POSITIVE_INFINITY)).toBe(0);
-  });
-});
+import { persistablePlaybackFraction, PlaybackProgressReporter } from './playbackProgress';
 
 describe('persistablePlaybackFraction', () => {
   const played = { sourceEverPlayed: true };

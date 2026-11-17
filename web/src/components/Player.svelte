@@ -35,11 +35,7 @@
   import { interfaceLocale, type InterfaceLanguage } from '../lib/interfaceLanguage';
   import { languageName } from '../lib/languageName';
   import type { Episode as EpisodeDetail } from '../lib/detail';
-  import {
-    PLAYBACK_PROGRESS_SAVE_MS,
-    playbackProgressDuration,
-    PlaybackProgressReporter,
-  } from '../lib/playbackProgress';
+  import { PLAYBACK_PROGRESS_SAVE_MS, PlaybackProgressReporter } from '../lib/playbackProgress';
   import { playable, withoutRefused, type Playable } from '../lib/playable';
   import {
     autoSubtitleLanguage,
@@ -560,7 +556,7 @@
   let subtitleTimingPanel = $state<HTMLElement>();
   let tvEpisode = $state.raw<EpisodeDetail | null>();
   /** Metadata denominator for the exact playing coordinate. Never becomes the seekable/media duration. */
-  let expectedRuntime = $state.raw<{ coordinate: string; seconds: number }>();
+  let expectedRuntime = 0;
   let castFrame = $state<HTMLIFrameElement>();
   let remoteTime = 0;
   let remoteDuration = 0;
@@ -1285,57 +1281,39 @@
   $effect(() => {
     const [pickedSeason, pickedEpisode] = [season, episode];
     const sourceDuration = session?.duration;
-    const needsRuntime =
-      session !== null && !(Number.isFinite(sourceDuration) && sourceDuration! > 0);
+    const needsRuntime = !!session && !(sourceDuration! > 0 && sourceDuration! < Infinity);
     tvEpisode = undefined;
-    expectedRuntime = undefined;
+    expectedRuntime = 0;
     if (!needsRuntime && !fullTvTransport) return;
     const controller = new AbortController();
-    const coordinate = sourceCoordinate({ season: pickedSeason, episode: pickedEpisode });
     void (async () => {
       let minutes: number | undefined;
       if (title.type === 'tv' && pickedSeason !== undefined && pickedEpisode !== undefined) {
-        let listed: AiredEpisode[] | null = null;
-        try {
-          const answer = await content.query(
-            { kind: 'season', title: { type: 'tv', id: title.id }, season: pickedSeason },
-            controller.signal,
-          );
-          if (answer.episodes.state === 'ready')
-            listed = withAiring(
-              answer.episodes.value,
-              pickedSeason,
-              untrack(() => airingStore(content).get(title.id)),
-            );
-        } catch {
-          // Detail below can still supply a representative runtime. The TV information panel stays empty.
-        }
-        if (controller.signal.aborted) return;
+        const listed = await seasonEpisodes(pickedSeason, controller.signal);
         const exact = listed?.find((item) => item.number === pickedEpisode);
         if (fullTvTransport) tvEpisode = exact ?? null;
         minutes = exact?.runtime;
       }
       let expectedSeconds = Number(minutes) * 60;
-      if (needsRuntime && !playbackProgressDuration(0, expectedSeconds)) {
-        try {
-          const answer = await content.query(
+      if (needsRuntime && !(expectedSeconds > 0 && expectedSeconds < Infinity)) {
+        const answer = await content
+          .query(
             { kind: 'title.detail', title: { type: title.type, id: title.id }, region },
             controller.signal,
-          );
-          if (answer.detail.state === 'ready') minutes = answer.detail.value.runtime;
-          expectedSeconds = Number(minutes) * 60;
-        } catch {
-          return;
-        }
+          )
+          .catch(() => null);
+        if (answer?.detail.state === 'ready') minutes = answer.detail.value.runtime;
+        expectedSeconds = Number(minutes) * 60;
       }
       if (
         !needsRuntime ||
         controller.signal.aborted ||
-        sourceCoordinate({ season, episode }) !== coordinate ||
-        !playbackProgressDuration(0, expectedSeconds)
+        season !== pickedSeason ||
+        episode !== pickedEpisode ||
+        !(expectedSeconds > 0 && expectedSeconds < Infinity)
       )
         return;
-      expectedRuntime = { coordinate, seconds: expectedSeconds };
+      expectedRuntime = expectedSeconds;
       // A pause can precede a slow cached/provider answer and stops the periodic timer. Persist it as soon as the
       // denominator arrives rather than waiting for teardown or another explicit resume.
       report();
@@ -4062,14 +4040,10 @@
     return session?.duration ?? 0;
   }
 
-  /** Exact transport length when known; otherwise only the active title/episode's bounded metadata estimate. */
+  /** Exact transport length when known; otherwise only the active title/episode's trusted metadata estimate. */
   function progressLength(): number {
-    return playbackProgressDuration(
-      length(),
-      expectedRuntime?.coordinate === sourceCoordinate(playingEpisode)
-        ? expectedRuntime.seconds
-        : undefined,
-    );
+    const total = length();
+    return total > 0 && total < Infinity ? total : expectedRuntime;
   }
 
   /** Pick up where it was left — or where the last session was — unless that was the very start or the credits. */
@@ -5516,7 +5490,7 @@
     endCastSession();
     sendReports(watcher?.stats());
     playingEpisode = at;
-    expectedRuntime = undefined;
+    expectedRuntime = 0;
     progress = reporterFor(at);
     // A group is a season-pack identity. Same-season advance keeps it; crossing a season asks normally unless this
     // exact season has its own retained deliberate choice.
