@@ -7937,14 +7937,14 @@
     color: rgb(255 255 255 / 0.78);
   }
 
-  .notices .notice:last-of-type {
-    margin-bottom: 10px;
-  }
-
   .cast-status .notice {
     width: 100%;
     min-height: 76px;
     pointer-events: auto;
+  }
+
+  .notices .notice:last-of-type {
+    margin-bottom: 10px;
   }
 
   /* A notice with nothing to dismiss still sits the same height as one with. A release name has no spaces to break
@@ -8201,8 +8201,6 @@
     min-height: 44px;
   }
 
-  /* Empty, the box only holds the place. Away from home the cast page is the picture and draws its own Cast button in
-     its corner, under this box, which took that press whenever the controls showed. */
   /* Every control is a bare glyph on a 44px target; only Play is filled. Pressed, a faint circle behind it. */
   .web-custom-player :global(.web-glyph) {
     --button-icon-size: 24px;
@@ -8954,7 +8952,8 @@
     opacity: 0;
   }
 
-  /* Invisible controls cannot intercept a pointer meant for the picture. Keyboard focus reveals them before it acts. */
+  /* Empty, the first box only holds the Cast button's place. Invisible controls cannot intercept a pointer meant for
+     the picture; keyboard focus reveals them before it acts. */
   .web-top > .web-output-empty,
   .web-custom-player.web-controls-hidden .web-top > *,
   .web-custom-player.web-controls-hidden .web-centre > *,
